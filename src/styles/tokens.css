@@ -1,0 +1,430 @@
+/* =============================================================================
+   Zarpa — camada de tokens
+   -----------------------------------------------------------------------------
+   REGRA DURA (CLAUDE.md > Regras de interface):
+   Todo token existe no `:root` base. Os blocos de tema abaixo APENAS redefinem
+   valores que já existem aqui em cima. Nenhuma cor pode ter sua única definição
+   dentro de uma media query ou de um seletor [data-theme].
+
+   Ordem do arquivo:
+     1. rampa bruta (primitivos, não usar direto na UI)
+     2. tokens semânticos (usar estes)
+     3. tipografia / espaço / raio / sombra / duração
+     4. redefinições de tema (escuro automático + escuro forçado)
+     5. redefinições de acessibilidade (reduced transparency / contraste)
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* ---------------------------------------------------------------------
+     1. Rampa bruta — neutros com viés frio (matiz ~205deg).
+     Ancorada em paper #F3F5F7 e ink #0D1A24 do CLAUDE.md.
+     --------------------------------------------------------------------- */
+  --z-gray-0: #ffffff;
+  --z-gray-25: #f8fafb;
+  --z-gray-50: #f3f5f7;
+  --z-gray-100: #e9edf0;
+  --z-gray-200: #dce2e7;
+  --z-gray-300: #c6cfd6;
+  --z-gray-400: #a3b0ba;
+  --z-gray-500: #7c8b97;
+  --z-gray-600: #5a6b78;
+  --z-gray-700: #41525f;
+  --z-gray-800: #2a3a46;
+  --z-gray-900: #182833;
+  --z-gray-950: #0d1a24;
+  --z-gray-1000: #060e14;
+
+  --z-blue-100: #dbe9f4;
+  --z-blue-200: #b9d4e9;
+  --z-blue-300: #7fb2d6;
+  --z-blue-400: #4f96c6;
+  --z-blue-500: #2b76ab;
+  --z-blue-600: #12557f;
+  --z-blue-700: #0e4467;
+  --z-blue-800: #0b3450;
+
+  --z-green-100: #dcece4;
+  --z-green-300: #7cbfa0;
+  --z-green-500: #3f9a6d;
+  --z-green-600: #2f7d57;
+  --z-green-800: #1d4e36;
+
+  --z-amber-100: #f6e7da;
+  --z-amber-300: #d9a476;
+  --z-amber-500: #c37b3c;
+  --z-amber-600: #a8632a;
+  --z-amber-800: #6b3e1a;
+
+  --z-red-100: #f6dedc;
+  --z-red-300: #d99a94;
+  --z-red-500: #bf4239;
+  --z-red-600: #a32e28;
+  --z-red-800: #6a1c18;
+
+  /* ---------------------------------------------------------------------
+     2. Tokens semânticos — a UI só usa daqui pra baixo.
+     --------------------------------------------------------------------- */
+
+  /* superfícies */
+  --bg: var(--z-gray-50);
+  --surface: var(--z-gray-0);
+  --surface-2: var(--z-gray-25);
+  --surface-3: var(--z-gray-100);
+  --surface-inset: var(--z-gray-50);
+  --surface-inverse: var(--z-gray-950);
+
+  /* superfície translúcida da barra superior / sheets */
+  --surface-veil: rgb(255 255 255 / 0.72);
+  --surface-veil-strong: rgb(255 255 255 / 0.88);
+  --scrim: rgb(13 26 36 / 0.32);
+
+  /* traço */
+  --border: var(--z-gray-200);
+  --border-strong: var(--z-gray-300);
+  --border-subtle: var(--z-gray-100);
+  --border-inverse: rgb(255 255 255 / 0.14);
+
+  /* texto */
+  --text: var(--z-gray-950);
+  --text-muted: var(--z-gray-600);
+  --text-subtle: var(--z-gray-500);
+  --text-inverse: var(--z-gray-0);
+  --text-on-accent: #ffffff;
+
+  /* acento */
+  --accent: var(--z-blue-600);
+  --accent-hover: var(--z-blue-700);
+  --accent-active: var(--z-blue-800);
+  --accent-soft: var(--z-blue-100);
+  --accent-soft-text: var(--z-blue-700);
+  --accent-line: var(--z-blue-300);
+
+  /* status */
+  --ok: var(--z-green-600);
+  --ok-soft: var(--z-green-100);
+  --ok-soft-text: var(--z-green-800);
+
+  --warn: var(--z-amber-600);
+  --warn-soft: var(--z-amber-100);
+  --warn-soft-text: var(--z-amber-800);
+
+  --danger: var(--z-red-600);
+  --danger-hover: var(--z-red-800);
+  --danger-soft: var(--z-red-100);
+  --danger-soft-text: var(--z-red-800);
+
+  /* foco — sempre visível, nunca removido */
+  --focus: var(--z-blue-500);
+  --focus-halo: rgb(43 118 171 / 0.28);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+
+  /* seleção e skeleton */
+  --selection-bg: var(--z-blue-100);
+  --selection-text: var(--z-gray-950);
+  --skeleton-base: var(--z-gray-100);
+  --skeleton-sheen: var(--z-gray-200);
+
+  /* trilhos de arraste (kanban) */
+  --drag-shadow: rgb(13 26 36 / 0.24);
+
+  /* ---------------------------------------------------------------------
+     3a. Tipografia — escala travada 13 / 15 / 17 / 20 / 32.
+     Não adicionar degraus sem aprovação.
+     --------------------------------------------------------------------- */
+  --stack-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, "Noto Sans", sans-serif;
+  --stack-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --fs-13: 0.8125rem; /* 13px — legenda, meta, tabela densa */
+  --fs-15: 0.9375rem; /* 15px — corpo padrão */
+  --fs-17: 1.0625rem; /* 17px — corpo destacado, título de card */
+  --fs-20: 1.25rem; /*   20px — título de seção */
+  --fs-32: 2rem; /*     32px — display */
+
+  --lh-13: 1.4;
+  --lh-15: 1.5;
+  --lh-17: 1.5;
+  --lh-20: 1.25;
+  --lh-32: 1.05;
+
+  --ls-13: 0.005em;
+  --ls-15: 0em;
+  --ls-17: -0.005em;
+  --ls-20: -0.012em;
+  --ls-32: -0.02em;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* ---------------------------------------------------------------------
+     3b. Espaço — grid de 4pt, sem exceção.
+     --------------------------------------------------------------------- */
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-14: 56px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+
+  /* alturas de controle — múltiplos de 4, alvo de toque >= 44 no mobile */
+  --control-sm: 32px;
+  --control-md: 40px;
+  --control-lg: 48px;
+  --tap-min: 44px;
+
+  /* ---------------------------------------------------------------------
+     3c. Raios — controle 10, card 14, sheet 20. `rounded-lg em tudo` é bug.
+     --------------------------------------------------------------------- */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+
+  /* ---------------------------------------------------------------------
+     3d. Sombras — tingidas de tinta fria, curtas. Elevação é hierarquia,
+     não decoração.
+     --------------------------------------------------------------------- */
+  --elev-1: 0 1px 1px rgb(13 26 36 / 0.04), 0 1px 2px rgb(13 26 36 / 0.06);
+  --elev-2: 0 2px 4px -2px rgb(13 26 36 / 0.06),
+    0 6px 14px -4px rgb(13 26 36 / 0.1);
+  --elev-3: 0 6px 14px -8px rgb(13 26 36 / 0.14),
+    0 18px 40px -12px rgb(13 26 36 / 0.2);
+  --elev-drag: 0 10px 20px -8px rgb(13 26 36 / 0.24),
+    0 28px 56px -20px rgb(13 26 36 / 0.28);
+
+  /* ---------------------------------------------------------------------
+     3e. Duração e curva. Os valores de spring vivem em src/lib/ui/motion.ts;
+     estes são os equivalentes CSS para transições simples.
+     --------------------------------------------------------------------- */
+  --dur-1: 120ms; /* realce, cor de hover */
+  --dur-2: 200ms; /* entrada curta */
+  --dur-3: 350ms; /* padrão, espelha o spring bounce:0/0.35s */
+  --dur-sheet: 300ms;
+  --curve-out: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --curve-in-out: cubic-bezier(0.5, 0, 0.2, 1);
+
+  /* desfoque da barra translúcida */
+  --veil-blur: blur(20px) saturate(180%);
+
+  /* camadas */
+  --layer-base: 0;
+  --layer-sticky: 20;
+  --layer-nav: 30;
+  --layer-overlay: 40;
+  --layer-modal: 50;
+  --layer-toast: 60;
+}
+
+/* =============================================================================
+   4. Tema escuro — apenas REDEFINE tokens já declarados no :root acima.
+   ========================================================================== */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --bg: #0a131a;
+    --surface: #101c25;
+    --surface-2: #16232d;
+    --surface-3: #1d2c37;
+    --surface-inset: #0a131a;
+    --surface-inverse: var(--z-gray-50);
+
+    --surface-veil: rgb(16 28 37 / 0.72);
+    --surface-veil-strong: rgb(16 28 37 / 0.9);
+    --scrim: rgb(3 8 12 / 0.6);
+
+    --border: #24343f;
+    --border-strong: #33454f;
+    --border-subtle: #1a2832;
+    --border-inverse: rgb(13 26 36 / 0.14);
+
+    --text: #e7edf1;
+    --text-muted: #93a3ae;
+    --text-subtle: #74858f;
+    --text-inverse: var(--z-gray-950);
+    --text-on-accent: #06131d;
+
+    --accent: var(--z-blue-300);
+    --accent-hover: #98c5e2;
+    --accent-active: #b9d4e9;
+    --accent-soft: #14324a;
+    --accent-soft-text: #a9cde6;
+    --accent-line: #2b5f85;
+
+    --ok: #6fbf98;
+    --ok-soft: #14332a;
+    --ok-soft-text: #9ed5b8;
+
+    --warn: #d99a76;
+    --warn-soft: #38251a;
+    --warn-soft-text: #e7bb9c;
+
+    --danger: #e08c85;
+    --danger-hover: #eaa9a3;
+    --danger-soft: #3a201e;
+    --danger-soft-text: #f0b3ad;
+
+    --focus: #7fb2d6;
+    --focus-halo: rgb(127 178 214 / 0.32);
+
+    --selection-bg: #1c4260;
+    --selection-text: #e7edf1;
+    --skeleton-base: #1a2832;
+    --skeleton-sheen: #24343f;
+
+    --drag-shadow: rgb(0 0 0 / 0.6);
+
+    --elev-1: 0 1px 1px rgb(0 0 0 / 0.3), 0 1px 2px rgb(0 0 0 / 0.36);
+    --elev-2: 0 2px 4px -2px rgb(0 0 0 / 0.4), 0 6px 14px -4px rgb(0 0 0 / 0.5);
+    --elev-3: 0 6px 14px -8px rgb(0 0 0 / 0.5),
+      0 18px 40px -12px rgb(0 0 0 / 0.62);
+    --elev-drag: 0 10px 20px -8px rgb(0 0 0 / 0.6),
+      0 28px 56px -20px rgb(0 0 0 / 0.7);
+  }
+}
+
+/* Escuro forçado pelo alternador — mesmos valores, seletor com peso maior. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0a131a;
+  --surface: #101c25;
+  --surface-2: #16232d;
+  --surface-3: #1d2c37;
+  --surface-inset: #0a131a;
+  --surface-inverse: var(--z-gray-50);
+
+  --surface-veil: rgb(16 28 37 / 0.72);
+  --surface-veil-strong: rgb(16 28 37 / 0.9);
+  --scrim: rgb(3 8 12 / 0.6);
+
+  --border: #24343f;
+  --border-strong: #33454f;
+  --border-subtle: #1a2832;
+  --border-inverse: rgb(13 26 36 / 0.14);
+
+  --text: #e7edf1;
+  --text-muted: #93a3ae;
+  --text-subtle: #74858f;
+  --text-inverse: var(--z-gray-950);
+  --text-on-accent: #06131d;
+
+  --accent: var(--z-blue-300);
+  --accent-hover: #98c5e2;
+  --accent-active: #b9d4e9;
+  --accent-soft: #14324a;
+  --accent-soft-text: #a9cde6;
+  --accent-line: #2b5f85;
+
+  --ok: #6fbf98;
+  --ok-soft: #14332a;
+  --ok-soft-text: #9ed5b8;
+
+  --warn: #d99a76;
+  --warn-soft: #38251a;
+  --warn-soft-text: #e7bb9c;
+
+  --danger: #e08c85;
+  --danger-hover: #eaa9a3;
+  --danger-soft: #3a201e;
+  --danger-soft-text: #f0b3ad;
+
+  --focus: #7fb2d6;
+  --focus-halo: rgb(127 178 214 / 0.32);
+
+  --selection-bg: #1c4260;
+  --selection-text: #e7edf1;
+  --skeleton-base: #1a2832;
+  --skeleton-sheen: #24343f;
+
+  --drag-shadow: rgb(0 0 0 / 0.6);
+
+  --elev-1: 0 1px 1px rgb(0 0 0 / 0.3), 0 1px 2px rgb(0 0 0 / 0.36);
+  --elev-2: 0 2px 4px -2px rgb(0 0 0 / 0.4), 0 6px 14px -4px rgb(0 0 0 / 0.5);
+  --elev-3: 0 6px 14px -8px rgb(0 0 0 / 0.5), 0 18px 40px -12px rgb(0 0 0 / 0.62);
+  --elev-drag: 0 10px 20px -8px rgb(0 0 0 / 0.6),
+    0 28px 56px -20px rgb(0 0 0 / 0.7);
+}
+
+/* Claro forçado pelo alternador: o :root base já é o tema claro, então este
+   bloco só reafirma o color-scheme para o navegador (scrollbars, form controls). */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* =============================================================================
+   5. Acessibilidade — redefinições, nunca definições novas.
+   ========================================================================== */
+
+/* Sem transparência: o véu vira superfície sólida e o blur some.
+   Os seletores repetem o peso do bloco de tema para vencer a cascata. */
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  :root[data-theme="light"],
+  :root[data-theme="dark"] {
+    --surface-veil: var(--surface);
+    --surface-veil-strong: var(--surface);
+    --veil-blur: none;
+    --scrim: rgb(13 26 36 / 0.78);
+  }
+  :root[data-theme="dark"] {
+    --scrim: rgb(3 8 12 / 0.88);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface-veil: var(--surface);
+    --surface-veil-strong: var(--surface);
+    --veil-blur: none;
+    --scrim: rgb(3 8 12 / 0.88);
+  }
+}
+
+/* Mais contraste: traço mais firme e texto secundário mais legível.
+   Os seletores repetem o peso do bloco de tema correspondente para vencer
+   a cascata — por isso as três variações abaixo. */
+@media (prefers-contrast: more) {
+  :root {
+    --border: var(--z-gray-400);
+    --border-strong: var(--z-gray-600);
+    --text-muted: var(--z-gray-700);
+    --text-subtle: var(--z-gray-600);
+    --focus-ring-width: 3px;
+  }
+}
+
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --border: #46596a;
+    --border-strong: #6d8091;
+    --text-muted: #b8c6d0;
+    --text-subtle: #a0b0bc;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root[data-theme="dark"] {
+    --border: #46596a;
+    --border-strong: #6d8091;
+    --text-muted: #b8c6d0;
+    --text-subtle: #a0b0bc;
+  }
+}

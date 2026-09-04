@@ -1,26 +1,272 @@
 @import "tailwindcss";
+@import "../styles/tokens.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
+/* =============================================================================
+   Ponte tokens -> Tailwind v4.
+   `inline` faz o Tailwind escrever `var(--token)` direto na utilitária, sem
+   reemitir a variável. Ou seja: o tema continua sendo trocado pelo tokens.css,
+   e as utilitárias seguem junto sem nenhum `dark:` espalhado pelo código.
+   ========================================================================== */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* superfícies */
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-inset: var(--surface-inset);
+  --color-inverse-surface: var(--surface-inverse);
+  --color-veil: var(--surface-veil);
+  --color-veil-strong: var(--surface-veil-strong);
+  --color-scrim: var(--scrim);
+
+  /* traço */
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-line-subtle: var(--border-subtle);
+  --color-line-inverse: var(--border-inverse);
+
+  /* texto */
+  --color-ink: var(--text);
+  --color-muted: var(--text-muted);
+  --color-subtle: var(--text-subtle);
+  --color-inverse: var(--text-inverse);
+  --color-on-accent: var(--text-on-accent);
+
+  /* acento e status */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-active: var(--accent-active);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-ink: var(--accent-soft-text);
+  --color-accent-line: var(--accent-line);
+
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-ok-soft-ink: var(--ok-soft-text);
+
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-soft-ink: var(--warn-soft-text);
+
+  --color-danger: var(--danger);
+  --color-danger-hover: var(--danger-hover);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-soft-ink: var(--danger-soft-text);
+
+  --color-focus: var(--focus);
+  --color-skeleton: var(--skeleton-base);
+  --color-skeleton-sheen: var(--skeleton-sheen);
+
+  /* tipografia — escala travada, sem degraus intermediários */
+  --font-sans: var(--stack-ui);
+  --font-mono: var(--stack-mono);
+
+  --text-13: var(--fs-13);
+  --text-13--line-height: var(--lh-13);
+  --text-13--letter-spacing: var(--ls-13);
+  --text-15: var(--fs-15);
+  --text-15--line-height: var(--lh-15);
+  --text-15--letter-spacing: var(--ls-15);
+  --text-17: var(--fs-17);
+  --text-17--line-height: var(--lh-17);
+  --text-17--letter-spacing: var(--ls-17);
+  --text-20: var(--fs-20);
+  --text-20--line-height: var(--lh-20);
+  --text-20--letter-spacing: var(--ls-20);
+  --text-32: var(--fs-32);
+  --text-32--line-height: var(--lh-32);
+  --text-32--letter-spacing: var(--ls-32);
+
+  /* raios */
+  --radius-xs: var(--r-xs);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
+  --radius-pill: var(--r-pill);
+
+  /* elevação */
+  --shadow-1: var(--elev-1);
+  --shadow-2: var(--elev-2);
+  --shadow-3: var(--elev-3);
+  --shadow-drag: var(--elev-drag);
+
+  /* tempo */
+  --ease-out-soft: var(--curve-out);
+  --ease-in-out-soft: var(--curve-in-out);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* =============================================================================
+   Base
+   ========================================================================== */
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    /* a barra inferior do mobile é sticky; o scroll precisa se comportar */
+    overscroll-behavior-y: none;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--stack-ui);
+    font-size: var(--fs-15);
+    line-height: var(--lh-15);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background-color: var(--selection-bg);
+    color: var(--selection-text);
+  }
+
+  /* Foco visível em TUDO. Nunca use outline:none sem colocar outra pista. */
+  :focus-visible {
+    outline: var(--focus-ring-width) solid var(--focus);
+    outline-offset: var(--focus-ring-offset);
+    border-radius: var(--r-sm);
+  }
+
+  /* Radix marca o item ativo do teclado com data-highlighted; tratamos como foco. */
+  [data-highlighted]:focus-visible {
+    outline: none;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: var(--weight-semibold);
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  /* Todo campo herda a fonte da interface — nada de fonte de sistema do form. */
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* Números financeiros nunca dançam. */
+  [data-numeric] {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* =============================================================================
+   Utilitárias próprias
+   ========================================================================== */
+@utility veil {
+  background-color: var(--surface-veil);
+  -webkit-backdrop-filter: var(--veil-blur);
+  backdrop-filter: var(--veil-blur);
+}
+
+@utility veil-strong {
+  background-color: var(--surface-veil-strong);
+  -webkit-backdrop-filter: var(--veil-blur);
+  backdrop-filter: var(--veil-blur);
+}
+
+@utility numeric {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Área segura do iPhone — a barra inferior encosta no gesture bar. */
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* =============================================================================
+   Animações nomeadas — todas em transform/opacity, nada mais.
+   ========================================================================== */
+
+/* Régua de "ação em curso" do Button. Nunca um spinner. */
+@keyframes zk-busy-bar {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(410%);
+  }
+}
+
+.zk-busy-bar {
+  animation: zk-busy-bar 1.1s var(--curve-in-out) infinite;
+  will-change: transform;
+}
+
+/* Brilho do skeleton. É um pseudo-elemento que atravessa a caixa. */
+@keyframes zk-sheen {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.zk-skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--skeleton-base);
+}
+
+.zk-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--skeleton-sheen) 50%,
+    transparent 100%
+  );
+  animation: zk-sheen 1.4s var(--curve-in-out) infinite;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zk-busy-bar {
+    animation: none;
+    width: 100%;
+    transform: none;
+  }
+  .zk-skeleton::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* =============================================================================
+   prefers-reduced-motion — corta tudo que se move, mantém a mudança de estado.
+   Tratado desde o primeiro componente, não como remendo no fim.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
