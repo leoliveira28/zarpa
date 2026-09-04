@@ -89,7 +89,7 @@
   /* texto */
   --text: var(--z-gray-950);
   --text-muted: var(--z-gray-600);
-  --text-subtle: var(--z-gray-500);
+  --text-subtle: #64737f; /* AA sobre --surface (4.88:1). z-gray-500 reprova. */
   --text-inverse: var(--z-gray-0);
   --text-on-accent: #ffffff;
 

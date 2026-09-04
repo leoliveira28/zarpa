@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d db"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

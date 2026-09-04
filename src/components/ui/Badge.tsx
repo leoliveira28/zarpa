@@ -17,7 +17,7 @@ type BadgeSize = "sm" | "md";
 const tones: Record<BadgeTone, { chip: string; dot: string }> = {
   neutral: {
     chip: "bg-surface-3 text-muted border-line",
-    dot: "bg-subtle",
+    dot: "bg-muted",
   },
   accent: {
     chip: "bg-accent-soft text-accent-soft-ink border-accent-line/50",

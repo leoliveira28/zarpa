@@ -10,9 +10,9 @@
  * Rafa adicionar semana que vem.
  */
 import { afterAll, describe, expect, it } from 'vitest'
-import { connect, discoverTenantTables, withTenant, type Sql } from '../helpers/db.ts'
-import { TENANT_A } from './isolation-checks.ts'
-import { CANARIES, formatLeaks, scanPayload } from './leak-scanner.ts'
+import { connect, discoverTenantTables, withTenant, type Sql } from '../helpers/db'
+import { TENANT_A } from './isolation-checks'
+import { CANARIES, formatLeaks, scanPayload } from './leak-scanner'
 
 const sql = connect()
 

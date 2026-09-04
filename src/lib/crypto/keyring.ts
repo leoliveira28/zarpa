@@ -1,5 +1,5 @@
 import { createHash, hkdfSync, timingSafeEqual } from 'node:crypto';
-import { isProduction } from '@/db/env';
+import { isProduction } from '../../db/env';
 
 /**
  * Chaveiro de criptografia de PII.

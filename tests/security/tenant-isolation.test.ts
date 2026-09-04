@@ -14,17 +14,20 @@
  * `tenant_id` entra na varredura sozinha — ninguém precisa lembrar de nada.
  */
 import { afterAll, describe, expect, it } from 'vitest'
-import { connect } from '../helpers/db.ts'
+import { connect } from '../helpers/db'
 import {
+  AUTH_CONTEXT_OPEN_TABLES,
   CONTRACT_TENANT_TABLES,
   TENANT_A,
   TENANT_B,
+  isRootTenantTableIsolated,
   missingContractTables,
   runIsolation,
-} from './isolation-checks.ts'
+} from './isolation-checks'
 
 const sql = connect()
 const run = await runIsolation(sql)
+const rootIsolated = await isRootTenantTableIsolated(sql)
 
 afterAll(async () => {
   await sql.end({ timeout: 5 })
@@ -42,7 +45,7 @@ describe('contrato do schema multi-tenant', () => {
   })
 
   it(`as tabelas do CLAUDE.md existem com tenant_id: ${CONTRACT_TENANT_TABLES.join(', ')}`, () => {
-    const missing = missingContractTables(run.tables)
+    const missing = missingContractTables(run.tables, rootIsolated)
     expect(
       missing,
       `faltando (ou sem coluna tenant_id): ${missing.join(', ')}. ` +
@@ -93,47 +96,87 @@ describe.each(run.tables.map((t) => t.qualified))('isolamento: %s', (qualified) 
     expect(c?.ok, c?.detail ?? 'checagem não executou (ver falha de seed acima)').toBe(true)
   })
 
-  it(`INSERT com tenant_id do B é recusado pelo WITH CHECK`, () => {
+  it(`INSERT com tenant_id do B não grava linha do tenant B`, () => {
     const c = checks.find((x) => x.rule === 'insert-with-check')
     expect(c?.ok, c?.detail ?? 'checagem não executou (ver falha de seed acima)').toBe(true)
+  })
+
+  it(`app.auth_context='on' não abre esta tabela entre tenants`, () => {
+    const c = checks.find((x) => x.rule === 'auth-context-blast-radius')
+    expect(c?.ok, c?.detail ?? 'checagem não executou').toBe(true)
+  })
+})
+
+describe('porta de fuga do serviço de auth', () => {
+  it('só as tabelas fixadas ficam abertas com app.auth_context ligado', () => {
+    // `tenants` e `user` têm policy permissiva sem filtro de tenant, para o
+    // Better Auth resolver o usuário antes de existir contexto. Policies
+    // permissivas somam por OR: enquanto a GUC estiver ligada, aquelas tabelas
+    // não têm isolamento. É decisão de desenho, não bug — mas fica FIXADA aqui
+    // para que uma terceira tabela nessa condição apareça como falha.
+    const leaking = run.checks
+      .filter((c) => c.rule === 'auth-context-blast-radius' && c.detail.includes('VAZAMENTO NOVO'))
+      .map((c) => c.table)
+    expect(
+      leaking,
+      `tabela(s) fora da lista fixada abriram com app.auth_context='on'. ` +
+        `Lista atual: ${AUTH_CONTEXT_OPEN_TABLES.join(', ')}. ` +
+        `Se for intencional, acrescente na constante e explique no PR.`,
+    ).toEqual([])
   })
 })
 
 describe('helper withTenant da aplicação (src/lib/tenant)', () => {
-  it('exporta withTenant e ele isola de verdade', async () => {
+  // Aqui o objeto sob teste é o HELPER, não a policy. Vale a pena separado:
+  // a policy pode estar perfeita e o helper vazar contexto entre requisições —
+  // é o bug clássico de `set_config(..., false)` numa conexão de pool.
+  it('existe, roda em transação e isola de verdade', async () => {
     let mod: Record<string, unknown>
+    let raw: (q: string) => unknown
     try {
-      mod = (await import('../../src/lib/tenant/index.ts')) as Record<string, unknown>
-    } catch {
+      mod = (await import('../../src/lib/tenant/index')) as Record<string, unknown>
+      const drizzle = (await import('drizzle-orm')) as unknown as {
+        sql: { raw: (q: string) => unknown }
+      }
+      raw = (q: string) => drizzle.sql.raw(q)
+    } catch (e) {
       throw new Error(
-        'src/lib/tenant não exporta um módulo importável ainda. ' +
-          'O contrato do CLAUDE.md pede um helper withTenant que abra transação e ' +
-          "faça set_config('app.tenant_id', $1, true). Dono: Rafa.",
+        'não consegui importar src/lib/tenant: ' +
+          `${e instanceof Error ? e.message : String(e)}. ` +
+          "Contrato: withTenant(tenantId, cb) abrindo transação com set_config('app.tenant_id', $1, true). Dono: Rafa.",
       )
     }
 
     expect(typeof mod.withTenant, 'src/lib/tenant não exporta withTenant').toBe('function')
+    expect(typeof mod.currentTenantId, 'src/lib/tenant não exporta currentTenantId').toBe('function')
 
-    // Passa pelo helper de verdade: se ele esquecer o set_config, ou usar
-    // `false` no terceiro argumento (vazando tenant para a conexão inteira),
-    // a leitura cruzada aparece aqui.
+    type Tx = { execute: <R>(q: unknown) => Promise<R[]> }
     const withTenantApp = mod.withTenant as <T>(
       tenantId: string,
-      fn: (tx: unknown) => Promise<T>,
+      cb: (tx: Tx) => Promise<T>,
     ) => Promise<T>
+    const currentTenantId = mod.currentTenantId as (tx: Tx) => Promise<string | null>
 
+    // 1. o helper realmente põe o tenant no contexto
+    const inside = await withTenantApp(TENANT_A, (tx) => currentTenantId(tx))
+    expect(inside, 'withTenant não deixou app.tenant_id setado dentro do callback').toBe(TENANT_A)
+
+    // 2. o contexto NÃO sobrevive à transação — senão a próxima requisição que
+    //    pegar essa conexão do pool herda o tenant da anterior
+    const after = await withTenantApp(TENANT_B, (tx) => currentTenantId(tx))
+    expect(after, 'withTenant vazou o tenant da chamada anterior').toBe(TENANT_B)
+
+    // 3. leitura cruzada pelo caminho oficial
     const table = run.tables[0]?.qualified
     if (table === undefined) return
-
     const seen = await withTenantApp(TENANT_A, async (tx) => {
-      const client = tx as { unsafe: (q: string, p: unknown[]) => Promise<{ n: string }[]> }
-      const rows = await client.unsafe(
-        `select count(*)::text as n from ${table} where tenant_id::text = $1`,
-        [TENANT_B],
+      // TENANT_B é constante do próprio teste, não entrada externa.
+      const rows = await tx.execute<{ n: string }>(
+        raw(`select count(*)::text as n from ${table} where tenant_id::text = '${TENANT_B}'`),
       )
-      return Number(rows[0]?.n ?? -1)
+      const first = rows[0] as { n?: string } | undefined
+      return Number(first?.n ?? -1)
     })
-
     expect(seen, `withTenant deixou o tenant A ver ${seen} linha(s) do tenant B em ${table}`).toBe(0)
   })
 })

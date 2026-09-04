@@ -12,8 +12,8 @@
  * do tenant B. Verificar só `relrowsecurity` seria cobertura falsa.
  */
 import { afterAll, describe, expect, it } from 'vitest'
-import { connect } from '../helpers/db.ts'
-import { runRlsAudit } from './rls-checks.ts'
+import { connect } from '../helpers/db'
+import { runRlsAudit } from './rls-checks'
 
 const sql = connect()
 const audit = await runRlsAudit(sql)
@@ -64,6 +64,16 @@ describe('RLS habilitado em toda tabela com tenant_id', () => {
   it('a policy de escrita tem WITH CHECK por tenant_id', () => {
     const bad = audit.findings.filter((f) => f.rule === 'policy-with-check' && !f.ok)
     expect(bad.map((f) => f.table), `\n${fmt('policy-with-check')}\n`).toEqual([])
+  })
+})
+
+  it('nenhuma policy permissiva nova ignora o tenant', () => {
+    const bad = audit.findings.filter((f) => f.rule === 'policy-escape-hatch' && !f.ok)
+    expect(
+      bad.map((f) => f.table),
+      `\nPolicies permissivas somam por OR. Uma policy que não fala de tenant anula o ` +
+        `isolamento da tabela enquanto a condição dela valer.\n${fmt('policy-escape-hatch')}\n`,
+    ).toEqual([])
   })
 })
 

@@ -14,9 +14,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import postgres from 'postgres'
-import { testDatabaseUrl } from './env.ts'
+import { REPO_ROOT, testDatabaseUrl } from './env'
 
-const REPO_ROOT = resolve(import.meta.dirname, '..', '..')
 const MIGRATIONS_DIR = resolve(REPO_ROOT, 'drizzle')
 
 export type MigrationReport = {

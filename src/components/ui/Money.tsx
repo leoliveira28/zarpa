@@ -118,7 +118,7 @@ export function MoneyStat({
     <div className={cn("flex flex-col gap-1", className)}>
       <span className="text-13 font-medium text-muted">{label}</span>
       <Money {...money} />
-      {hint ? <span className="text-13 text-subtle">{hint}</span> : null}
+      {hint ? <span className="text-13 text-muted">{hint}</span> : null}
     </div>
   );
 }

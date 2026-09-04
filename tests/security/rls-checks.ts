@@ -5,14 +5,38 @@
  * despercebida, porque a varredura é do `pg_class`, não de um array que alguém
  * precisa lembrar de atualizar.
  */
-import { discoverAllTables, discoverPolicies, type Sql } from '../helpers/db.ts'
+import { discoverAllTables, discoverPolicies, type Sql } from '../helpers/db'
 
 export type RlsFinding = {
   table: string
-  rule: 'enable' | 'force' | 'policy-exists' | 'policy-using' | 'policy-with-check' | 'tenant-column'
+  rule:
+    | 'enable'
+    | 'force'
+    | 'policy-exists'
+    | 'policy-using'
+    | 'policy-with-check'
+    | 'policy-escape-hatch'
+    | 'tenant-column'
   ok: boolean
   detail: string
 }
+
+/**
+ * Portas de fuga aceitas — policies permissivas que, de propósito, não filtram
+ * por tenant. Cada entrada aqui é uma decisão de risco tomada por alguém, não um
+ * descuido. Acrescentar linha aqui deve doer um pouco e passar por review.
+ *
+ * `*_auth_service` existe porque o Better Auth precisa achar o usuário (e o
+ * tenant dele) ANTES de existir contexto de tenant. Enquanto
+ * `app.auth_context = 'on'` estiver ligado na conexão, `tenants` e `user` ficam
+ * legíveis e graváveis entre tenants. O risco real não é a policy: é a GUC
+ * sobreviver ao fim da requisição numa conexão de pool. Ver
+ * docs/handoffs/teo-para-rafa.md.
+ */
+export const KNOWN_ESCAPE_HATCHES: { table: string; policy: string }[] = [
+  { table: 'public.tenants', policy: 'tenants_auth_service' },
+  { table: 'public.user', policy: 'user_auth_service' },
+]
 
 export type RlsAudit = {
   findings: RlsFinding[]
@@ -103,16 +127,56 @@ export async function runRlsAudit(sql: Sql): Promise<RlsAudit> {
             `${readable.map((p) => p.using ?? 'null').join(' | ') || '<nenhuma>'}`,
       })
 
+      // Atenção à semântica real do Postgres: numa policy FOR ALL (ou FOR UPDATE)
+      // sem WITH CHECK, o USING vale TAMBÉM como WITH CHECK. Medido, não suposto —
+      // ver scripts/check/mutation.ts. Exigir WITH CHECK explícito seria falso
+      // positivo, e teste de segurança que grita à toa é teste que alguém desliga.
       const writable = own.filter((p) => ['ALL', 'INSERT', 'UPDATE'].includes(p.command))
+      const checked = writable.filter((p) =>
+        p.withCheck !== null
+          ? p.withCheck.includes('tenant_id')
+          : ['ALL', 'UPDATE'].includes(p.command) && (p.using?.includes('tenant_id') ?? false),
+      )
       findings.push({
         table: t.qualified,
         rule: 'policy-with-check',
-        ok: writable.some((p) => p.withCheck !== null && p.withCheck.includes('tenant_id')),
-        detail: writable.some((p) => p.withCheck !== null && p.withCheck.includes('tenant_id'))
-          ? 'policy de escrita tem WITH CHECK por tenant_id'
-          : `nenhuma policy de escrita tem WITH CHECK por tenant_id — dá para gravar linha ` +
-            `carimbada com tenant alheio. WITH CHECK atual: ` +
-            `${writable.map((p) => p.withCheck ?? 'null').join(' | ') || '<nenhuma>'}`,
+        ok: checked.length > 0,
+        detail:
+          checked.length > 0
+            ? `escrita checada por tenant_id (${checked
+                .map((p) => `${p.policy}${p.withCheck === null ? ' via USING' : ''}`)
+                .join(', ')})`
+            : `nenhuma policy de escrita amarra tenant_id — dá para gravar linha carimbada ` +
+              `com tenant alheio. Policies de escrita: ` +
+              `${writable.map((p) => `${p.policy}[${p.command}] check=${p.withCheck ?? 'null'} using=${p.using ?? 'null'}`).join(' | ') || '<nenhuma>'}`,
+      })
+
+      // Porta de fuga: policy PERMISSIVE que não fala de tenant nenhum entra por
+      // OR e anula o isolamento enquanto a condição dela valer. Existem casos
+      // legítimos (o serviço de auth precisa resolver o tenant do usuário ANTES
+      // de haver contexto de tenant), então isto não reprova — mas fica fixado
+      // na allowlist para que uma porta NOVA não apareça calada.
+      const hatches = own.filter((p) => {
+        const expr = `${p.using ?? ''} ${p.withCheck ?? ''}`
+        return !expr.includes('tenant_id') && !/\bid\b/.test(expr)
+      })
+      const unexpected = hatches.filter(
+        (p) => !KNOWN_ESCAPE_HATCHES.some((k) => k.table === t.qualified && k.policy === p.policy),
+      )
+      findings.push({
+        table: t.qualified,
+        rule: 'policy-escape-hatch',
+        ok: unexpected.length === 0,
+        detail:
+          unexpected.length === 0
+            ? hatches.length === 0
+              ? 'nenhuma policy ignora o tenant'
+              : `porta(s) de fuga conhecida(s) e fixada(s): ${hatches.map((p) => p.policy).join(', ')}`
+            : `policy PERMISSIVE nova que ignora tenant_id: ` +
+              `${unexpected.map((p) => `${p.policy}[${p.command}] using=${p.using ?? 'null'}`).join(' | ')}. ` +
+              `Policies permissivas somam por OR: enquanto a condição dela for verdadeira, ` +
+              `o isolamento desta tabela não existe. Se for intencional, registre em ` +
+              `KNOWN_ESCAPE_HATCHES (tests/security/rls-checks.ts) para o próximo não descobrir de susto.`,
       })
     }
   }

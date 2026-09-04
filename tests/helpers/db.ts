@@ -5,7 +5,7 @@
  * nasce coberta pelos testes de segurança no minuto em que a migration roda.
  */
 import postgres from 'postgres'
-import { testDatabaseUrl } from '../setup/env.ts'
+import { testDatabaseUrl } from '../setup/env'
 
 export type Sql = postgres.Sql<Record<string, never>>
 
@@ -256,6 +256,90 @@ export async function describeTable(sql: Sql, schema: string, name: string): Pro
   }
 }
 
+/**
+ * Valores aceitos por CHECK do tipo `col = ANY (ARRAY['a'::text, 'b'::text])`.
+ * Sem isto o seed inventa 'zarpa-qa-kind' e apanha do banco — e aí o teste de
+ * isolamento falha por motivo errado, que é a pior forma de falhar.
+ */
+export async function discoverCheckAllowedValues(
+  sql: Sql,
+  schema: string,
+  table: string,
+): Promise<Map<string, string[]>> {
+  const rows = await sql<{ def: string }[]>`
+    select pg_get_constraintdef(c.oid) as def
+    from pg_constraint c
+    where c.contype = 'c'
+      and c.conrelid = ${`${schema}.${table}`}::regclass
+  `
+  const out = new Map<string, string[]>()
+  for (const { def } of rows) {
+    const m = /\(?\(?"?([a-z_][a-z0-9_]*)"?\s*=\s*ANY\s*\(\s*ARRAY\[(.+?)\]/is.exec(def)
+    if (!m) continue
+    const [, column, body] = m
+    const values = Array.from(body.matchAll(/'((?:[^']|'')*)'/g)).map((x) =>
+      x[1].replace(/''/g, "'"),
+    )
+    if (values.length > 0) out.set(column, values)
+  }
+  return out
+}
+
+/**
+ * A tabela que o `tenant_id` referencia (normalmente `tenants`) não tem coluna
+ * `tenant_id` — ela É o tenant. Descobrimos quem é pela FK, não pelo nome, e
+ * criamos a linha raiz de cada tenant antes de qualquer outra coisa.
+ */
+export async function bootstrapTenantRoots(
+  sql: Sql,
+  shapes: TableShape[],
+  tenantIds: string[],
+): Promise<{ table: string | null; failures: { tenantId: string; error: string }[] }> {
+  const rootFk = shapes
+    .flatMap((s) => s.foreignKeys)
+    .find((fk) => fk.column === TENANT_COLUMN)
+  if (!rootFk) return { table: null, failures: [] }
+
+  const [schema, name] = rootFk.refTable.split('.')
+  const shape = await describeTable(sql, schema, name)
+  const allowed = await discoverCheckAllowedValues(sql, schema, name)
+  const failures: { tenantId: string; error: string }[] = []
+
+  for (const tenantId of tenantIds) {
+    const cols: string[] = [`"${rootFk.refColumn}"`]
+    const exprs: string[] = ['$1']
+    const params: unknown[] = [tenantId]
+
+    for (const col of shape.columns) {
+      if (col.name === rootFk.refColumn) continue
+      if (col.isGenerated || col.isIdentity || col.hasDefault || col.isNullable) continue
+      const choices = allowed.get(col.name)
+      params.push(choices?.[0] ?? (await syntheticValue(sql, col, `zarpa-qa-${tenantId.slice(0, 8)}`)))
+      cols.push(`"${col.name}"`)
+      exprs.push(`$${params.length}`)
+    }
+
+    try {
+      // A policy da `tenants` exige `id = app.tenant_id` no WITH CHECK: o
+      // próprio nascimento do tenant já roda dentro do contexto dele.
+      await withTenant(sql, tenantId, (tx) =>
+        tx.unsafe(
+          `insert into ${rootFk.refTable} (${cols.join(', ')}) values (${exprs.join(', ')})
+           on conflict do nothing`,
+          params as never[],
+        ),
+      )
+    } catch (error) {
+      failures.push({
+        tenantId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  return { table: rootFk.refTable, failures }
+}
+
 async function enumLabel(sql: Sql, udtName: string): Promise<string | null> {
   const rows = await sql<{ label: string }[]>`
     select e.enumlabel as label
@@ -308,8 +392,16 @@ export type SeedResult =
   | { ok: false; table: string; tenantId: string; error: string }
 
 /**
- * Ordena tabelas por dependência de FK (pai antes de filho). Ciclos não travam:
- * a tabela sai na ordem que der e o erro de insert, se houver, vira finding.
+ * Ordena tabelas por dependência de FK (pai antes de filho).
+ *
+ * Só FK NOT NULL conta como dependência dura. FK anulável fica NULL no seed, e
+ * ignorá-la é justamente o que quebra ciclo legítimo: `proposals.accepted_option_id`
+ * (anulável) aponta para `proposal_options`, que aponta de volta para
+ * `proposals.id` (NOT NULL). Tratar as duas como iguais colocaria
+ * `proposal_options` antes de `proposals` e o insert morreria na FK.
+ *
+ * Ciclo entre duas FKs NOT NULL não trava: a tabela sai na ordem que der e o
+ * erro de insert vira finding, com o nome da constraint.
  */
 export function topoSortByForeignKeys(shapes: TableShape[]): TableShape[] {
   const byName = new Map(shapes.map((s) => [s.qualified, s]))
@@ -322,6 +414,8 @@ export function topoSortByForeignKeys(shapes: TableShape[]): TableShape[] {
     visiting.add(shape.qualified)
     for (const fk of shape.foreignKeys) {
       if (fk.refTable === shape.qualified) continue // auto-referência
+      const col = shape.columns.find((c) => c.name === fk.column)
+      if (col?.isNullable !== false) continue // anulável: não é dependência dura
       const parent = byName.get(fk.refTable)
       if (parent) visit(parent)
     }
@@ -346,7 +440,10 @@ export async function insertRow(
   tenantId: string,
   fkValues: Map<string, Record<string, unknown>>,
   seedTag: string,
+  allowed?: Map<string, string[]>,
+  opts: { returning?: boolean } = {},
 ): Promise<Record<string, unknown>> {
+  const allowedValues = allowed ?? (await discoverCheckAllowedValues(sql, shape.schema, shape.name))
   const fkByColumn = new Map(shape.foreignKeys.map((fk) => [fk.column, fk]))
   const cols: string[] = []
   const exprs: string[] = []
@@ -386,6 +483,12 @@ export async function insertRow(
     if (col.isIdentity || col.hasDefault) continue
     if (col.isNullable) continue
 
+    const choices = allowedValues.get(col.name)
+    if (choices !== undefined && choices.length > 0) {
+      push(col.name, choices[0])
+      continue
+    }
+
     push(col.name, await syntheticValue(sql, col, `${seedTag}-${tenantId}`))
   }
 
@@ -397,9 +500,15 @@ export async function insertRow(
   const columnList = cols.length > 0 ? `(${cols.join(', ')})` : ''
   const valueList = exprs.length > 0 ? `values (${exprs.join(', ')})` : 'default values'
 
-  const query = `insert into ${shape.qualified} ${columnList} ${valueList} returning ${returning}`
+  // `returning` NÃO é detalhe cosmético: num INSERT com RETURNING o Postgres
+  // ainda aplica a policy de SELECT à linha devolvida. Uma policy com
+  // `WITH CHECK (true)` REJEITA o insert com RETURNING (42501) e ACEITA o mesmo
+  // insert sem RETURNING. Medido — ver docs/status/teo.md. Por isso a sonda de
+  // escrita cruzada roda sem RETURNING: senão o teste passa por acidente.
+  const suffix = opts.returning === false ? '' : ` returning ${returning}`
+  const query = `insert into ${shape.qualified} ${columnList} ${valueList}${suffix}`
   const rows = await tx.unsafe(query, params as never[])
-  return rows[0] as Record<string, unknown>
+  return (rows[0] ?? {}) as Record<string, unknown>
 }
 
 /**
@@ -417,11 +526,22 @@ export async function seedTenantRows(
   const pks = new Map<string, Record<string, unknown>>()
   const results: SeedResult[] = []
 
+  // A linha raiz do tenant (a `tenants`) precisa existir antes de qualquer FK.
+  const root = await bootstrapTenantRoots(sql, shapes, tenantIds)
+  for (const f of root.failures) {
+    results.push({ ok: false, table: root.table ?? '<raiz do tenant>', tenantId: f.tenantId, error: f.error })
+  }
+
+  const allowedByTable = new Map<string, Map<string, string[]>>()
+  for (const shape of ordered) {
+    allowedByTable.set(shape.qualified, await discoverCheckAllowedValues(sql, shape.schema, shape.name))
+  }
+
   for (const tenantId of tenantIds) {
     for (const shape of ordered) {
       try {
         const pk = await withTenant(sql, tenantId, (tx) =>
-          insertRow(tx, sql, shape, tenantId, pks, seedTag),
+          insertRow(tx, sql, shape, tenantId, pks, seedTag, allowedByTable.get(shape.qualified)),
         )
         pks.set(`${shape.qualified}::${tenantId}`, pk)
         results.push({ ok: true, table: shape.qualified, tenantId, pk })

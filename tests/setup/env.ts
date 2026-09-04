@@ -6,9 +6,28 @@
  * TEST_DATABASE_URL direto e ele deve vencer sobre qualquer arquivo local.
  */
 import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 
-const REPO_ROOT = resolve(import.meta.dirname, '..', '..')
+/**
+ * Raiz do repositório sem `import.meta.dirname` e sem `__dirname`.
+ *
+ * O `package.json` não declara `"type": "module"` (e não é meu para editar),
+ * então o mesmo arquivo roda como ESM sob vitest e como CJS sob tsx. Subir a
+ * árvore procurando o `package.json` funciona nos dois, e independe de onde o
+ * comando foi disparado.
+ */
+function findRepoRoot(start: string = process.cwd()): string {
+  let dir = resolve(start)
+  for (let i = 0; i < 12; i++) {
+    if (existsSync(resolve(dir, 'package.json'))) return dir
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return resolve(start)
+}
+
+export const REPO_ROOT = findRepoRoot()
 
 function parseEnvFile(contents: string): Record<string, string> {
   const out: Record<string, string> = {}

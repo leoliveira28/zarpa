@@ -126,11 +126,20 @@
     color: var(--selection-text);
   }
 
-  /* Foco visível em TUDO. Nunca use outline:none sem colocar outra pista. */
+  /* Foco visível em TUDO. Nunca use outline:none sem colocar outra pista.
+     O outline segue o border-radius do elemento — por isso não mexemos no raio
+     aqui, senão o anel muda a forma do controle ao focar. */
   :focus-visible {
     outline: var(--focus-ring-width) solid var(--focus);
     outline-offset: var(--focus-ring-offset);
-    border-radius: var(--r-sm);
+  }
+
+  /* Foco por ponteiro ganha uma marca discreta em vez de nada. Duas razões:
+     depois de clicar num controle o usuário continua sabendo qual está ativo,
+     e um <button> focado por script (teste automatizado, âncora de rota) não
+     fica visualmente idêntico ao estado de repouso. */
+  :focus:not(:focus-visible) {
+    box-shadow: inset 0 0 0 1px var(--focus-halo);
   }
 
   /* Radix marca o item ativo do teclado com data-highlighted; tratamos como foco. */
@@ -179,6 +188,13 @@
   background-color: var(--surface-veil-strong);
   -webkit-backdrop-filter: var(--veil-blur);
   backdrop-filter: var(--veil-blur);
+}
+
+/* Anel de foco aplicável a um container (ex.: campo com prefixo, onde quem
+   recebe foco é o <input> lá dentro mas quem deve mostrar o anel é a caixa). */
+@utility focus-ring {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
 }
 
 @utility numeric {
@@ -244,6 +260,118 @@
   will-change: transform;
 }
 
+/* Painéis ancorados (select, dropdown, popover, tooltip, combobox).
+   Crescem de onde foram abertos — a origem vem do próprio Radix. */
+@keyframes zk-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes zk-pop-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+.zk-pop {
+  transform-origin: var(--radix-select-content-transform-origin, var(--radix-popper-transform-origin, center));
+}
+
+.zk-pop[data-state="open"],
+.zk-pop[data-state="delayed-open"],
+.zk-pop[data-state="instant-open"] {
+  animation: zk-pop-in 150ms var(--curve-out);
+}
+
+.zk-pop[data-state="closed"] {
+  animation: zk-pop-out 110ms var(--curve-out);
+}
+
+/* Véu do modal / sheet. Só opacity. */
+@keyframes zk-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes zk-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.zk-fade[data-state="open"] {
+  animation: zk-fade-in 200ms var(--curve-out);
+}
+
+.zk-fade[data-state="closed"] {
+  animation: zk-fade-out 160ms var(--curve-out);
+}
+
+/* Diálogo: acontece no lugar, não desliza de fora. O -50%/-50% do
+   posicionamento entra no keyframe, senão o transform da animação o apaga. */
+@keyframes zk-dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes zk-dialog-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.98);
+  }
+}
+
+.zk-dialog[data-state="open"] {
+  animation: zk-dialog-in 200ms var(--curve-out);
+}
+
+.zk-dialog[data-state="closed"] {
+  animation: zk-dialog-out 140ms var(--curve-out);
+}
+
+/* Tique do checkbox: o traço se desenha. stroke-dashoffset não causa layout. */
+@keyframes zk-tick {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.zk-tick path {
+  stroke-dasharray: 1;
+  animation: zk-tick 180ms var(--curve-out) forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .zk-busy-bar {
     animation: none;
@@ -253,6 +381,10 @@
   .zk-skeleton::after {
     animation: none;
     opacity: 0;
+  }
+  .zk-tick path {
+    animation: none;
+    stroke-dashoffset: 0;
   }
 }
 

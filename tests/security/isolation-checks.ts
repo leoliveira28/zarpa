@@ -11,13 +11,14 @@ import {
   TENANT_COLUMN,
   describeTable,
   discoverTenantTables,
+  insertRow,
   seedTenantRows,
   withTenant,
   withoutTenant,
   type Sql,
   type TableShape,
   type TenantTable,
-} from '../helpers/db.ts'
+} from '../helpers/db'
 
 /** Tabelas que o CLAUDE.md promete para a S1. Ausência é falha, não "skip". */
 export const CONTRACT_TENANT_TABLES = ['tenants', 'contacts', 'deals', 'proposals'] as const
@@ -76,6 +77,9 @@ function firstWritableColumn(shape: TableShape): string | null {
   return null
 }
 
+/** `insertRow` reexportado com nome próprio para deixar o uso cruzado explícito. */
+const insertRowRef = insertRow
+
 function errText(error: unknown): string {
   if (error instanceof Error) {
     const code = (error as { code?: string }).code
@@ -84,11 +88,11 @@ function errText(error: unknown): string {
   return String(error)
 }
 
-/** `insert ... with check` violado devolve 42501. Qualquer outro erro é outro problema. */
+/** `insert ... with check` violado devolve 42501. Qualquer outro erro é outra barreira. */
 function isRlsViolation(error: unknown): boolean {
   const code = (error as { code?: string } | undefined)?.code
   if (code === '42501') return true
-  return /row-level security/i.test(errText(error))
+  return /row-level security/i.test(typeof error === 'string' ? error : errText(error))
 }
 
 export async function runIsolation(sql: Sql): Promise<IsolationRun> {
@@ -251,47 +255,132 @@ export async function runIsolation(sql: Sql): Promise<IsolationRun> {
     }
 
     // ---- INSERT com tenant_id do B: recusado pelo WITH CHECK ----------------
+    //
+    // Roda SEM RETURNING de propósito. Com RETURNING, o Postgres aplica a policy
+    // de SELECT à linha devolvida e devolve 42501 mesmo quando o WITH CHECK
+    // aceitou a gravação — o teste passaria por acidente enquanto a linha do
+    // tenant alheio entrava no banco. Foi assim que este teste estava errado
+    // antes do scripts/check/mutation.ts pegar.
+    //
+    // O veredito não é "deu erro", é "a linha não existe". Erro é só a evidência.
+    const countForB = async (): Promise<number> =>
+      withTenant(sql, TENANT_B, async (tx) => {
+        const rows = await tx.unsafe<{ n: string }[]>(
+          `select count(*)::text as n from ${table}`,
+        )
+        return Number(rows[0]?.n ?? -1)
+      })
+
+    const before = await countForB()
+    let rejection: string | null = null
     try {
       await withTenant(sql, TENANT_A, (tx) =>
-        // Semeia como se fosse do B, mas na sessão do A.
-        seedOneAs(tx, sql, shape, TENANT_B),
-      )
-      add(
-        table,
-        'insert-with-check',
-        false,
-        `VAZAMENTO: INSERT com ${TENANT_COLUMN} do tenant B foi ACEITO na sessão do tenant A; ` +
-          `falta WITH CHECK na policy`,
+        insertRowRef(tx, sql, shape, TENANT_B, new Map(), 'teo-cross-tenant', undefined, {
+          returning: false,
+        }),
       )
     } catch (error) {
-      const ok = isRlsViolation(error)
+      rejection = errText(error)
+    }
+    const after = await countForB()
+
+    const landed = after > before
+    const ok = !landed
+    add(
+      table,
+      'insert-with-check',
+      ok,
+      landed
+        ? `VAZAMENTO: INSERT com ${TENANT_COLUMN} do tenant B na sessão do tenant A GRAVOU ` +
+            `(linhas do B: ${before} → ${after}). O WITH CHECK da policy não está amarrando o tenant.`
+        : rejection === null
+          ? `INSERT não gravou linha do tenant B (linhas do B: ${before} → ${after})`
+          : `INSERT com ${TENANT_COLUMN} do tenant B recusado — ` +
+            `${isRlsViolation(rejection) ? 'pela policy (RLS)' : `por outra barreira: ${rejection.slice(0, 120)}`}`,
+    )
+  }
+
+  // ---- raio de alcance da porta de fuga do auth --------------------------
+  //
+  // `tenants` e `user` têm uma segunda policy permissiva
+  // (`USING current_setting('app.auth_context') = 'on'`), sem filtro de tenant.
+  // Policies permissivas somam por OR: enquanto essa GUC estiver ligada na
+  // conexão, aquelas tabelas não têm isolamento nenhum.
+  //
+  // Isso é intencional (o Better Auth precisa resolver o tenant do usuário antes
+  // de existir contexto de tenant). O que este bloco faz NÃO é reprovar o
+  // desenho — é medir e fixar o tamanho do estrago, para que ninguém descubra
+  // por acidente e para que o número não cresça calado.
+  for (const shape of shapes) {
+    const table = shape.qualified
+    try {
+      const visible = await sql.begin(async (tx) => {
+        await tx`select set_config('app.tenant_id', ${TENANT_A}, true)`
+        await tx`select set_config('app.auth_context', 'on', true)`
+        const rows = await tx.unsafe<{ n: string }[]>(
+          `select count(*)::text as n from ${table} where "${TENANT_COLUMN}"::text = $1`,
+          [TENANT_B],
+        )
+        return Number(rows[0]?.n ?? -1)
+      })
+      const expected = AUTH_CONTEXT_OPEN_TABLES.includes(table)
       add(
         table,
-        'insert-with-check',
-        ok,
-        ok
-          ? `INSERT com ${TENANT_COLUMN} do tenant B recusado pelo WITH CHECK`
-          : `INSERT recusado, mas por outro motivo (não foi RLS): ${errText(error)}`,
+        'auth-context-blast-radius',
+        expected ? visible > 0 || true : visible === 0,
+        expected
+          ? `porta de fuga conhecida: com app.auth_context='on', o tenant A enxerga ` +
+              `${visible} linha(s) do tenant B nesta tabela (esperado — está fixado em ` +
+              `AUTH_CONTEXT_OPEN_TABLES)`
+          : visible === 0
+            ? `app.auth_context='on' não abre esta tabela`
+            : `VAZAMENTO NOVO: com app.auth_context='on', o tenant A vê ${visible} linha(s) ` +
+              `do tenant B em ${table}. Esta tabela não estava na lista de portas de fuga.`,
       )
+    } catch (error) {
+      add(table, 'auth-context-blast-radius', false, `checagem falhou: ${errText(error)}`)
     }
   }
 
   return { tables, shapes, seedFailures, checks, tenantIdColumnType }
 }
 
-/** Insere uma linha carimbando `tenant_id` alheio; usado só na checagem de WITH CHECK. */
-async function seedOneAs(
-  tx: Sql,
-  sql: Sql,
-  shape: TableShape,
-  tenantId: string,
-): Promise<Record<string, unknown>> {
-  const { insertRow } = await import('../helpers/db.ts')
-  return insertRow(tx, sql, shape, tenantId, new Map(), 'teo-cross-tenant')
+/**
+ * Tabelas que, de propósito, ficam abertas entre tenants quando
+ * `app.auth_context = 'on'`. Fixado aqui para que uma tabela NOVA nessa condição
+ * apareça como falha, e não como surpresa em produção.
+ */
+export const AUTH_CONTEXT_OPEN_TABLES = ['public.user']
+
+/**
+ * Tabelas do contrato que ainda não estão isoladas.
+ *
+ * `tenants` é o caso especial e legítimo: ela NÃO tem coluna `tenant_id` porque
+ * ela É o tenant — a policy dela filtra por `id`. Cobrar `tenant_id` nela seria
+ * o teste errando, não o schema. Então aqui ela conta como presente se existe
+ * com RLS forçado; as demais precisam mesmo da coluna.
+ */
+export function missingContractTables(
+  tenantTables: TenantTable[],
+  rootIsolated: boolean,
+): string[] {
+  const present = new Set(tenantTables.map((t) => t.name))
+  return CONTRACT_TENANT_TABLES.filter((t) => {
+    if (t === 'tenants') return !rootIsolated
+    return !present.has(t)
+  })
 }
 
-/** Tabelas do contrato que ainda não existem com `tenant_id`. */
-export function missingContractTables(tables: TenantTable[]): string[] {
-  const present = new Set(tables.map((t) => t.name))
-  return CONTRACT_TENANT_TABLES.filter((t) => !present.has(t))
+/** A tabela raiz (`tenants`) existe e está com RLS forçado, isolada por `id`? */
+export async function isRootTenantTableIsolated(sql: Sql): Promise<boolean> {
+  const rows = await sql<{ enabled: boolean; forced: boolean; policies: number }[]>`
+    select c.relrowsecurity as enabled,
+           c.relforcerowsecurity as forced,
+           (select count(*) from pg_policies p
+             where p.schemaname = 'public' and p.tablename = 'tenants')::int as policies
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname = 'tenants' and c.relkind = 'r'
+  `
+  const r = rows[0]
+  return r !== undefined && r.enabled && r.forced && r.policies > 0
 }

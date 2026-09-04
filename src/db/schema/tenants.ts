@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { check, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { uuidv7 } from '../uuid';
-import { encryptedText } from '@/lib/crypto/encryptedColumn';
+import { encryptedText } from '../../lib/crypto/encryptedColumn';
 
 /**
  * O agente de viagem. Um tenant = uma conta = uma marca.
