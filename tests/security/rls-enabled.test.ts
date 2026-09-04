@@ -65,7 +65,6 @@ describe('RLS habilitado em toda tabela com tenant_id', () => {
     const bad = audit.findings.filter((f) => f.rule === 'policy-with-check' && !f.ok)
     expect(bad.map((f) => f.table), `\n${fmt('policy-with-check')}\n`).toEqual([])
   })
-})
 
   it('nenhuma policy permissiva nova ignora o tenant', () => {
     const bad = audit.findings.filter((f) => f.rule === 'policy-escape-hatch' && !f.ok)

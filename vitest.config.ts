@@ -16,9 +16,9 @@ export default defineConfig({
 
     // Um banco só, compartilhado: paralelismo por arquivo criaria corrida no
     // seed. O ganho de tempo não paga o teste intermitente.
+    // (poolOptions saiu do InlineConfig no vitest 5 — fileParallelism basta.)
     fileParallelism: false,
     pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
 
     testTimeout: 30_000,
     hookTimeout: 60_000,

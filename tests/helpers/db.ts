@@ -14,7 +14,7 @@ export const TENANT_COLUMN = 'tenant_id'
 /** Schemas que são nossos. `public` por padrão; extensões e catálogo ficam de fora. */
 const APP_SCHEMAS = ['public']
 
-export function connect(options: postgres.Options<Record<string, never>> = {}): Sql {
+export function connect(options: Partial<postgres.Options<{}>> = {}): Sql {
   return postgres(testDatabaseUrl(), {
     max: 4,
     onnotice: () => {},

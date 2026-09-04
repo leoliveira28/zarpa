@@ -12,7 +12,7 @@ import { cn } from "@/lib/ui/cn";
    Nada é centralizado por padrão: alinhado à esquerda, como o resto do produto.
    ========================================================================== */
 
-export interface EmptyStateProps extends React.HTMLAttributes<HTMLDivElement> {
+export interface EmptyStateProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'title'> {
   title: React.ReactNode;
   description?: React.ReactNode;
   /** Ação que resolve o vazio. Uma só — duas viram indecisão. */
