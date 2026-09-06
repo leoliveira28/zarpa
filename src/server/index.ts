@@ -69,6 +69,14 @@ export {
   type ResultadoAlertasGeral,
 } from './alerts';
 export {
+  rodarFilaDeFollowups,
+  gerarFollowupsDaProposta,
+  listarTarefasDeHoje,
+  type ResultadoFilaTenant,
+  type ResultadoFilaGeral,
+  type TarefaDeHoje,
+} from './followups';
+export {
   listarPropostas,
   listarNegocios,
   criarPropostaAPartirDoNegocio,

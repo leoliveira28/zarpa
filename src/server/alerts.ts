@@ -67,7 +67,13 @@ function hojeMesEDia(): string {
  */
 const MARCOS_PASSAPORTE = [90, 30, 7] as const;
 
-async function gerarAlertasDePassaporte(tx: TenantDb, tenantId: string): Promise<number> {
+/**
+ * Exportadas (só a partir do S8) para `src/server/followups.ts` reaproveitar dentro do
+ * MESMO `withTenant`/transação do runner diário — ver comentário de topo de
+ * `rodarFilaDeFollowups()`. Continuam privadas de fato: nada fora de `src/server`
+ * importa `alerts.ts` diretamente.
+ */
+export async function gerarAlertasDePassaporte(tx: TenantDb, tenantId: string): Promise<number> {
   let criadas = 0;
 
   for (const dias of MARCOS_PASSAPORTE) {
@@ -114,7 +120,7 @@ async function gerarAlertasDePassaporte(tx: TenantDb, tenantId: string): Promise
   return criadas;
 }
 
-async function gerarAlertasDeAniversario(tx: TenantDb, tenantId: string): Promise<number> {
+export async function gerarAlertasDeAniversario(tx: TenantDb, tenantId: string): Promise<number> {
   const hoje = hojeMesEDia();
   const ano = new Date().getUTCFullYear();
   let criadas = 0;
