@@ -3,7 +3,16 @@
 import { randomBytes } from 'node:crypto';
 import { and, asc, desc, eq, isNull, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { contacts, deals, libraryItems, proposalBlocks, proposalOptions, proposals } from '@/db/schema';
+import {
+  activities,
+  contacts,
+  deals,
+  libraryItems,
+  proposalBlocks,
+  proposalOptions,
+  proposals,
+  tenants,
+} from '@/db/schema';
 import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
@@ -532,6 +541,112 @@ export async function restaurarProposta(propostaId: string): Promise<ServiceResu
       });
 
       return null;
+    });
+  });
+}
+
+/**
+ * Envia a proposta — o que transforma um link morto num link de verdade. É aqui, e só
+ * aqui, que `brand_snapshot` é congelado: a marca do agente NO MOMENTO DO ENVIO, para que
+ * a proposta que o cliente já recebeu não mude de cara se o agente trocar de logo amanhã
+ * (comentário original de `proposals.ts`, agora implementado).
+ *
+ * `publicToken` já nasce em `criarPropostaAPartirDoNegocio` (128 bits, ver
+ * `gerarTokenPublico`) — a checagem de "garantir que existe" aqui é defensiva, para uma
+ * linha antiga que por algum motivo não tenha token, nunca o caminho normal.
+ *
+ * Reenviar uma proposta já enviada é permitido e idempotente no que importa: atualiza o
+ * `brand_snapshot` (a marca pode ter mudado desde o primeiro envio) mas NUNCA regride
+ * `status`/`sentAt` de um estado mais avançado (`viewed`/`accepted`/`declined`/`expired`)
+ * de volta para `sent` — isso apagaria "o cliente já abriu" na cara da própria agente.
+ */
+export async function enviarProposta(propostaId: string): Promise<ServiceResult<PropostaMeta>> {
+  return comoResultado(async () => {
+    const { tenantId, userId } = await requireAuthContext();
+
+    return withTenant(tenantId, async (tx) => {
+      const [proposta] = await tx
+        .select({
+          id: proposals.id,
+          dealId: proposals.dealId,
+          publicToken: proposals.publicToken,
+          status: proposals.status,
+          sentAt: proposals.sentAt,
+        })
+        .from(proposals)
+        .where(eq(proposals.id, propostaId))
+        .limit(1);
+
+      if (!proposta) {
+        throw new ServiceError('NAO_ENCONTRADO', 'Essa proposta não existe mais.', {
+          correcao: 'Voltar para a lista',
+        });
+      }
+
+      const opcoes = await tx
+        .select({ id: proposalOptions.id })
+        .from(proposalOptions)
+        .where(eq(proposalOptions.proposalId, propostaId))
+        .limit(1);
+
+      if (opcoes.length === 0) {
+        throw new ServiceError(
+          'DADOS_INVALIDOS',
+          'Adicione ao menos uma opção antes de enviar a proposta.',
+          { correcao: 'Voltar para o construtor e criar uma opção' },
+        );
+      }
+
+      const [marca] = await tx
+        .select({
+          brandName: tenants.brandName,
+          brandLogoUrl: tenants.brandLogoUrl,
+          brandPrimaryColor: tenants.brandPrimaryColor,
+          brandSecondaryColor: tenants.brandSecondaryColor,
+          whatsapp: tenants.whatsapp,
+          instagram: tenants.instagram,
+        })
+        .from(tenants)
+        .where(eq(tenants.id, tenantId))
+        .limit(1);
+
+      const brandSnapshot = {
+        name: marca?.brandName ?? null,
+        logoUrl: marca?.brandLogoUrl ?? null,
+        primaryColor: marca?.brandPrimaryColor ?? null,
+        secondaryColor: marca?.brandSecondaryColor ?? null,
+        whatsapp: marca?.whatsapp ?? null,
+        instagram: marca?.instagram ?? null,
+      };
+
+      const valores: Record<string, unknown> = { updatedAt: new Date(), brandSnapshot };
+      if (!proposta.publicToken) valores.publicToken = gerarTokenPublico();
+      if (proposta.status === 'draft') valores.status = 'sent';
+      if (!proposta.sentAt) valores.sentAt = new Date();
+
+      const [atualizada] = await tx
+        .update(proposals)
+        .set(valores)
+        .where(eq(proposals.id, propostaId))
+        .returning(COLUNAS_META);
+
+      await registrarAuditoria(tx, {
+        tenantId,
+        actorUserId: userId,
+        action: 'proposal.sent',
+        entity: 'proposal',
+        entityId: propostaId,
+      });
+
+      await tx.insert(activities).values({
+        tenantId,
+        dealId: proposta.dealId,
+        proposalId: propostaId,
+        type: 'proposal_sent',
+        occurredAt: new Date(),
+      });
+
+      return atualizada! as PropostaMeta;
     });
   });
 }

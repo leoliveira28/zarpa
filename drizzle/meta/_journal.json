@@ -29,6 +29,13 @@
       "when": 1757548800000,
       "tag": "0003_construtor_de_proposta",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1757635200000,
+      "tag": "0004_proposta_publica",
+      "breakpoints": true
     }
   ]
 }

@@ -33,6 +33,13 @@ export const tenants = pgTable(
     contactEmail: text('contact_email'),
     contactPhone: text('contact_phone'),
     whatsapp: text('whatsapp'),
+    /**
+     * Instagram do agente (handle ou URL), exibido na proposta pública junto com o resto
+     * da marca. Nasce em `0004_proposta_publica`, a mesma migration da função de leitura
+     * pública — é o quarto dado de marca que a função devolve (nome, logo, cor, whatsapp,
+     * instagram), e não existia coluna nenhuma para ele até aqui.
+     */
+    instagram: text('instagram'),
 
     /** CPF/CNPJ do próprio agente (MEI). Cifrado como qualquer outro documento. */
     document: encryptedText('document_encrypted'),

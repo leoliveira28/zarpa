@@ -73,6 +73,7 @@ export {
   criarPropostaAPartirDoNegocio,
   obterPropostaParaEdicao,
   atualizarProposta,
+  enviarProposta,
   arquivarProposta,
   restaurarProposta,
   criarOpcao,
@@ -111,3 +112,13 @@ export {
   type ItemBibliotecaResumo,
   type FiltroBiblioteca,
 } from './library';
+export {
+  obterPropostaPublica,
+  registrarVisitaProposta,
+  type PropostaPublica,
+  type PropostaPublicaBrand,
+  type PropostaPublicaMeta,
+  type PropostaPublicaOpcao,
+  type PropostaPublicaBloco,
+  type RegistrarVisitaInput,
+} from './publicProposals';

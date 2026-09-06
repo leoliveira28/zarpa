@@ -23,6 +23,7 @@ const marcaInput = z.object({
     .regex(/^#[0-9a-fA-F]{6}$/, 'Cor precisa estar no formato #RRGGBB')
     .optional(),
   whatsapp: z.string().trim().max(32).optional().or(z.literal('')),
+  instagram: z.string().trim().max(80).optional().or(z.literal('')),
   contactEmail: z.email().max(200).optional().or(z.literal('')),
 });
 
@@ -38,6 +39,8 @@ export type TenantAtual = {
   brandLogoUrl: string | null;
   brandPrimaryColor: string | null;
   brandSecondaryColor: string | null;
+  whatsapp: string | null;
+  instagram: string | null;
 };
 
 /** Os dados do próprio tenant. `document` fica de fora: é CPF/CNPJ do agente. */
@@ -57,6 +60,8 @@ export async function obterTenantAtual(): Promise<ServiceResult<TenantAtual>> {
           brandLogoUrl: tenants.brandLogoUrl,
           brandPrimaryColor: tenants.brandPrimaryColor,
           brandSecondaryColor: tenants.brandSecondaryColor,
+          whatsapp: tenants.whatsapp,
+          instagram: tenants.instagram,
         })
         .from(tenants)
         .limit(1);

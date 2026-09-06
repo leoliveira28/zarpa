@@ -28,11 +28,13 @@ import { deals } from './pipeline';
  * `proposal_views` é o "sabe quando o cliente abriu": uma linha por abertura.
  *
  * ATENÇÃO ao expor qualquer coisa daqui publicamente: `cost_cents` e `commission_cents`
- * de `proposal_options` NUNCA podem sair para o link público. A leitura pública ainda não
- * existe (fica para S7, via função SECURITY DEFINER); ver `docs/status/rafa.md`. As Server
- * Actions do construtor (S5/S6, autenticadas) moram em `src/server/proposals.ts` e DEVOLVEM
- * `cost_cents`/`commission_cents` de propósito — quem edita a proposta precisa ver a
- * margem. A separação pública×privada é responsabilidade da função S7, não desta tabela.
+ * de `proposal_options` NUNCA podem sair para o link público. A leitura pública (S7) é a
+ * função `SECURITY DEFINER` `public.proposta_publica(slug)`, em
+ * `drizzle/0004_proposta_publica.sql`, com sua PRÓPRIA lista de colunas — nunca essas
+ * duas. As Server Actions do construtor (S5/S6, autenticadas) moram em
+ * `src/server/proposals.ts` e DEVOLVEM `cost_cents`/`commission_cents` de propósito — quem
+ * edita a proposta precisa ver a margem. A separação pública×privada é responsabilidade da
+ * função de S7 (`src/server/publicProposals.ts` do lado da aplicação), não desta tabela.
  */
 
 export const proposals = pgTable(
@@ -205,6 +207,12 @@ export const proposalBlocks = pgTable(
  * `ip_hash` e não `ip`: o IP do cliente do agente é dado pessoal (LGPD) e não precisamos
  * dele em claro — só de saber se duas aberturas vieram do mesmo lugar. Use
  * `blindIndex(ip, 'proposal_view_ip')` de `src/lib/crypto`.
+ *
+ * `focusedOptionId` ("opção focada") nasce em `0004_proposta_publica`: qual opção o
+ * cliente estava olhando quando a visita foi registrada (ex.: rolou até "Premium" e ficou
+ * lá) — sinal de intenção de compra que `focused_option_id` guarda por visita, não só o
+ * `accepted_option_id` final da proposta. `ON DELETE SET NULL`: apagar a opção não pode
+ * apagar histórico de visita.
  */
 export const proposalViews = pgTable(
   'proposal_views',
@@ -222,12 +230,16 @@ export const proposalViews = pgTable(
     referrer: text('referrer'),
     country: text('country'),
     durationMs: integer('duration_ms'),
+    focusedOptionId: uuid('focused_option_id').references(() => proposalOptions.id, {
+      onDelete: 'set null',
+    }),
     viewedAt: timestamp('viewed_at', { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index('proposal_views_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
     index('proposal_views_proposal_viewed_idx').on(t.proposalId, t.viewedAt.desc()),
+    index('proposal_views_focused_option_id_idx').on(t.focusedOptionId),
   ],
 );
 

@@ -334,3 +334,120 @@ implementar sob `FORCE ROW LEVEL SECURITY` (motivo em `docs/status/rafa.md`).
   `src/server/signup.ts` do lado de trás ainda (precisa criar o tenant antes do usuário).
   Não monte a tela de cadastro esperando que funcione hoje — me avise quando for a vez
   dela.
+
+---
+
+## S7 — `enviarProposta`, o botão que liga o link público
+
+Nova action autenticada em `src/server/proposals.ts`:
+`enviarProposta(propostaId: string): Promise<ServiceResult<PropostaMeta>>`. É o botão
+"Enviar" do construtor (S5/S6) — sem ele, o link público nunca fica acessível (a policy
+de leitura pública exige `status <> 'draft' AND sent_at IS NOT NULL`). Recusa com
+`DADOS_INVALIDOS` se a proposta ainda não tem nenhuma opção. Reenviar é permitido e
+idempotente no que importa (atualiza a marca congelada, não regride status/data de um
+estado mais avançado). Devolve o mesmo shape de `PropostaMeta` que você já usa em
+`atualizarProposta` — o link fica em `propostaMeta.publicToken` (monte a URL como
+`${origem}/p/${publicToken}`, ou o padrão de rota que você decidir).
+
+## S7 — a proposta pública (`/p/[slug]`, ou o caminho que você escolher) tem contrato agora
+
+Duas Server Actions em `src/server/publicProposals.ts`, **sem sessão, sem `tenantId`,
+chamáveis de uma página/Client Component que não passou por login**. Import de
+`@/server` (o barril já reexporta as duas).
+
+### `obterPropostaPublica(slug: string): Promise<ServiceResult<PropostaPublica | null>>`
+
+Chame no Server Component da rota pública, com o `slug` que vier do segmento de URL. Três
+resultados possíveis, e a página TEM que tratar os três sem distinguir "não existe" de
+"existe mas não é pública" (mesmo motivo do resto do produto: não vazar pista sobre o que
+existe em outro tenant):
+
+- `{ ok: true, data: null }` — slug não existe, ainda é rascunho, ou foi arquivada. Renderize
+  um estado "esta proposta não está disponível", não um 404 técnico.
+- `{ ok: true, data: PropostaPublica }` — o conteúdo.
+- `{ ok: false, ... }` — erro de validação (slug maltratado). Trate igual ao `null` na
+  prática; a mensagem em `mensagem`/`correcao` existe mas não deveria aparecer com
+  entrada de usuário normal (o slug vem da URL, não de formulário).
+
+```ts
+type PropostaPublica = {
+  proposal: {
+    id: string;
+    title: string;
+    summary: string | null;
+    status: string; // 'sent' | 'viewed' | 'accepted' | 'declined' | 'expired' — nunca 'draft'
+    currency: string;
+    coverImageUrl: string | null;
+    terms: string | null;
+    validUntil: string | null; // 'AAAA-MM-DD' ou null
+    acceptedOptionId: string | null;
+    sentAt: string | null; // ISO
+  };
+  brand: {
+    name: string | null;
+    logoUrl: string | null;
+    primaryColor: string | null;   // já é a MARCA congelada no envio — não é o `--accent` do produto
+    secondaryColor: string | null;
+    whatsappLink: string | null;   // "https://wa.me/<dígitos>", pronto para <a href>. NUNCA "whatsapp" cru — ver docs/handoffs/rafa-para-teo.md se tiver curiosidade do porquê do nome
+    instagram: string | null;      // handle ou URL, como o agente cadastrou — sem normalização
+  };
+  options: {
+    id: string;
+    name: string;
+    description: string | null;
+    position: number;
+    priceCents: number;            // preço ao cliente — SEM cost/commission, esses nunca saem daqui
+    installments: number | null;
+    installmentCents: number | null;
+    isRecommended: boolean;
+  }[]; // já vem ordenado por position — não precisa reordenar na tela
+  blocks: {
+    id: string;
+    optionId: string | null;       // null = bloco da proposta inteira; preenchido = só daquela opção
+    kind: string;                  // 'text' | 'image' | 'flight' | 'hotel' | 'transfer' | 'tour' | 'cruise' | 'insurance' | 'price_note'
+    position: number;
+    title: string | null;
+    body: string | null;
+    images: string[];
+    content: Record<string, unknown>; // forma livre por kind, igual ao construtor autenticado
+  }[]; // já vem ordenado por position
+};
+```
+
+`brand.primaryColor` é a cor DA MARCA DO AGENTE, congelada no envio — não confunda com o
+`#12557F` do design system do PRODUTO. É provável que a página pública precise dos dois
+tokens ao mesmo tempo (um para "isto é do Zarpa", outro para "isto é da agência de
+viagem"); decisão de composição visual é sua.
+
+### `registrarVisitaProposta(input): Promise<ServiceResult<null>>`
+
+Chame no `useEffect`/montagem do Client Component da página pública (não dá para chamar
+do Server Component — precisa rodar no navegador do cliente final, depois da página já
+estar na tela, e de novo ao trocar de aba/desmontar se quiser mandar `durationSeconds`).
+
+```ts
+type RegistrarVisitaInput = {
+  slug: string;
+  durationSeconds?: number;   // segundos inteiros, 0–86400; mande de novo (com este preenchido) ao sair da página
+  focusedOptionId?: string;   // qual opção estava em foco (ex.: scroll parou nela) — eu confiro no banco que pertence a esta proposta
+  sessionKey?: string;        // gere no cliente (ex.: crypto.randomUUID()) e guarde em sessionStorage, para eu distinguir "voltou a olhar" de "sessão nova" sem cookie
+};
+```
+
+Sempre devolve `{ ok: true, data: null }` mesmo para slug inválido — não dá pista. IP,
+user-agent e referrer eu leio dos headers da própria requisição no servidor (não precisa
+mandar nada disso do cliente). Chame uma vez ao montar (sem `durationSeconds`) e,
+opcionalmente, de novo ao desmontar (com `durationSeconds` preenchido) — cada chamada
+grava uma linha nova em `proposal_views`, não é upsert.
+
+### O que fica de fora — de propósito, sem exceção
+
+`cost_cents`/`commission_cents` de `proposal_options`, qualquer coluna de
+`contacts`/`travelers` (CPF, passaporte, e-mail, telefone, nascimento), qualquer dado de
+`tenants` que não seja marca (nada de `contactEmail`/`document_encrypted`/etc — a marca
+pública vem só de `brand_snapshot`). Isso é reforçado em três camadas: a função SQL nunca
+faz `select *`, a policy de RLS só abre linha em status publicável, e há um teste
+(`tests/security/public-proposal.test.ts`) que planta canário em toda coluna sensível do
+banco e varre a resposta inteira — se você um dia precisar de um campo novo aqui, peça a
+mim, não tente puxar de `obterPropostaParaEdicao`/`OpcaoEdicao` (autenticado, tem
+cost/commission de propósito).
