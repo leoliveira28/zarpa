@@ -89,22 +89,36 @@ export const tasks = pgTable(
     contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'cascade' }),
     title: text('title').notNull(),
     notes: text('notes'),
+    /**
+     * Texto pronto para colar no WhatsApp — só preenchido em tarefa gerada (régua de
+     * follow-up da proposta, S8). `null` em tarefa manual: a agente escreve a própria
+     * mensagem, ninguém sugere nada que ela não pediu.
+     */
+    suggestedMessage: text('suggested_message'),
     kind: text('kind', { enum: ['followup', 'ligar', 'whatsapp', 'email', 'outro'] })
       .notNull()
       .default('followup'),
     /**
-     * Quem criou: 'manual' (a agente), ou o alerta que gerou a tarefa. Junto de
+     * Quem criou: 'manual' (a agente), ou o alerta/régua que gerou a tarefa. Junto de
      * `dedupeKey` é o que faz o cron ser idempotente — ver a migration 0001.
+     * `followup_proposta` (S8): as três tarefas D+2/D+5/D+10 depois do envio.
      */
     source: text('source', {
-      enum: ['manual', 'alerta_passaporte', 'alerta_aniversario', 'importacao'],
+      enum: [
+        'manual',
+        'alerta_passaporte',
+        'alerta_aniversario',
+        'importacao',
+        'followup_proposta',
+      ],
     })
       .notNull()
       .default('manual'),
     /**
-     * Chave determinística da tarefa gerada (ex.: `passaporte:<travelerId>:90`). NULL para
-     * tarefa manual. Índice único parcial em (tenant_id, dedupe_key): rodar o cron duas
-     * vezes é no-op no BANCO, não por sorte da aplicação.
+     * Chave determinística da tarefa gerada (ex.: `passaporte:<travelerId>:90`, ou
+     * `followup:proposta:<propostaId>:d2`). NULL para tarefa manual. Índice único parcial
+     * em (tenant_id, dedupe_key): rodar o cron duas vezes é no-op no BANCO, não por sorte
+     * da aplicação.
      */
     dedupeKey: text('dedupe_key'),
     dueAt: timestamp('due_at', { withTimezone: true }).notNull(),
@@ -132,7 +146,7 @@ export const tasks = pgTable(
     ),
     check(
       'tasks_source_check',
-      sql`${t.source} in ('manual', 'alerta_passaporte', 'alerta_aniversario', 'importacao')`,
+      sql`${t.source} in ('manual', 'alerta_passaporte', 'alerta_aniversario', 'importacao', 'followup_proposta')`,
     ),
     check('tasks_dedupe_key_check', sql`(${t.source} = 'manual') = (${t.dedupeKey} is null)`),
   ],

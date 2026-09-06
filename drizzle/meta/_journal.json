@@ -43,6 +43,13 @@
       "when": 1757721600000,
       "tag": "0005_aceitar_opcao",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1757808000000,
+      "tag": "0006_regua_de_followup",
+      "breakpoints": true
     }
   ]
 }
