@@ -230,3 +230,13 @@ export function LinkIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/** Duas folhas sobrepostas — copiar mensagem sugerida para a área de transferência. */
+export function CopyIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="5.75" y="5.75" width="7.5" height="8.5" rx="1.1" />
+      <path d="M3.75 10.25V3.85a1.1 1.1 0 0 1 1.1-1.1h6.1" />
+    </Icon>
+  );
+}

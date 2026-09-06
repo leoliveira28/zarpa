@@ -154,6 +154,22 @@ export function daysBetween(from: Date, to: Date): number {
   return Math.round((b - a) / 86_400_000);
 }
 
+/**
+ * "há 3h" / "há 12 min" / "há 2 dias" — leitura curta de um instante passado.
+ * Existe separada de `formatRelativeDays` porque follow-up e abertura de
+ * proposta se medem em horas na primeira metade do dia, não em dias inteiros:
+ * "há 2h" diz muito mais do que "hoje" sobre quão quente é o sinal.
+ */
+export function formatRelativeShort(date: Date, now: Date = new Date()): string {
+  const minutes = Math.max(0, Math.round((now.getTime() - date.getTime()) / 60_000));
+  if (minutes < 1) return "agora";
+  if (minutes < 60) return `há ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `há ${hours}h`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? "há 1 dia" : `há ${days} dias`;
+}
+
 /** Iniciais para avatar textual — no máximo duas letras. */
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
