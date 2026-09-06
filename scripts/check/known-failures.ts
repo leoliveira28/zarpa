@@ -34,25 +34,15 @@ import { join } from 'node:path'
 
 type KnownFailure = { fullName: string; owner: string; reason: string }
 
-export const KNOWN_FAILURES: readonly KnownFailure[] = [
-  {
-    fullName:
-      'contrato da proposta pública existe uma função SECURITY DEFINER para a proposta pública',
-    owner: 'Rafa',
-    reason: 'S7 — função ainda não existe (docs/handoffs/rafa-para-teo.md, item 5).',
-  },
-  {
-    fullName: 'contrato da proposta pública a função SECURITY DEFINER tem search_path fixo',
-    owner: 'Rafa',
-    reason: 'S7 — depende da função acima existir primeiro.',
-  },
-  {
-    fullName:
-      'resposta da proposta pública não carrega dado sensível nenhum canário, campo proibido ou padrão sensível sai na resposta',
-    owner: 'Rafa',
-    reason: 'S7 — não dá para exercer a resposta pública sem a função.',
-  },
-] as const
+/**
+ * Vazia de propósito. As 3 entradas da S7 (função SECURITY DEFINER da proposta
+ * pública) ficaram verdes: a função existe (`drizzle/0004_proposta_publica.sql`),
+ * tem `search_path` fixo, e `public-proposal.test.ts` agora semeia sua própria
+ * fixture (`seedPublicProposalFixture`, proposta em status `sent` com opção com
+ * custo/comissão preenchidos) em vez de depender de `tenant-isolation.test.ts`
+ * rodar antes — ver docs/handoffs/rafa-para-teo.md, seção S7.
+ */
+export const KNOWN_FAILURES: readonly KnownFailure[] = [] as const
 
 type AssertionResult = { fullName: string; status: string }
 type TestResult = { name: string; assertionResults: AssertionResult[] }

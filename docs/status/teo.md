@@ -1,4 +1,172 @@
-# Status — Téo — CI (S1) + teste de aceite da importação (S3)
+# Status — Téo
+
+## Rodada atual: destravar o gate da S7 (leitura pública da proposta)
+
+Ponto de partida: `npx tsx scripts/check/known-failures.ts` vermelho (exit 1) — 2 das 3
+entradas do allowlist tinham virado obsoletas (função `SECURITY DEFINER` da proposta
+pública existe e tem `search_path` fixo) e a 3ª continuava vermelha por ordem de
+execução de arquivo, não por falha de segurança. Handoff completo em
+`docs/handoffs/rafa-para-teo.md`, seção S7.
+
+### 1. `scripts/check/known-failures.ts` — allowlist esvaziada
+
+Removi as 3 entradas (as 2 obsoletas + a 3ª, depois de fazer ela passar de verdade —
+ver item 2). `KNOWN_FAILURES` hoje é `[]`. Rodei o gate:
+
+```
+npx tsx scripts/check/known-failures.ts
+327 teste(s) no total.
+Allowlist (0):
+Portão ok: só os 0 vermelho(s) esperado(s) estão vermelhos, e mais nenhum.
+```
+
+Saída exit 0.
+
+### 2. Fixture própria em `tests/security/public-proposal.test.ts`
+
+`plantCanaries()` fazia `select public_token from proposals limit 1` e não achava nada,
+porque este arquivo roda ANTES de `tenant-isolation.test.ts` (que é quem semeava
+`proposals`) — ordem alfabética dentro de `fileParallelism: false`. Em vez de reordenar
+arquivos (acoplaria um teste de segurança à ordem alfabética de outro, o mesmo problema
+disfarçado), adicionei `seedPublicProposalFixture(sql)`, chamada em top-level do próprio
+arquivo (mesmo padrão que já existia ali para `findPublicProposalRoutines`/
+`discoverTenantTables` — não usei `beforeAll` porque o arquivo já não usa esse hook em
+lugar nenhum, e top-level `await` roda exatamente uma vez, antes de qualquer `it`, com a
+mesma garantia).
+
+A fixture insere, dentro de `withTenant(sql, TENANT_A, ...)` (a mesma `TENANT_A` que
+`tenant-isolation.test.ts` usa depois — sem conflito: aquele arquivo faz `INSERT`, nunca
+`upsert`, então múltiplas linhas do mesmo tenant convivem sem problema):
+
+1. `tenants` (`on conflict do nothing` — se `tenant-isolation.test.ts` corresse antes por
+   algum motivo, não duplicaria);
+2. `contacts` → `deals` → `proposals` (status **`sent`**, `sent_at = now()`,
+   `public_token` fixo — não gerado, para o teste ser determinístico — e
+   `brand_snapshot` com `whatsapp` preenchido, de propósito, para exercitar o caminho
+   que dispara `brand.whatsappLink` na função pública);
+3. `proposal_options` com `cost_cents`/`commission_cents` preenchidos (899000/320000/
+   987650) — sem isso a asserção "não vaza" passaria trivialmente por não ter o que
+   vazar, o mesmo risco que o Rafa registrou no handoff.
+
+Com a fixture, `plantCanaries()` acha o `public_token` de verdade, chama
+`public.proposta_publica(slug)`, e a 3ª asserção agora EXERCE a função de verdade —
+zero vazamento, ficou verde:
+
+```
+✓ resposta da proposta pública não carrega dado sensível > nenhum canário, campo
+  proibido ou padrão sensível sai na resposta
+```
+
+As 5 asserções do arquivo (2 do varredor de auto-teste + as 3 do contrato) ficaram
+verdes.
+
+### 3. `KNOWN_ESCAPE_HATCHES` (`tests/security/rls-checks.ts`) — 6 entradas novas
+
+Adicionei as 6 policies do escape hatch `app.proposal_public_context`
+(`proposals_public_read`, `proposals_public_view_update`,
+`proposal_options_public_read`, `proposal_blocks_public_read`,
+`proposal_views_public_insert`, `proposal_views_public_select`), exatamente a lista do
+handoff, com o mesmo comentário de ressalva já usado para `app.auth_context`/
+`app.platform_context` (GUC forjável por SQL arbitrário, alcance mantido só nas 4
+tabelas de proposta). `rls-enabled.test.ts > nenhuma policy permissiva nova ignora o
+tenant` voltou a ficar verde sem precisar de nenhuma outra mudança.
+
+**Não adicionei** as 3 entradas extras que o handoff menciona na seção mais antiga
+(`session_auth_service`/`account_auth_service`/`verification_auth_service`) — aquele
+pedido é para um teste de CONTRATO que ainda não existe (falhar se alguma tabela fora de
+`tenants|user|session|account|verification` tiver policy `_auth_service`), não para
+`KNOWN_ESCAPE_HATCHES` (que só olha tabelas COM `tenant_id`, e essas 3 tabelas não têm).
+Ficou fora do escopo desta rodada — ver "não coberto" abaixo.
+
+### 4. `tests/security/leak-scanner.ts` — allowlist mínima para `brand.whatsappLink`
+
+O nome da chave (`whatsappLink`, não `whatsapp`) já escapava de `FORBIDDEN_KEY_PATTERNS`
+(decisão do Rafa). O que faltava era o VALOR: `https://wa.me/11987654321` bate em
+`PHONE_BR_RE` porque o regex de telefone não distingue "número do cliente vazando" de
+"WhatsApp comercial do agente publicado de propósito". Adicionei
+`VALUE_PATTERN_ALLOWLIST`, uma lista de `{ path: RegExp, label: string }` MUITO mais
+restrita que uma allowlist de campo: só perdoa o padrão `telefone BR` no caminho exato
+`...brand.whatsappLink`, mantendo CPF/e-mail/passaporte e qualquer outro campo (incluindo
+outros telefones) sob varredura total. Comentário no código explica o risco residual (se
+algum dia `brand.whatsappLink` vier de outra fonte que não `brand_snapshot`, essa
+allowlist mascararia um vazamento real — por isso restrita ao path, não ao nome de campo
+solto).
+
+### Verificação
+
+```
+npx vitest run                          -> 327 testes, 327 verdes (9 arquivos)
+npx tsx scripts/check/known-failures.ts -> allowlist vazia, exit 0
+npx tsc --noEmit                        -> 1 erro, FORA da minha fronteira (ver abaixo)
+```
+
+## O que NÃO está coberto (explícito, para não virar cobertura falsa)
+
+- **`library_items.is_global` (4 pontas) e `withPlatformContext` nunca ver dado de
+  tenant** — pedido do Rafa na seção "5bis" do handoff (S5/S6). NÃO escrevi. É um teste
+  de contrato genuinamente novo (SELECT vê global+próprio nunca zero; INSERT/UPDATE com
+  `is_global=true` falha mesmo fora da Server Action; **DELETE de item global dá 0
+  linhas** — o caso que não aparece testando só SELECT; `withPlatformContext` isolado do
+  `unsafeDbWithoutTenant`). Prioridade era destravar o gate da S7 (itens 1-4 da tarefa de
+  hoje); isto ficou de fora por tempo, não por dificuldade técnica. Fica pendente.
+- **Teste de contrato para `_auth_service`** (qualquer tabela fora de
+  `tenants|user|session|account|verification` com policy terminando em `_auth_service`
+  ou mencionando `app.auth_context` deveria falhar o CI) — pedido explícito do Rafa,
+  também fora do escopo de hoje. `KNOWN_ESCAPE_HATCHES` continua sendo lista fixa —
+  cobre regressão CONHECIDA, não impede alguém de copiar o padrão para uma tabela nova
+  de negócio.
+- **`proposal_options.priceCents`/`costCents`/`commissionCents` nunca vazando NEM em
+  mensagem de erro** (pedido do Rafa, seção 5bis-a) — a fixture desta rodada prova que
+  a RESPOSTA da função pública não vaza custo/comissão (via `scanPayload` real, valores
+  não nulos), mas não escrevi um teste que force um erro de banco (ex.: violar uma
+  constraint) e verifique que a mensagem de exceção não ecoa esses valores.
+- **Isolamento das 4 tabelas de proposta via catálogo**: JÁ ESTÁ COBERTO, sem trabalho
+  extra — `tests/security/tenant-isolation.test.ts` descobre TODA tabela com
+  `tenant_id` via `discoverTenantTables` (catálogo do Postgres, não lista escrita à
+  mão), e isso já inclui `proposals`/`proposal_options`/`proposal_blocks`/
+  `proposal_views` automaticamente (SELECT/UPDATE/DELETE/INSERT-with-check, uma
+  suíte por tabela). Confirmei rodando a suíte: `describe.each` gera os `it`s para as
+  4 tabelas de proposta e todos passam. Registrando aqui para ficar explícito, já que
+  o handoff pedia isso como se fosse teste novo.
+- **`npx tsc --noEmit` não está limpo hoje** — 1 erro em
+  `src/app/(app)/propostas/[id]/editar/PropostaEditorScreen.tsx` (linha 115,
+  `Cannot find name 'PublishBar'`), fora da minha fronteira (`src/app/**`, dono Nina).
+  Documentado com passo de reprodução em `docs/handoffs/teo-para-nina.md`. Não é
+  regressão minha nem afeta `known-failures.ts` (que roda `vitest`, não `tsc`).
+
+## Decisões que tomei sozinho
+
+1. Esvaziei `KNOWN_FAILURES` para `[]` em vez de deixar comentário "nenhuma hoje" com
+   array vazio implícito — é o estado mais simples de verificar (`length === 0`) e o
+   comentário no topo do arquivo já explica por que ficou assim.
+2. Usei top-level `await` para a fixture em vez de `beforeAll`, seguindo o padrão que o
+   próprio arquivo já usa para `routines`/`tenantTables` — consistência de estilo dentro
+   do arquivo, não invenção de um padrão novo.
+3. Reutilizei `TENANT_A` (de `isolation-checks.ts`) em vez de criar um tenant próprio só
+   para este arquivo — o handoff do Rafa já apontava que os dois caminhos (seed próprio
+   vs. reordenar arquivos) eram equivalentes; escolhi seed próprio com o tenant que os
+   outros arquivos de segurança já conhecem, para não introduzir um terceiro ID de
+   tenant "mágico" na suíte.
+4. `VALUE_PATTERN_ALLOWLIST` no `leak-scanner.ts` ficou por `path` (regex) + `label`, não
+   por nome de campo solto — decisão deliberada para não abrir a possibilidade de
+   `whatsappLink` escapar da varredura em QUALQUER lugar do payload, só no caminho exato
+   onde o produto o expõe de propósito.
+
+## O que preciso dos outros
+
+- **Nina**: `npx tsc --noEmit` vermelho em `PropostaEditorScreen.tsx` — ver
+  `docs/handoffs/teo-para-nina.md`.
+- **Rafa/PO**: os itens "não coberto" acima (`is_global`, contrato `_auth_service`,
+  custo/comissão em mensagem de erro) continuam pendentes — não bloqueiam o gate de
+  hoje, mas ficam registrados para não virar cobertura assumida.
+- **PO**: não commitei nada desta rodada, por instrução — arquivos tocados:
+  `scripts/check/known-failures.ts`, `tests/security/rls-checks.ts`,
+  `tests/security/leak-scanner.ts`, `tests/security/public-proposal.test.ts`,
+  `docs/handoffs/teo-para-nina.md`, este arquivo.
+
+---
+
+# Rodada anterior — CI (S1) + teste de aceite da importação (S3)
 
 ## O que ficou pronto
 

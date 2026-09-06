@@ -36,6 +36,19 @@ export type RlsFinding = {
 export const KNOWN_ESCAPE_HATCHES: { table: string; policy: string }[] = [
   { table: 'public.tenants', policy: 'tenants_auth_service' },
   { table: 'public.user', policy: 'user_auth_service' },
+  // S7 — leitura pública da proposta (`drizzle/0004_proposta_publica.sql`). O GUC
+  // `app.proposal_public_context` só liga DENTRO de `proposta_publica`/
+  // `registrar_visita_proposta` (SECURITY DEFINER), nunca por nenhum outro caminho
+  // do código. Mesma ressalva de sempre: o GUC é forjável por SQL arbitrário — o
+  // alcance foi mantido às 4 tabelas de proposta, nunca contacts/travelers, e a
+  // policy de leitura ainda exige status publicável mesmo com o GUC ligado. Ver
+  // docs/handoffs/rafa-para-teo.md, seção S7.
+  { table: 'public.proposals', policy: 'proposals_public_read' },
+  { table: 'public.proposals', policy: 'proposals_public_view_update' },
+  { table: 'public.proposal_options', policy: 'proposal_options_public_read' },
+  { table: 'public.proposal_blocks', policy: 'proposal_blocks_public_read' },
+  { table: 'public.proposal_views', policy: 'proposal_views_public_insert' },
+  { table: 'public.proposal_views', policy: 'proposal_views_public_select' },
 ]
 
 export type RlsAudit = {

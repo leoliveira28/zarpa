@@ -68,6 +68,29 @@ const VALUE_PATTERNS: { label: string; test: (s: string) => string | null }[] = 
   { label: 'passaporte', test: (s) => s.match(PASSPORT_RE)?.[0] ?? null },
 ]
 
+/**
+ * Caminhos cujo VALOR aciona uma heurística de padrão sensível DE PROPÓSITO, porque o
+ * dado é público por natureza — não afrouxa a checagem por NOME de campo (regra 1) nem
+ * canário (regra 3), só a regra 2 (padrão no valor), e só no caminho exato.
+ *
+ * `brand.whatsappLink` (`https://wa.me/<dígitos>`): o WhatsApp COMERCIAL do agente,
+ * congelado em `proposals.brand_snapshot` e devolvido de propósito pela proposta
+ * pública (CLAUDE.md pede o contato do agente na proposta). `PHONE_BR_RE` não distingue
+ * "número do cliente vazando" de "número do agente publicado" — qualquer formatação de
+ * DDD+celular bate nele. Ver docs/handoffs/rafa-para-teo.md, item 4 da seção S7. Se um
+ * dia `brand.whatsappLink` vier de outra fonte que não `brand_snapshot` (ex.: telefone do
+ * PASSAGEIRO vazando por engano com esse mesmo nome de campo), esta allowlist mascararia
+ * o vazamento — por isso ela é restrita ao path exato, não a qualquer campo `whatsappLink`
+ * solto em outro lugar do payload.
+ */
+const VALUE_PATTERN_ALLOWLIST: { path: RegExp; label: string }[] = [
+  { path: /(^|\.)brand\.whatsappLink$/, label: 'telefone BR' },
+]
+
+function isAllowedValuePattern(path: string, label: string): boolean {
+  return VALUE_PATTERN_ALLOWLIST.some((a) => a.label === label && a.path.test(path))
+}
+
 function truncate(s: string, n = 80): string {
   return s.length > n ? `${s.slice(0, n)}…` : s
 }
@@ -94,7 +117,7 @@ export function scanPayload(payload: unknown, canaries: Record<string, string> =
       }
       for (const p of VALUE_PATTERNS) {
         const hit = p.test(node)
-        if (hit !== null) {
+        if (hit !== null && !isAllowedValuePattern(path, p.label)) {
           leaks.push({ path, kind: 'padrao-no-valor', what: p.label, sample: truncate(hit) })
         }
       }

@@ -32,6 +32,56 @@ async function findPublicProposalRoutines(client: Sql): Promise<Routine[]> {
   `
 }
 
+/**
+ * Token conhecido da proposta fixture deste arquivo. Fixo (não gerado) para o teste
+ * não depender de ordem de execução nem de outro arquivo semear `proposals` antes —
+ * ver docs/handoffs/rafa-para-teo.md, S7, item 2. `tenant-isolation.test.ts` reutiliza
+ * o mesmo TENANT_A depois e semeia SUAS PRÓPRIAS linhas por cima (insert, nunca
+ * upsert) — não conflita com esta fixture.
+ */
+const FIXTURE_PUBLIC_TOKEN = 'teo-fixture-proposta-publica-0000000000000000'
+
+/**
+ * Semeia UMA proposta em status publicável (`sent`), com uma opção que tem
+ * `cost_cents`/`commission_cents` preenchidos — sem isso a asserção de "não vaza"
+ * passaria trivialmente por não ter o que vazar. `brand_snapshot.whatsapp` também é
+ * preenchido de propósito: é o que exercita o caminho de `brand.whatsappLink` que o
+ * Rafa pediu para o `leak-scanner.ts` não confundir com telefone de cliente vazando
+ * (ver allowlist em `leak-scanner.ts`).
+ */
+async function seedPublicProposalFixture(client: Sql): Promise<void> {
+  await withTenant(client, TENANT_A, async (tx) => {
+    await tx`insert into tenants (id, name, slug)
+      values (${TENANT_A}, 'Agência fixture Téo', 'teo-fixture-publica')
+      on conflict do nothing`
+
+    const [contact] = await tx<{ id: string }[]>`insert into contacts (tenant_id, name)
+      values (${TENANT_A}, 'Cliente fixture Téo') returning id`
+
+    const [deal] = await tx<{ id: string }[]>`insert into deals (tenant_id, contact_id, title)
+      values (${TENANT_A}, ${contact.id}, 'Viagem fixture Téo') returning id`
+
+    const brandSnapshot = JSON.stringify({
+      name: 'Agência fixture Téo',
+      whatsapp: '11987654321',
+      instagram: '@agenciafixture',
+    })
+
+    const [proposal] = await tx<{ id: string }[]>`insert into proposals
+      (tenant_id, deal_id, public_token, title, status, sent_at, brand_snapshot)
+      values (
+        ${TENANT_A}, ${deal.id}, ${FIXTURE_PUBLIC_TOKEN}, 'Proposta fixture Téo',
+        'sent', now(), ${brandSnapshot}::jsonb
+      ) returning id`
+
+    await tx`insert into proposal_options
+      (tenant_id, proposal_id, name, price_cents, cost_cents, commission_cents)
+      values (${TENANT_A}, ${proposal.id}, 'Pacote único', 899000, 320000, 987650)`
+  })
+}
+
+await seedPublicProposalFixture(sql)
+
 const routines = await findPublicProposalRoutines(sql)
 const definers = routines.filter((r) => r.securityDefiner)
 const tenantTables = await discoverTenantTables(sql)
