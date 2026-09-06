@@ -103,6 +103,55 @@ mas registro o que eu olharia se algo falhar:
   erro, mas quem ler pelo Drizzle vai tentar decifrar. O tipo tolera valor que não parece
   envelope e devolve como está — seu seed sintético não quebra por isso.
 
+## 5bis. Pedido novo: testes de RLS/isolamento do construtor de proposta (S5/S6)
+
+Schema novo desde a última rodada: `proposals`, `proposal_options`, `proposal_blocks`,
+`proposal_views` (RLS desde `0000_fundacao.sql`/`0001`, sem novidade de policy) e
+`library_items` (tabela nova, RLS na própria `0003_construtor_de_proposta.sql`). Peço três
+frentes de teste:
+
+**a) Isolamento padrão nas quatro tabelas de proposta.** Mesmo roteiro que você já usa
+para `contacts`/`deals`: tenant A cria proposta + opção + bloco, tenant B lê pela mesma
+varredura por catálogo — zero linhas. Novidade em relação às tabelas antigas:
+`proposal_options.priceCents`/`costCents`/`commissionCents` são os primeiros valores
+monetários "sensíveis por natureza de negócio" (não PII, mas o agente nunca quer que o
+concorrente-tenant veja sua margem) — vale um teste que verifica explicitamente que esses
+dois campos não vazam nem em erro (ex. mensagem de exceção que ecoe a linha inteira).
+
+**b) `library_items.is_global` — o comportamento com quatro pontas, não duas.** Isto é
+novo em relação a tudo que existia antes (primeira tabela com `tenant_id` anulável):
+
+1. Tenant A vê itens do próprio tenant + todos os itens globais (`is_global = true`,
+   `tenant_id null`) — nunca zero linhas quando existe pelo menos um item global.
+2. Tenant A **não** vê item de tenant B (isolamento de sempre).
+3. Tenant A tenta `INSERT`/`UPDATE` com `is_global = true` — falha (o `WITH CHECK` recusa
+   mesmo que o valor venha setado na mão, sem passar pela Server Action). Teste direto em
+   SQL contra a policy, não só via `criarItemNaBiblioteca` (que já nunca manda
+   `isGlobal: true`, então testar só a action não prova que a policy barra sozinha).
+4. Tenant A tenta `DELETE` de um item global pré-existente (inserido fora do contexto de
+   tenant, ex. via `withPlatformContext`) — `DELETE 0`, sem erro, item continua lá. Este é
+   o caso que o comentário da migration (`0003_construtor_de_proposta.sql`, parágrafo sobre
+   por que são 4 policies e não uma `FOR ALL`) chama de "não aparece em teste de SELECT
+   nenhum" — só aparece testando DELETE explicitamente. Peço que vire caso de teste
+   nomeado, não só nota de código.
+5. `withPlatformContext` (`src/lib/tenant/withPlatformContext.ts`) escreve item global sem
+   rodar como superuser — teste que ele funciona (INSERT com `is_global=true,
+   tenant_id=null` sucede dentro do helper) E que, fora dele (GUC `app.platform_context`
+   desligado, que é o estado de qualquer conexão de tenant comum), a mesma tentativa de
+   escrever `is_global=true` continua falhando.
+
+**c) Verifique que a transação de `withPlatformContext` nunca vê dado de tenant.** Ela usa
+`unsafeDbWithoutTenant` sem setar `app.tenant_id` — então, mesmo com
+`app.platform_context = 'on'`, um `SELECT` contra `library_items` só deveria devolver
+linhas globais (a policy de SELECT tenant continua exigindo `tenant_id = current_setting`,
+que é `NULL` ali dentro, então `NULL = tenant_id` nunca é `true`). Vale um teste que prove
+isso explicitamente, porque é o ponto onde um futuro reaproveitamento desse helper poderia
+virar bypass sem ninguém perceber: se alguém um dia adicionar `set_config('app.tenant_id',
+...)` dentro de `withPlatformContext` "para simplificar", essa combinação (`platform_context
+= on` + `tenant_id setado`) passaria a enxergar dado de tenant através da policy de
+serviço, que só olha `is_global`. Hoje isso não acontece porque o helper nunca seta
+`tenant_id` — um teste de contrato trava essa garantia.
+
 ## 5. Para o `leak-scanner.ts` e o `public-proposal.test.ts`
 
 Vi os arquivos. Aviso para você não escrever teste contra algo que não existe: **a leitura

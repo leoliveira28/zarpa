@@ -179,6 +179,144 @@ lista, pipeline e o "seu cliente abriu a proposta" sem precisar inventar mock. N
 reconhecíveis (`Volta ao Mundo` × `Maré Alta`) justamente para dar para ver, olhando a
 tela, se algo de um tenant vazou no outro.
 
+## Construtor de proposta (S5/S6) — contrato completo
+
+Tudo em `src/server/proposals.ts` (proposta, opções, blocos) e `src/server/library.ts`
+(acervo reutilizável). Exportado por `@/server`, mesmo padrão de sempre: `'use server'`,
+`ServiceResult<T>`, `tenantId` nunca como argumento (sai da sessão).
+
+### Proposta
+
+| função | assinatura | devolve |
+|---|---|---|
+| `listarPropostas(filtro?)` | `{ busca?, incluirArquivadas?, limite? }` | `PropostaResumo[]` |
+| `criarPropostaAPartirDoNegocio(input)` | `{ dealId: uuid, title?: string }` | `PropostaEdicao` (nasce `status: 'draft'`, `options: []`, `blocks: []`) |
+| `obterPropostaParaEdicao(propostaId)` | `string` | `PropostaEdicao` — meta + `options[]` + `blocks[]`, tudo já ordenado por `position` |
+| `atualizarProposta(propostaId, patch)` | `{ title?, summary?, terms?, coverImageUrl?, currency?, validUntil? }` | `PropostaMeta` — **autosave granular**: só os campos presentes no patch mudam, sem "salvar tudo" |
+| `arquivarProposta(propostaId)` | `string` | `null` |
+| `restaurarProposta(propostaId)` | `string` | `null` — o lado do toast com desfazer de 8s (regra do CLAUDE.md, sem modal "tem certeza?") |
+
+`PropostaMeta` **nunca** inclui `cost_cents`/`commission_cents` (esses só existem em
+`OpcaoEdicao`, ver abaixo). `PropostaEdicao = PropostaMeta & { options: OpcaoEdicao[];
+blocks: BlocoEdicao[] }`.
+
+`validUntil` é string `AAAA-MM-DD` (ou `''` para limpar); string vazia em `summary`,
+`terms`, `coverImageUrl` também limpa o campo (grava `null`).
+
+### Opções (até 3 por proposta, comparáveis)
+
+| função | assinatura | devolve |
+|---|---|---|
+| `criarOpcao(propostaId, input)` | `{ name, description?, position?, priceCents?, costCents?, commissionCents?, installments?, installmentCents?, isRecommended? }` | `OpcaoEdicao` |
+| `atualizarOpcao(opcaoId, patch)` | mesmo shape, tudo opcional (autosave por campo) | `OpcaoEdicao` |
+| `excluirOpcao(opcaoId)` | `string` | `null` — apaga os blocos da opção junto (`ON DELETE CASCADE`); se era a opção aceita, `proposals.acceptedOptionId` volta a `null` sozinho |
+| `reordenarOpcoes(propostaId, itens)` | `{ id: uuid, position: number }[]` (1 a 3 itens) | `null` — tudo ou nada: se um id não pertence a esta proposta, `CONFLITO` e nada muda |
+
+`OpcaoEdicao` inclui `priceCents`, `costCents`, `commissionCents`, `installments`,
+`installmentCents`, `isRecommended`. **Isto é intencional e autenticado** — quem edita a
+proposta precisa ver a margem. Ver a seção "nunca sai" mais abaixo antes de reaproveitar
+esse tipo em qualquer tela que não seja o construtor autenticado.
+
+Regra de negócio embutida: marcar `isRecommended: true` numa opção desmarca as outras da
+mesma proposta automaticamente — a interface não precisa fazer essa coordenação.
+
+**Parcelamento**: `installments` (1–24) e `installmentCents` são digitados pelo agente e
+gravados como vieram — o servidor NÃO recalcula a cada leitura (juros de cartão às vezes
+fazem `installmentCents * installments` não bater com `priceCents`, e isso é legítimo).
+Quando o agente ainda não digitou `installmentCents`, o servidor sugere um palpite:
+`sugerirValorParcelaCents(priceCents, installments)` = `priceCents` dividido em N,
+arredondado **para cima** no centavo (a diferença sobra para o agente, nunca falta para o
+cliente). Mesma lógica para `commissionCents` quando ausente:
+`sugerirComissaoCents(priceCents, costCents)` = `max(0, priceCents - costCents)`. Se você
+quiser mostrar esse palpite na interface ANTES de o agente salvar (ex. atualizar um campo
+"parcela sugerida" enquanto ele digita o preço, sem round-trip), as duas funções estão em
+`src/server/pricing.ts` — mas são helpers síncronos de matemática pura, não Server Actions;
+se precisar delas no client, me avise que decido o melhor jeito de expor (não são
+`'use server'`).
+
+A comparação das 3 opções lado a lado é responsabilidade da interface: `options[]` já vem
+ordenado por `position`, com todos os campos necessários — não existe endpoint separado de
+"comparação", é a mesma lista.
+
+### Blocos (hotel, voo, transfer, passeio, seguro, texto livre, imagem, nota de preço)
+
+`BlocoKind = 'text' | 'image' | 'flight' | 'hotel' | 'transfer' | 'tour' | 'cruise' |
+'insurance' | 'price_note'`.
+
+| função | assinatura | devolve |
+|---|---|---|
+| `criarBloco(propostaId, input)` | `{ optionId?: uuid \| null, kind: BlocoKind, position?, title?, body?, images?: string[] (máx 10), content?: Record<string, unknown> }` | `BlocoEdicao` |
+| `atualizarBloco(blocoId, patch)` | mesmo shape, tudo opcional | `BlocoEdicao` |
+| `excluirBloco(blocoId)` | `string` | `null` |
+| `reordenarBlocos(propostaId, itens)` | `{ id: uuid, position: number }[]` (até 200) | `null` — tudo ou nada, mesmo desenho de `reordenarOpcoes` |
+
+`optionId: null`/omitido = bloco da proposta inteira (aparece em todas as opções); um uuid
+= bloco só daquela opção. Trocar `optionId` num patch é permitido e validado — o servidor
+confere que a opção de destino pertence à mesma proposta antes de mover.
+
+`content` é o campo livre por tipo (nº do voo, diárias, categoria do quarto — schema não
+impõe forma interna, só que seja objeto JSON). `images` é sempre array de URL, nunca objeto
+solto.
+
+### Biblioteca (acervo reutilizável)
+
+`ItemBibliotecaKind` é o mesmo enum de bloco, menos `price_note` (não faz sentido salvar
+"nota de preço" como modelo reaproveitável).
+
+| função | assinatura | devolve |
+|---|---|---|
+| `listarBiblioteca(filtro?)` | `{ kind?, origem?: 'tenant' \| 'global' \| 'todos', busca? }` | `ItemBibliotecaResumo[]` — ordenado global primeiro, depois mais recente |
+| `obterItemDaBiblioteca(itemId)` | `string` | `ItemBibliotecaResumo` |
+| `criarItemNaBiblioteca(input)` | `{ kind, title, body?, images?, details? }` | `ItemBibliotecaResumo` — sempre `isGlobal: false`, mesmo que o input tente mandar diferente (é ignorado) |
+| `atualizarItemDaBiblioteca(itemId, patch)` | mesmo shape, opcional | `ItemBibliotecaResumo` |
+| `excluirItemDaBiblioteca(itemId)` | `string` | `null` |
+| `inserirItemDaBibliotecaComoBloco(propostaId, libraryItemId, optionId?)` | — | `BlocoEdicao` — **cópia**, não referência: editar o bloco depois não muda o item da biblioteca, e vice-versa |
+
+`ItemBibliotecaResumo.tenantId` é `null` exatamente quando `isGlobal: true` (modelo da
+plataforma, sem dono — ex. "política de cancelamento padrão"). `origem: 'todos'` (default)
+mistura os dois: seu próprio acervo + o global, e a interface decide como separar
+visualmente (ex. seção "Modelos" vs "Meu acervo"). Não existe hoje nenhuma tela nem
+Server Action que crie item global — isso é escrita exclusiva da plataforma (ver
+`docs/handoffs/rafa-para-teo.md` se você tiver curiosidade sobre o desenho; não afeta
+nenhuma tela do agente).
+
+Tentar editar/apagar um item que é global (ou de outro tenant) devolve `NAO_ENCONTRADO`
+genérico — a mesma resposta de "não existe", de propósito: a interface não descobre que o
+id existe em outro lugar.
+
+### Upload de imagem
+
+`enviarImagemDaProposta(arquivo: File)` → `ServiceResult<{ url: string }>`. Aceita
+JPG/PNG/WEBP/GIF até 5 MB; erro vem com `mensagem` + `correcao` prontos
+(`ARQUIVO_INVALIDO` / `ARQUIVO_GRANDE_DEMAIS` viram `DADOS_INVALIDOS` no `ServiceResult`).
+Em dev (sem `BLOB_READ_WRITE_TOKEN`), a URL devolvida é uma `data:` URL inline — grande,
+mas funcional para preview e para gravar em `images[]`; não é o formato de produção, mas o
+schema não muda quando o Vercel Blob entrar (pedido em `docs/handoffs/rafa-para-po.md`).
+Chame essa action, pegue `url`, e passe para `criarBloco`/`atualizarBloco`/
+`criarItemNaBiblioteca` dentro do array `images`.
+
+### O que **NUNCA** vai para a proposta pública
+
+A leitura pública (`/p/[token]`, S7) ainda não existe — vai ser uma função própria,
+`SECURITY DEFINER`, com sua própria lista de colunas. Mas já registro aqui porque afeta
+qualquer decisão de reaproveitar tipo/componente entre o construtor (autenticado) e a
+proposta pública (sem login):
+
+- `proposalOptions.costCents` e `proposalOptions.commissionCents` — nunca, em hipótese
+  nenhuma, saem por um caminho que o cliente final possa ver. `OpcaoEdicao` os inclui de
+  propósito porque é autenticado; não reaproveite `OpcaoEdicao` (nem `COLUNAS_OPCAO` do
+  lado do servidor) para renderizar a página pública.
+- Documento de passageiro (CPF, passaporte, nascimento) — nem chega perto do construtor de
+  proposta; mora em `travelers.ts`/`obterDocumentoDoViajante`, área separada, e não há
+  nenhum link entre `proposals`/`proposal_options`/`proposal_blocks` e a tabela de
+  viajantes no schema atual.
+- Qualquer campo de auditoria (`archivedAt`, quem viu quando) — a página pública é para o
+  cliente da viagem, não para o agente.
+
+Se `/p/[token]` entrar no seu escopo antes do S7 estar pronto do meu lado, me avise antes
+de montar a tela — ela depende de uma função de leitura que ainda não decidi como
+implementar sob `FORCE ROW LEVEL SECURITY` (motivo em `docs/status/rafa.md`).
+
 ## O que **não** existe ainda e você vai sentir falta
 
 - **Página pública da proposta.** Não implementei a leitura sem login no S1 (motivo em
