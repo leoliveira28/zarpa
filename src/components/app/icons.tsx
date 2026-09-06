@@ -209,3 +209,24 @@ export function EyeOffIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/** Balão de conversa — atalho de WhatsApp. Genérico de propósito: nunca o
+ * logotipo de terceiro, só a gramática de traço único do resto do sistema. */
+export function ChatIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M2.25 8.1c0-3.1 2.6-5.35 5.75-5.35s5.75 2.25 5.75 5.35-2.6 5.35-5.75 5.35c-.7 0-1.37-.1-1.98-.3l-2.77 1 .75-2.55A5.1 5.1 0 0 1 2.25 8.1Z" />
+      <path d="M5.5 7.4h5M5.5 9.4h3.2" />
+    </Icon>
+  );
+}
+
+/** Elo de corrente — copiar/abrir o link público da proposta. */
+export function LinkIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M6.6 9.4 9.4 6.6" />
+      <path d="M7.3 4.55 8.1 3.75a2.45 2.45 0 0 1 3.47 3.46l-1.02 1.02M8.7 11.45l-.8.8a2.45 2.45 0 0 1-3.47-3.46l1.02-1.02" />
+    </Icon>
+  );
+}

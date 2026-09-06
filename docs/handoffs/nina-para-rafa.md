@@ -1,75 +1,100 @@
 # Nina → Rafa
 
-## 1. `npm run build` quebra em `src/server/storage.ts` — Turbopack resolve o import dinâmico mesmo com especificador não literal
+## 1. Falta a action de "aceitar opção" na proposta pública (S7)
 
-Bloqueante para o S5/S6: é a primeira vez que uma página de verdade importa de
-`@/server` (`proposals.ts` → `storage.ts`), então é a primeira vez que o build
-de produção passa por esse arquivo.
+Montei `/p/[slug]` (`src/app/p/[slug]/`) inteira em cima do contrato de
+`docs/handoffs/rafa-para-nina.md`, mas não existe hoje nenhuma Server Action
+para o cliente final "aceitar" uma opção sem login — só encontrei
+`acceptedOptionId`/`acceptedAt` como colunas de LEITURA em `PropostaPublicaMeta`
+e `proposals`, nunca uma escrita correspondente. Segui a instrução de não
+inventar chamada de servidor: o botão principal de cada opção
+(`OptionCard` em `PublicProposalScreen.tsx`) abre o WhatsApp do agente com uma
+mensagem pronta ("Olá! Quero confirmar a opção [nome] da proposta [título] —
+R$ [preço].") em vez de gravar nada no banco. Quando `accept.hei` que o link
+`brand.whatsappLink` vem nulo (agente sem WhatsApp cadastrado), o cartão mostra
+"Fale com quem te mandou esta proposta para confirmar" — sem botão morto.
 
+Se/quando fizer sentido ter uma `aceitarOpcaoPublica(slug, optionId)` (sem
+sessão, mesmo desenho de `registrarVisitaProposta` — provavelmente também
+`SECURITY DEFINER`, gravando `accepted_option_id`/`accepted_at`/`status`
+diretamente), eu troco o `<a href="wa.me/...">` por essa chamada mantendo o
+WhatsApp como confirmação SECUNDÁRIA ("aceite, e depois confirme por
+WhatsApp"), não como o único caminho.
+
+## 2. `public.proposta_publica` no banco de dev estava desatualizada — já corrigi na minha sessão, mas verifique nos outros ambientes
+
+Ao testar `/p/[slug]` de ponta a ponta (login, "Reenviar" numa proposta
+seedada, abrir o link sem sessão), o campo `brand.whatsappLink` chegava
+sempre `null` mesmo com `tenants.whatsapp` preenchido. Investigando: a
+função `public.proposta_publica` que estava DE FATO instalada no meu
+`zarpa_dev` fazia
+
+```sql
+'brand', (SELECT COALESCE(p.brand_snapshot, '{}'::jsonb) FROM proposals p WHERE p.id = v_proposal_id)
 ```
-Error: Turbopack build failed with 1 error:
-./src/server/storage.ts:68:26
-Error: Module not found: Can't resolve '@vercel/blob'
-```
 
-O comentário em `storage.ts` explica que o especificador foi posto numa
-variável (`const especificador = '@vercel/blob'; import(especificador)`)
-exatamente para o `tsc --noEmit` não tentar resolver o pacote ausente — e
-isso funciona, confirmei com `npx tsc --noEmit` limpo. O problema é outro
-bundler: o Turbopack do `next build` (Next 16.3.4) ainda enxerga essa
-variável como constante (é literalmente uma linha acima, sem nenhum desvio
-de fluxo no meio) e tenta resolver o módulo estaticamente do mesmo jeito.
-`npx tsc --noEmit` e `next build` são compiladores diferentes com heurísticas
-diferentes — o truque que engana um não engana o outro.
+— ou seja, repassava `brand_snapshot` cru (com a chave `whatsapp`, número
+puro), não o formato reshaped do arquivo atual de
+`drizzle/0004_proposta_publica.sql` (que monta `whatsappLink` como
+`https://wa.me/<dígitos>` e nunca deixa a chave `whatsapp` sair). O hash
+gravado em `drizzle.__drizzle_migrations` para a migration `0004` não bate
+com o hash do arquivo em disco hoje (`shasum -a 256` diferente) — isto é, o
+arquivo foi editado DEPOIS de já ter sido aplicado neste banco, e
+`drizzle-kit migrate` não reaplica migration já marcada como feita, mesmo
+que o conteúdo tenha mudado. Não sei se isso aconteceu só no meu ambiente
+local ou se é um problema de fluxo (editar migration já aplicada é sempre
+arriscado — o caminho correto seria uma migration NOVA de `CREATE OR REPLACE
+FUNCTION`, não editar a 0004 depois do fato).
 
-Não é algo que eu possa consertar do meu lado: `src/server/**` é sua área, e
-`package.json` (instalar `@vercel/blob` de verdade) é do PO. Três saídas que
-enxerguei, para você e o PO decidirem:
+O que fiz para poder testar (só no meu `zarpa_dev`, não toquei em nenhum
+arquivo): rodei manualmente o `CREATE OR REPLACE FUNCTION` extraído de
+`drizzle/0004_proposta_publica.sql` linhas 168–276 direto no Postgres do meu
+ambiente, para sincronizar a função instalada com o que está no repositório.
+Depois disso `brand.whatsappLink` passou a vir `https://wa.me/5511987650001`
+corretamente e o resto da tela (accept link por opção, atalho de WhatsApp no
+topo) passou a renderizar.
 
-1. **Instalar `@vercel/blob` como dependência de verdade** (mesmo sem
-   `BLOB_READ_WRITE_TOKEN` em dev) — o pacote resolve, o código de fallback
-   continua rodando quando a env var não existe, e o import deixa de ser
-   dinâmico-por-necessidade (podia até virar `import` estático no topo).
-   Peço isso também em `docs/handoffs/rafa-para-po.md`, se ainda não pedi.
-2. Comentário de bundler para pular a análise estática —
-   `/* webpackIgnore: true */` antes do `import()` funciona no webpack; não
-   confirmei se o Turbopack tem o equivalente (`turbopackIgnore`, talvez).
-   Vale um teste rápido antes de descartar.
-3. Mover a chamada dinâmica para trás de `eval('import(' + JSON.stringify(especificador) + ')')`
-   — funciona porque bundler nenhum analisa dentro de `eval`, mas é
-   gambiarra de verdade e complica minificação/sourcemap. Última opção.
+Ação sugerida: confirme se isso é só uma cicatriz do meu ambiente (banco
+criado antes da última edição do arquivo 0004) ou se existe em outros
+lugares — e considere se vale a pena um script/lembrete de "toda vez que
+editar uma migration já commitada, rode `db:reset` local" para quem pegar
+essa pasta depois.
 
-**Isto é mais grave do que parece à primeira vista — não é só `/propostas/**`.**
-Testei com `npm run dev` (limpando `.next` antes, para afastar cache velho) e
-até `GET /entrar` devolve 500 com o MESMO erro, mesmo essa rota não
-importando nada de `proposals.ts`. A explicação: o Next precisa de um mapa
-global de Server Actions (todo `'use server'` do app, para resolver a ação
-pelo id que o client manda) — então `storage.ts`, alcançado a partir de
-`enviarImagemDaProposta`, entra num chunk compartilhado por TODAS as rotas, e
-o erro de bundling de um arquivo quebra o app inteiro, não só quem chama a
-função.
+## 3. Ainda em aberto de uma rodada anterior: falta `listarNegocios()`
 
-Ou seja: com o código de vocês dois (proposals.ts + storage.ts) do jeito que
-está hoje, o app não builda nem sobe em dev nenhuma rota — não é um problema
-que eu possa isolar do lado da interface. `npx tsc --noEmit` e a suíte de
-guarda visual (`tests/design/guards.test.ts`) continuam verdes porque nenhum
-dos dois passa pelo bundler; não consegui completar a verificação manual
-("logar e montar uma proposta") pedida para o fim do S5/S6 por causa disso —
-ver `docs/status/nina.md`.
-
-## 2. Falta um `listarNegocios()` (ou equivalente) para o seletor de "Nova proposta"
-
-`criarPropostaAPartirDoNegocio({ dealId, title? })` pede um `dealId` que já
-existe — mas não há hoje nenhum serviço que LISTE negócios do tenant para um
-seletor por nome (`listarPropostas` só devolve negócio de proposta já
+Este item já estava pedido antes e continua valendo — reproduzo aqui porque
+reescrevi este arquivo do zero para o assunto do S7 e não quero que ele se
+perca: `criarPropostaAPartirDoNegocio({ dealId, title? })` pede um `dealId`
+que já existe, mas não há hoje nenhum serviço que LISTE negócios do tenant
+para um seletor por nome (`listarPropostas` só devolve negócio de proposta já
 criada). Resolvi com um campo "Cole o ID do negócio" na Sheet de criação
 (`src/app/(app)/propostas/PropostasScreen.tsx`, `NovaPropostaSheet`) — funciona
-de ponta a ponta (testei colando o `id` de um negócio do seed direto no
-Postgres), mas é claramente um provisório, documentado na tela com uma
-`FieldHint`.
+de ponta a ponta, mas é um provisório, documentado na tela com uma
+`FieldHint`. Pedido: um `listarNegocios()` (`NegocioResumo[]` com pelo menos
+`id`, `title`, `destination`, `contactName`, `currency`) destrava trocar o
+campo de texto por um `Combobox` de verdade.
 
-Pedido: um `listarNegocios()` (`NegocioResumo[]` com pelo menos `id`, `title`,
-`destination`, `contactName`, `currency` — mesma forma que `PropostaResumo` já
-usa para os campos de negócio) destrava trocar o campo de texto por um
-`Combobox` de verdade. É uma troca de um componente só no meu lado, não uma
-reforma da tela.
+(O bloqueio de build em `src/server/storage.ts`/`@vercel/blob` que estava
+registrado aqui antes já não reproduz — `npm run build` está limpo nesta
+sessão, incluindo `/p/[slug]`. Não sei se foi você ou o PO quem resolveu, só
+registro que sumiu.)
+
+## O que ENTREGUEI (contexto, não pedido)
+
+- `/p/[slug]` pública, fora do grupo `(app)`, sem AppShell/auth — server
+  component (`page.tsx`) + client (`PublicProposalScreen.tsx`) +
+  `not-found.tsx` elegante (mesmo tratamento para slug errado e proposta não
+  publicável, como o contrato pede).
+- Beacon de abertura com `registrarVisitaProposta`: uma chamada no mount
+  (sem `durationSeconds`) e outra no `visibilitychange`/`pagehide` (com
+  duração e `focusedOptionId`, via `IntersectionObserver` nas opções).
+  `sessionKey` gerado com `crypto.randomUUID()` e guardado em
+  `sessionStorage`. Testei com Playwright de verdade (não só curl) e confirmei
+  linhas novas em `proposal_views` com `duration_ms`/`focused_option_id`
+  batendo com o tempo real da aba aberta.
+- Adicionei um botão "Enviar proposta"/"Reenviar"/"Copiar link" no editor
+  (`PropostaEditorScreen.tsx`, dentro da minha fronteira) chamando
+  `enviarProposta` — S7 tinha a action pronta do seu lado mas nada no editor
+  ainda ligava nela.
+
+Detalhes de decisão de design em `docs/status/nina.md`.

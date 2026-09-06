@@ -6,6 +6,7 @@ import {
   atualizarOpcao,
   atualizarProposta,
   criarOpcao,
+  enviarProposta,
   excluirOpcao,
   obterPropostaParaEdicao,
   reordenarOpcoes,
@@ -26,7 +27,7 @@ import { Field, FieldError, FieldHint, Label, SavedMark } from "@/components/ui/
 import { Input, Textarea } from "@/components/ui/Input";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import { ChevronRightIcon, PlusIcon } from "@/components/app/icons";
+import { ChevronRightIcon, LinkIcon, PlusIcon } from "@/components/app/icons";
 import { cn } from "@/lib/ui/cn";
 import { useAutosave } from "@/lib/ui/useAutosave";
 import { BlocksEditor } from "./BlocksEditor";
@@ -109,7 +110,10 @@ export function PropostaEditorScreen({ propostaId }: { propostaId: string }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 lg:h-full">
       <div className="flex shrink-0 flex-col gap-3">
-        <BackLink />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <BackLink />
+          <PublishBar proposta={proposta} onPatched={patchMeta} />
+        </div>
         <ViewToggle view={view} onChange={setView} />
       </div>
 
@@ -147,6 +151,99 @@ function BackLink() {
       <ChevronRightIcon className="size-3.5 -scale-x-100" />
       Propostas
     </Link>
+  );
+}
+
+/* =============================================================================
+   Enviar — o botão que liga o link público (S7)
+   -----------------------------------------------------------------------------
+   Rascunho não tem link nenhum (a policy de leitura pública exige status
+   diferente de "draft" + `sentAt`). Depois de enviada, o botão vira "Copiar
+   link"/"Abrir" — reenviar é permitido (o contrato é idempotente), então não
+   escondo a ação, só troco o rótulo.
+   ========================================================================== */
+
+const STATUS_META: Record<string, { label: string; tone: "neutral" | "accent" | "ok" | "warn" | "danger" }> = {
+  draft: { label: "Rascunho", tone: "neutral" },
+  sent: { label: "Enviada", tone: "accent" },
+  viewed: { label: "Aberta pelo cliente", tone: "accent" },
+  accepted: { label: "Aceita", tone: "ok" },
+  declined: { label: "Recusada", tone: "danger" },
+  expired: { label: "Expirada", tone: "warn" },
+};
+
+function PublishBar({
+  proposta,
+  onPatched,
+}: {
+  proposta: PropostaEdicao;
+  onPatched: (patch: Partial<PropostaEdicao>) => void;
+}) {
+  const toast = useToast();
+  const [sending, setSending] = React.useState(false);
+  const isDraft = proposta.status === "draft";
+  const canSend = proposta.options.length > 0;
+  const meta = STATUS_META[proposta.status] ?? { label: proposta.status, tone: "neutral" as const };
+
+  async function handleSend() {
+    setSending(true);
+    const result = await enviarProposta(proposta.id);
+    setSending(false);
+    if (!result.ok) {
+      toast.show({
+        title: "Não consegui enviar a proposta",
+        description: result.mensagem,
+        tone: "danger",
+        action: result.correcao ? { label: result.correcao, onClick: () => void handleSend() } : undefined,
+      });
+      return;
+    }
+    onPatched(result.data);
+    toast.show({ title: "Proposta enviada", description: "O link público já está no ar.", tone: "ok" });
+  }
+
+  function publicUrl() {
+    return `${window.location.origin}/p/${proposta.publicToken}`;
+  }
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(publicUrl());
+      toast.show({ title: "Link copiado" });
+    } catch {
+      toast.show({
+        title: "Não consegui copiar o link",
+        description: "Copie manualmente no campo de endereço.",
+        tone: "danger",
+      });
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge tone={meta.tone}>{meta.label}</Badge>
+      {isDraft ? (
+        <>
+          <Button size="sm" loading={sending} disabled={!canSend} onClick={handleSend}>
+            Enviar proposta
+          </Button>
+          {!canSend ? <span className="text-13 text-muted">Adicione uma opção para enviar.</span> : null}
+        </>
+      ) : (
+        <>
+          <Button size="sm" variant="secondary" onClick={handleCopy}>
+            <LinkIcon className="size-4" />
+            Copiar link
+          </Button>
+          <CardAction onClick={() => window.open(publicUrl(), "_blank", "noopener")}>Abrir</CardAction>
+          {sending ? null : (
+            <CardAction className="text-muted" onClick={() => void handleSend()}>
+              Reenviar
+            </CardAction>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
