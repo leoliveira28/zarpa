@@ -1,6 +1,115 @@
 # Status — Téo
 
-## Rodada atual: destravar o gate da S7 (leitura pública da proposta)
+## Rodada atual: S9 — vendas, comissão e recebíveis
+
+Handoff: `docs/handoffs/rafa-para-teo.md`, seção "S9". Backend já commitado (`dba5eed`):
+`sales`/`receivables` (migration `0007`, RLS na mesma migration) e `src/server/sales.ts`.
+
+### Entrega
+
+`tests/sales/vendas.test.ts` (novo, 15 testes) — mesma filosofia de
+`tests/followups/regua.test.ts`: chama as funções REAIS de `src/server/sales.ts` contra
+Postgres de verdade, mockando só `requireAuthContext` (`vi.hoisted`), fixture própria por
+teste (tenant + `user` real + contato + negócio + proposta ACEITA com opção fotografada),
+sem lista fixa de tabela em lugar nenhum.
+
+**Cobre, dos cinco pontos do handoff:**
+
+1. **Idempotência de `converterPropostaEmVenda`** — duas chamadas para a mesma proposta
+   devolvem a MESMA venda (`segunda.data.id === primeira.data.id`), contagem no banco
+   continua em 1. E, separado disso, **o índice `sales_proposal_id_key` segurando sob
+   concorrência de verdade**: dois `INSERT` diretos simultâneos (bypassando a checagem de
+   leitura-antes-de-inserir da Server Action) via `Promise.allSettled` — um sucede, o
+   outro rejeita citando `sales_proposal_id_key`, contagem final = 1. Também cobri a
+   recusa de converter proposta ainda não aceita (`CONFLITO`, zero vendas criadas).
+2. **Custo/comissão/taxa em centavos exatos** — opção aceita com
+   `priceCents`/`costCents`/`commissionCents` como canário (valores distintos entre si,
+   não múltiplos redondos uns dos outros) e confere que `sales.valorBrutoCents`/
+   `custoCents`/`comissaoPrevistaCents`/`taxaServicoCents` batem exatamente. **Margem**:
+   NÃO existe campo `margem` no schema nem fórmula declarada em nenhum contrato — o teste
+   calcula `bruto − custo` só como prova de que os dois campos persistidos permitem o
+   cálculo, documentado como suposição de teste, não como contrato validado (ver "O que
+   NÃO está coberto" abaixo).
+3. **Parcelas**: `gerarParcelasDaVenda` com soma exata (nenhum centavo perdido/sobrando,
+   testado com `priceCents` que não divide exato — `100_001 / 3`), recusa de gerar de novo
+   se já existe parcela (`CONFLITO`), `marcarParcelaPaga` muda `status`/`pagoEm`, e as
+   **duas pontas do CHECK `receivables_pago_em_check`** direto em SQL (`status='pago'` sem
+   `pagoEm`, e `status='pendente'` com `pagoEm` preenchido) — as duas rejeitam no banco.
+4. **`atualizarStatusComissao`**: prevista → recebida → atrasada → volta para prevista,
+   confirmando que NÃO é máquina de estado travada (decisão do Rafa).
+5. **Isolamento por tenant via Server Action** (não só SQL direto):
+   `obterVenda`/`atualizarVenda`/`atualizarStatusComissao`/`excluirVenda` do tenant B
+   contra uma venda do tenant A devolvem `NAO_ENCONTRADO`, e depois confirmo que a venda de
+   A continua intacta (custo/comissão/status não mudaram por causa da tentativa de B).
+   Mais uma prova em SQL direto (`withTenant(B) select from sales where id = <venda de A>`
+   → zero linhas), complementando a varredura por catálogo de `tenant-isolation.test.ts`.
+
+**Também cobri, além do pedido mínimo** (os dois pontos "que o Rafa não conseguiria testar
+sozinho" no espírito, mesma lógica de defesa em profundidade):
+
+- `ON DELETE RESTRICT` de `sales.deal_id`/`sales.proposal_id` — apagar o negócio ou a
+  proposta de uma venda já fechada falha no banco (mensagem de violação de FK), testado
+  direto em SQL, não só lido no schema.
+- `excluirVenda` recusa com `CONFLITO` quando existe parcela `pago` — e confirmei que
+  NADA some: a venda continua, a parcela paga continua `pago`, a parcela em aberto
+  continua `pendente`. Também testei o caminho feliz (exclui normal sem parcela paga).
+
+### Achado durante a escrita do teste (não é bug do Rafa — é o teste que precisou de setup)
+
+`converterPropostaEmVenda` chama `registrarAuditoria` com `actorUserId`, e
+`audit_log.actor_user_id` tem FK real para a tabela `user` (Better Auth). O mock de sessão
+que eu ia copiar de `regua.test.ts` usa uma string arbitrária (`'qa-sales-user'`) como
+`userId` — funciona lá porque `gerarFollowupsDaProposta`/`rodarFilaDeFollowups` não passam
+por `registrarAuditoria` com aquele actor. Aqui precisei, como `import-planilha.test.ts` já
+fazia, inserir uma linha de verdade em `"user"` por fixture e apontar `authCtx.userId` para
+ela. Registro aqui porque é o tipo de detalhe que vai pegar o próximo teste que reusar o
+padrão de mock e tocar em qualquer action que audita.
+
+### Sanidade (feita e revertida, não ficou no arquivo)
+
+Troquei de propósito `expect(aindaA.data.custoCents).toBe(111_100)` para `999_999` no
+teste de isolamento — rodei, vi falhar com a mensagem certa (`expected 111100 to be
+999999`), revertido antes de considerar a entrega pronta.
+
+### Verificação
+
+- `npx tsc --noEmit`: limpo.
+- `npx tsx scripts/check/known-failures.ts`: **363 testes** (348 + 15 novos), allowlist
+  vazia (0), **verde, sem regressão**. `globalSetup` recriou `zarpa_test` do zero e aplicou
+  as 8 migrations (`0000`–`0007`) sem erro — confirma ao vivo o que o Rafa não pôde
+  confirmar nesta rodada (Docker fora do ar na sessão dele): a migration `0007` aplica
+  limpa, e a varredura por catálogo de `tenant-isolation.test.ts` pega `sales`/
+  `receivables` automaticamente, sem qualquer mudança de arquivo.
+- Não toquei em `src/**` — nenhum bug de produto encontrado nesta rodada que exigisse
+  handoff para o Rafa.
+
+### O que NÃO está coberto (explícito, para não virar cobertura falsa)
+
+- **Fórmula "oficial" de margem** não existe no schema/contrato — meu teste calcula
+  `bruto − custo` só como prova de que os campos persistem certo, não como validação de
+  uma regra de negócio declarada. Se o produto um dia definir a fórmula real (ex.
+  descontar `taxaServicoCents` também, ou somar `comissaoPrevistaCents` como receita), este
+  teste não vai pegar a mudança — não há assert contra uma constante de negócio, só contra
+  os valores brutos persistidos.
+- **`listarVendas`/`atualizarVenda` (campos além de `custoCents`)/`excluirParcela`** não
+  têm teste dedicado nesta rodada. `criarParcela` é usado em vários lugares como setup de
+  outros testes, mas não há um teste que valide sozinho seus limites de validação de
+  entrada do zod (`valorCents` negativo, `venceEm` inválido).
+- **Concorrência em `gerarParcelasDaVenda`** (duas chamadas simultâneas) não foi testada —
+  só a recusa sequencial ("já tem parcela"). Ao contrário de `sales_proposal_id_key`, não
+  há índice único parcial em `receivables` que impeça duas gerações concorrentes de
+  duplicar parcelas — se isso for um risco real de produto (dois cliques rápidos no botão
+  "gerar parcelas"), vale um teste de corrida e possivelmente um índice novo, pedido que eu
+  não fiz para o Rafa porque não é um dos cinco pontos do handoff e não quis presumir
+  prioridade fora do escopo pedido.
+- **`atualizarVenda`/`atualizarParcela` com payload vazio** (`{}` → `DADOS_INVALIDOS`,
+  "Nada para salvar") não tem teste — comportamento lido no código, não exercido.
+- Nenhum teste de UI/tela para venda ou parcelas (fora da minha fronteira: isso é
+  `src/app`, `src/components`, do Nina).
+
+---
+
+## Rodada anterior: destravar o gate da S7 (leitura pública da proposta)
 
 Ponto de partida: `npx tsx scripts/check/known-failures.ts` vermelho (exit 1) — 2 das 3
 entradas do allowlist tinham virado obsoletas (função `SECURITY DEFINER` da proposta
