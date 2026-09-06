@@ -1,132 +1,120 @@
 # Status — Nina (frontend / design system)
 
 ## Tarefa
-Frontend do S3: tela Clientes por inteiro — lista, ficha do contato, assistente de
-importação de planilha, tudo ligado às Server Actions reais (`src/server/contacts.ts`,
-`travelers.ts`, `imports.ts`, `csv.ts`, `alerts.ts`), não a `sample-data.ts`. Critério de
-aceite do sprint: importar uma planilha real sem perder nem duplicar registro, do celular.
+Fechar o loop de autenticação: construir a tela de login e proteger o grupo `(app)`
+para que ele pare de vazar `NÃO_AUTENTICADO` cru. Segui o contrato do `authClient` em
+`docs/handoffs/rafa-para-nina.md` à risca — não adivinhei nenhum shape de dado.
 
 ## O que ficou pronto
 
-### Rotas e telas
-- **`/clientes`** (`ClientesScreen.tsx`) — busca com debounce de 300ms que não apaga a
-  lista anterior enquanto a nova carrega (opacidade 60%, sem skeleton a cada tecla —
-  skeleton é só do primeiro carregamento), lista em `Card` com fio interno, estado vazio
-  com prancha + conteúdo de exemplo, "Novo cliente" em Sheet (nome, WhatsApp/telefone,
-  e-mail, origem — só o nome é obrigatório), "Ver arquivados" com restauração inline.
-- **`/clientes/[id]`** (`ContatoScreen.tsx`) — cinco cartas na proporção 1:4:1 de sempre:
-  **Dados** (nome, WhatsApp, telefone, e-mail, origem, etiquetas, observações — cada campo
-  salva sozinho no blur, textarea com debounce de 900ms), **Documento e nascimento** (CPF e
-  data completa ficam ocultos por padrão; um botão "Ver" chama `obterDocumentoDoContato`,
-  que audita a leitura no servidor — a tela não busca isso sem pedido explícito),
-  **Passageiros** (lista de `listarViajantes`, cada linha edita nome/tipo/validade de
-  passaporte direto — são campos não sensíveis, já vêm no resumo —, e um "Ver CPF,
-  passaporte e nascimento" por passageiro que audita como o do contato), **Lembretes**
-  (consome `alerts.ts`: `listarTarefas({contatoId})` + `concluirTarefa`) e **Encerramento**
-  (arquivar/restaurar/excluir).
-- **`/clientes/importar`** (`ImportWizard.tsx`) — três passos (Enviar → Conferir →
-  Resultado) sobre duas chamadas de servidor, exatamente como `imports.ts` documenta: o
-  mesmo `File` é mandado para `pravisualizarImportacao` e depois para
-  `confirmarImportacao`, guardado em estado de componente entre os passos (nenhuma
-  navegação de rota no meio do fluxo, porque um `File` não sobrevive a isso). Mapeamento de
-  coluna editável com o valor sugerido pelo servidor pré-preenchido e um exemplo da
-  primeira linha ao lado de cada select; pré-visualização em tabela, crua, sem mapeamento
-  aplicado, só para conferir que a leitura bateu (o próprio comentário de `imports.ts`);
-  aviso bloqueando o botão de importar se nenhuma coluna estiver mapeada para Nome;
-  resultado com criados/atualizados/mesclados/ignorados e a lista linha a linha com aviso
-  (nunca "27 ok" sem dizer quais). "Importações recentes" na tela de envio, lendo
-  `listarImportacoes`/`obterRelatorioDeImportacao`, para reabrir um relatório antigo.
+### Rotas
+- **`/entrar`** (`src/app/entrar/page.tsx` + `LoginScreen.tsx`) — fora do grupo `(app)`,
+  então sem `AppShell`: registro "entrada/intermediário" do CLAUDE.md, não o miolo
+  silencioso. Uma `CompassPlate` (a única prancha que pode aparecer sozinha) a 14% de
+  opacidade, sangrando pelo canto superior direito, some em telas estreitas (`hidden
+  sm:block`) — em 390px ela brigaria com o formulário por espaço, e o registro pede
+  "discreta", não "presente a qualquer custo". Coluna ancorada à esquerda com margem de
+  livro (`max-w-[26rem]`, `pt-14`/`pt-20`), não um card flutuante centralizado — decisão
+  deliberada contra o "tudo centralizado" proibido no CLAUDE.md: um login de SaaS genérico
+  é exatamente uma caixa branca no meio da tela.
+- **`src/app/(app)/layout.tsx`** virou Server Component `async`: chama `getAuthContext()`
+  (barril de servidor do Rafa) antes de montar o `AppShell` e manda para `/entrar` com
+  `redirect()` se não houver sessão. Guard num lugar só — nenhuma tela-filha de `(app)`
+  precisa checar sessão sozinha, e nenhuma delas mais mostra `NÃO_AUTENTICADO` cru.
 
-### Infraestrutura nova (`src/lib/ui/**`)
-- **`useAutosave.ts`** — o mecanismo único de "salvar sozinho, sem botão Salvar": `commit`
-  (imediato, uso em `onBlur`) ou `schedule` (com debounce, para texto longo), estado
-  `idle/saving/saved/error` que alimenta `<SavedMark>` direto e volta a `idle` sozinho.
-  Descarta resposta de commit que já foi substituído por um mais novo (evita que uma
-  resposta atrasada da rede reverta o rótulo de "Salvo").
-- **`useDeferredDelete.ts`** — resolve uma lacuna real: `excluirContato` e
-  `excluirViajante` são exclusão de VERDADE, sem endpoint de restauração (ao contrário de
-  `arquivarContato`/`restaurarContato`, que têm). Um toast "Desfazer" que promete voltar
-  atrás e não consegue é uma mentira na interface — pior que o modal "tem certeza?" que o
-  CLAUDE.md proíbe. A saída: a interface remove o item na hora (parece instantâneo) e só
-  manda a exclusão de verdade para o servidor se os 8 segundos do toast passarem sem
-  ninguém tocar em "Desfazer" — o timer roda fora do React, então sobrevive a navegar para
-  outra rota no meio da janela de desfazer. Reusado também para "concluir lembrete"
-  (`concluirTarefa` não tem "reabrir").
+### Formulário
+- E-mail + senha (`authClient.signIn.email`) e link mágico (`authClient.signIn.magicLink`)
+  como segunda via — trocam de lugar num toggle, nunca lado a lado (a mesma regra do
+  rodapé de card: duas ações no mesmo peso viram indecisão, então a segunda é texto —
+  reusei `CardAction` para isso).
+- Erro com correção junto (`Field`/`FieldError` já prontos): senha errada destaca o campo
+  de senha e oferece "Corrigir a senha" (foca o input); e-mail sem conta destaca o e-mail.
+  Nunca "erro ao processar".
+- Olho de mostrar/ocultar senha (`EyeIcon`/`EyeOffIcon`, já existiam em `app/icons.tsx`) —
+  reage no `pointerdown`.
+- Skeleton (nunca spinner) enquanto `useSession()` resolve OU quando já existe sessão e a
+  tela está prestes a te tirar de lá — evita o flash de formulário que vai sumir.
+
+### Loop fechado de verdade
+- Adicionei "Sair" no `SideNav` do `AppShell` (`signOut()` do client + `router.push` +
+  `router.refresh`). Sem isso a sessão só terminava apagando cookie na mão — não dava para
+  testar o guard de ponta a ponta pela própria interface.
+
+### `src/lib/ui/authErrors.ts` (novo)
+Tradução pt-BR do erro do Better Auth. Testei `signIn.email` com senha errada direto no
+handler e confirmei que o `code` real é `INVALID_EMAIL_OR_PASSWORD` — então o mapeamento
+compara por `code` primeiro (estável) e só cai para `message.toLowerCase()` como rede de
+segurança nos casos que ainda não confirmei (usuário inexistente no magic link, e-mail não
+confirmado, limite de tentativas). Pedido aberto em `docs/handoffs/nina-para-rafa.md` para
+o Rafa confirmar os `code`s que faltam.
 
 ## Decisões tomadas sozinha
-
-- **CPF, passaporte e data de nascimento nunca chegam à tela sem um clique explícito.**
-  `ContatoDetalhe`/`ViajanteResumo` não trazem esses campos — só `temDocumento`/
-  `temPassaporte` (booleano) e `aniversario` (`MM-DD`, que os comentários do servidor já
-  tratam como não sensível). Um botão "Ver" chama `obterDocumentoDoContato`/
-  `obterDocumentoDoViajante`, que grava em `audit_log` — a tela nunca busca isso de graça
-  para "preencher um card que talvez ninguém abra" (aviso literal do Rafa em
-  `rafa-para-nina.md`).
-- **Passaporte e validade não sensíveis ficam editáveis direto na linha do passageiro,
-  sem reveal.** `passportExpiresOn`, `fullName`, `kind`, `nationality` já vêm no resumo —
-  só CPF, número do passaporte e data de nascimento completa exigem o clique de auditoria.
-  Menos fricção para o dado que já é público de qualquer forma.
-- **Accent (azul) nunca em badge de status.** O relatório de importação tem quatro
-  situações por linha (criado/atualizado/mesclado/ignorado); usei `ok`/`neutral`/`neutral`/
-  `warn`, nunca `accent` — a mesma correção que `docs/design/funil-v2.md` já tinha feito
-  para o sinal de abertura do funil ("se o azul aparecer duas vezes na mesma tela, uma
-  delas está errada", e aqui ele apareceria dezenas de vezes). Pela mesma razão, nenhum
-  `CardFooter` da ficha do contato usa `variant="primary"`: a barra superior já carrega o
-  único accent persistente da tela ("Nova proposta"), e dois accent permanentes na mesma
-  tela é exatamente o que a regra proíbe — diferente do `EmptyState`, que é contextual (só
-  aparece quando a lista está vazia) e por isso pode usar `primary` sem duplicar.
-- **Exclusão de verdade sem "desfazer" que funciona é pior que modal — então ela não usa
-  o toast padrão.** Ver `useDeferredDelete.ts` acima. Isso significa que, tecnicamente, o
-  toast "Cliente excluído" mente por 8 segundos (o registro ainda está no banco) — decisão
-  consciente: a alternativa (excluir e não conseguir desfazer de verdade) é pior.
-- **Data em `<input type="date">`, não texto livre.** `parseDataFlexivel` (normalize.ts)
-  aceita ISO (`AAAA-MM-DD`), que é exatamente o que o input nativo devolve — ganho de UX no
-  celular (seletor nativo) sem custo de parsing extra, tanto para nascimento quanto para
-  validade de passaporte.
-- **Busca não limpa a lista a cada tecla.** Resultado anterior fica na tela, apagado a 60%,
-  até o novo chegar — skeleton só no primeiro carregamento. Evitar que a lista pisque a
-  cada letra digitada.
-- **Reescrevi os efeitos de carregamento para não chamar `setState` direto no corpo do
-  `useEffect`** (o padrão inicial — função `load` via `useCallback`, chamada com
-  `void load()` dentro do efeito — dispara `react-hooks/set-state-in-effect` no ESLint
-  novo do projeto). Troquei por `.then()` inline dentro do efeito, com uma flag `active`
-  para descartar resposta de request cancelado, e um `reloadToken` de estado para o botão
-  "Tentar de novo" disparar recarga sem chamar função de fora do efeito. Encontrei esse
-  mesmo aviso já pré-existente em `Combobox.tsx`, `Toast.tsx` e `theme.ts` (não mexi
-  nesses três — não é escopo desta entrega, mas registro aqui porque é sistêmico, não um
-  erro pontual meu).
+- **Uma prancha só, e ela some no celular estreito.** A regra "no máximo uma prancha por
+  tela" eu já esperava seguir; a parte que decidi sozinha foi escondê-la abaixo de `sm:` —
+  390px é o alvo real (CLAUDE.md: "o agente vive no celular"), e um enfeite que rouba
+  espaço do formulário na primeira tela que a pessoa vê é o oposto do que a direção pede.
+- **Coluna ancorada à esquerda, não centralizada.** Ver acima — evitar a "cara de template
+  gerado" de login boxado no centro da viewport. Também ajuda o teclado do celular: um
+  layout centralizado verticalmente pula quando o teclado abre; um layout em fluxo normal
+  (padding no topo, sem `justify-center`) não.
+- **`router.push('/hoje')` manual depois de `signIn.email`, além do `callbackURL`.** O
+  contrato documenta `callbackURL` como "para onde o Better Auth redireciona depois", mas
+  a chamada de e-mail/senha é um `fetch` do client, não uma navegação de página — testei
+  contra o handler e confirmei que ela não redireciona sozinha (só devolve JSON). Quem move
+  a agente de tela é o router do Next. `callbackURL` continua sendo passado porque o
+  contrato pede e ele importa de verdade no fluxo de magic link (ali é o servidor que
+  redireciona de fato, confirmado testando `/magic-link/verify` — devolve `302` com
+  `Location`).
+- **"Sair" só no `SideNav` (desktop), não na barra inferior do celular.** A barra inferior
+  já tem os 4 destinos no alvo de toque certo; enfiar um quinto item ali para uma ação rara
+  (sair) competiria por espaço todo dia com uma ação que a agente usa uma vez a cada trinta.
+  Testei o guard inteiro por `curl` (login, sessão, sign-out, redirecionamento), então a
+  ausência de "Sair" no mobile não bloqueou a verificação — mas é uma lacuna real que
+  registro aqui: alguém vai precisar de um jeito de sair pelo celular antes do S3 fechar.
+- **Mapeamento de erro por `code`, não só por `message`.** Ver seção acima. Escolhi
+  verificar isso na prática (`curl` contra o handler) em vez de assumir o texto do Better
+  Auth, porque comparar substring de mensagem em inglês quebra silenciosamente na primeira
+  atualização de dependência.
+- **Sem "Criar conta" na tela.** `signUp.email` existe no client mas não tem
+  `src/server/signup.ts` por trás (documentado pelo Rafa) — colocar o link levaria a uma
+  tela que estoura. Fica para quando o Rafa priorizar.
 
 ## Verificação
 - `npx tsc --noEmit` — limpo.
-- `npm run build` — limpo (Next 16 / Turbopack). `/clientes` e `/clientes/importar` saem
-  estáticos; `/clientes/[id]` sai dinâmico (rota com parâmetro, sem `generateStaticParams`
-  — esperado).
-- `npx eslint` nos arquivos novos — limpo (corrigi os 7 avisos de `react-hooks/refs` e
-  `react-hooks/set-state-in-effect` que apareceram na primeira passada).
-- `npm run dev` + `curl` nas três rotas — 200 nas três, HTML de skeleton correto no
-  primeiro paint, nenhum erro 500 no log do servidor. **Não fui além disso**: não existe
-  sessão autenticada no ambiente (ver handoff abaixo), então não dá para ver a tela com
-  dado de verdade sem um navegador de verdade logado — o que eu não tenho como dirigir
-  daqui. Quem avalia a tela de olho é o cliente, como já registrado na entrega anterior.
+- `npx vitest run tests/design/guards.test.ts` — 6/6 verde (tipografia, cor em contexto,
+  paridade de tema escuro, movimento só em `transform`/`opacity`, motion em JS com
+  reduced-motion, corte de `prefers-reduced-motion`). Não usei `transition-colors` nem
+  nenhum outro novo site fora de `transform`/`opacity` nos arquivos que criei.
+- `npm run build` — limpo. `/entrar` sai estático; todo o grupo `(app)` virou dinâmico
+  (`ƒ`), esperado — o guard lê `headers()` a cada request.
+- **Teste manual de ponta a ponta, via `npm run dev` + `curl`** (o dev server já estava no
+  ar em `:3000` de outra sessão; usei ele em vez de subir um segundo):
+  - `GET /clientes` sem cookie → `307` para `/entrar`. ✅ (o "fechar o loop" pedido).
+  - `POST /api/auth/sign-in/email` com `dev@zarpa.local` / `dev12345` → `200`, sessão
+    criada (`set-cookie` de `session_token`/`session_data`), `user.tenantId` presente.
+  - `GET /hoje` e `GET /clientes` com o cookie da sessão → `200` nos dois.
+  - Senha errada → `401`, `{"code":"INVALID_EMAIL_OR_PASSWORD"}` — confirma o `code` que
+    `authErrors.ts` compara.
+  - `POST /api/auth/sign-in/magic-link` → `{"status":true}`, link caiu no log do servidor
+    (`.next/dev/logs/next-development.log`), exatamente como o Rafa documentou (sem
+    `RESEND_API_KEY`). Segui o link (`GET /api/auth/magic-link/verify?...`) → `302` para
+    `/hoje` com sessão nova.
+  - `POST /api/auth/sign-out` (com `Origin` e cookie jar corretos) → `{"success":true}`,
+    cookies voltam com `Max-Age=0`; `GET /clientes` com esses cookies limpos → `307` para
+    `/entrar` de novo.
+  - Não abri um navegador de verdade para julgar o visual a olho (não tenho como dirigir
+    um aqui) — a verificação de pixel/animação fica para quem revisar a tela ao vivo.
 
 ## Preciso dos outros
-Abri `docs/handoffs/nina-para-po.md`: não existe rota de login nem tela de login no
-produto — toda Server Action (não só as de Clientes) devolve `NAO_AUTENTICADO` sem sessão,
-e isso é correto, mas significa que ninguém vê o caminho feliz de nenhuma tela autenticada
-sem resolver isso primeiro. Não é bloqueio desta entrega (a tela está certa no estado atual,
-inclusive o erro "Sua sessão expirou" aparece do jeito que o CLAUDE.md pede), mas é
-bloqueio do produto como um todo.
+`docs/handoffs/nina-para-rafa.md`: pedido para trocar o mapeamento de erro de
+`message.toLowerCase()` (frágil) para `error.code` (estável) nos casos que não testei
+diretamente — usuário inexistente no magic link, e-mail não confirmado, limite de
+tentativas. Não bloqueia nada, é robustez.
 
 ## Fora desta entrega
-- **XLSX na importação** — `imports.ts` já recusa com mensagem clara e correção ("exportar
-  como CSV"); não é meu escopo destravar isso, já está registrado como pedido do Rafa ao
-  PO (`docs/handoffs/rafa-para-po.md`). A tela de importação mostra a mensagem do servidor
-  sem inventar suporte que não existe.
-- **Edição de notas do passageiro** (`ViajanteInput.notes`) — o formulário de criação e a
-  linha da lista não expõem esse campo; dava para incluir, mas o formulário de "adicionar
-  passageiro" já tinha sete campos e um oitavo opcional não paga o custo de mais uma tecla
-  de rolagem no celular. Fica para quando alguém pedir.
-- **Menu de contexto na lista** (arrastar para arquivar, editar rápido) — a lista de
-  clientes ficou deliberadamente burra (busca + navegação), com toda ação de ciclo de vida
-  morando na ficha. Documentado como o mesmo tipo de corte que o funil já fez com
-  filtro/auto-scroll: não se paga com o volume de cliente de um agente independente.
+- **Cadastro público.** Depende de `src/server/signup.ts` (Rafa ainda não escreveu).
+- **"Sair" acessível no celular.** Só existe no `SideNav` de desktop hoje — ver decisão
+  acima.
+- **Julgamento visual em navegador real.** Verifiquei o contrato HTTP inteiro por `curl`;
+  a conferência de tipografia/espaçamento/movimento a olho, em 390px de verdade, fica para
+  quem tiver um navegador para abrir.

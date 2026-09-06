@@ -2,11 +2,12 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { motion } from "motion/react";
 import { cn } from "@/lib/ui/cn";
 import { APP_NAME } from "@/lib/ui/brand";
 import { useTransitionPreset } from "@/lib/ui/motion";
+import { signOut } from "@/lib/auth/client";
 import { Button } from "@/components/ui/Button";
 import { ThemeToggle } from "./ThemeToggle";
 import {
@@ -183,8 +184,44 @@ function SideNav({ activeHref }: { activeHref: string | null }) {
           <span className="text-13 text-muted">Tema</span>
           <ThemeToggle />
         </div>
+        <SignOutButton />
       </div>
     </aside>
+  );
+}
+
+/**
+ * Fecha o ciclo da sessão pelo lado de dentro: sem isto, `/entrar` existia
+ * mas ninguém tinha como voltar para lá a não ser apagando cookie na mão.
+ * `signOut()` derruba a sessão no servidor; o `router.push` + `refresh` força
+ * o layout de `(app)` a rodar de novo e encontrar `getAuthContext()` vazio —
+ * o mesmo caminho que qualquer rota sem sessão já passa.
+ */
+function SignOutButton() {
+  const router = useRouter();
+  const [pending, setPending] = React.useState(false);
+
+  async function handleSignOut() {
+    setPending(true);
+    await signOut();
+    router.push("/entrar");
+    router.refresh();
+  }
+
+  return (
+    <button
+      type="button"
+      onPointerDown={handleSignOut}
+      disabled={pending}
+      data-disabled={pending || undefined}
+      className={cn(
+        "rounded-md px-3 py-2 text-left text-13 text-muted",
+        "hover:bg-surface-3 hover:text-ink",
+        "data-[disabled]:pointer-events-none data-[disabled]:text-subtle",
+      )}
+    >
+      {pending ? "Saindo…" : "Sair"}
+    </button>
   );
 }
 
