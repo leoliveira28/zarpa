@@ -38,6 +38,49 @@ Minha prova manual está versionada em `src/db/checks/isolation.sql` (15 passos,
 substitui o seu teste — é o que eu conferi antes de dizer "pronto", e serve de checklist
 do que vale automatizar.
 
+## S9 — vendas, comissão e recebíveis (`sales`/`receivables`)
+
+Duas tabelas novas em `drizzle/0007_vendas_e_recebiveis.sql` (registrada em
+`drizzle/meta/_journal.json`, idx 7), RLS na mesma migration, mesmo padrão de
+`sales_isolation`/`receivables_isolation` — uma policy `USING`+`WITH CHECK` cada, sem
+escape hatch, sem coluna de dono opcional. `tests/security/tenant-isolation.test.ts`
+(varredura por catálogo) deve pegar as duas automaticamente sem precisar de mudança no
+arquivo — se não pegar, é sinal de que o catálogo está filtrando por lista fixa em vez de
+`information_schema`, vale investigar.
+
+**IMPORTANTE — não consegui rodar migration nem teste nesta rodada.** O Docker Desktop
+não subiu no ambiente desta sessão (`docker info` nunca saiu de "não pronto" depois de
+várias tentativas com espera), então não tive Postgres disponível nem para
+`npm run db:migrate` nem para `npx tsx scripts/check/known-failures.ts`. Revisei a
+migration byte a byte contra `0000_fundacao.sql`/`0003_construtor_de_proposta.sql` (mesmo
+formato de `--> statement-breakpoint`, mesma sintaxe de policy, mesmos nomes de GUC) e
+`npx tsc --noEmit` + `npx eslint` estão limpos, mas **isso não substitui aplicar a
+migration de verdade** — só quem tiver Postgres de pé nesta rodada pode confirmar que ela
+roda limpa do zero. Pedido: antes de aceitar esta entrega, rode
+`npm run db:migrate` (ou deixe o `globalSetup` do vitest fazer isso) e me avise se algo
+quebrar — não deveria, mas eu não presenciei.
+
+Pontos para virar teste, além do isolamento padrão:
+
+1. **`sales_proposal_id_key`** (índice único em `proposal_id`) — inserir duas vendas para
+   a mesma proposta deve falhar na segunda no nível do BANCO, não só por convenção da
+   Server Action (`converterPropostaEmVenda` checa antes de inserir, mas o índice é quem
+   garante de verdade sob concorrência).
+2. **`receivables_pago_em_check`** — `UPDATE receivables SET status = 'pago'` sem
+   `pago_em` deve falhar; `status = 'pendente'` com `pago_em` preenchido também deve
+   falhar. As duas pontas do CHECK, não só uma.
+3. **Vazamento de custo/comissão entre tenant**: plantar uma venda no tenant A com
+   `custo_cents`/`comissao_prevista_cents` como canário, tentar ler via
+   `unsafeSqlWithoutTenant` sem GUC (deve dar zero linhas) e via `withTenant` do tenant B
+   (também zero linhas) — mesmo roteiro que vocês já fazem para `proposal_options`.
+4. **`ON DELETE RESTRICT`** de `sales.deal_id`/`sales.proposal_id`: tentar apagar um
+   negócio ou proposta que já virou venda deve falhar no banco (nenhuma Server Action
+   hoje expõe "excluir negócio"/"excluir proposta" definitivamente, mas o schema já
+   recusa por garantia — vale um teste de contrato direto no SQL, não só via action).
+5. **`excluirVenda` recusa venda com parcela paga**: chamar a action com uma parcela
+   `status: 'pago'` já gravada deve devolver `CONFLITO`, não apagar nada — nem a venda,
+   nem a parcela paga, nem as outras parcelas em aberto daquela venda.
+
 Dois pontos dela que valem virar caso de teste seu, porque eu não conseguiria testar de
 forma independente (é o meu próprio código):
 

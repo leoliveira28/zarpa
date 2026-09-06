@@ -1,6 +1,154 @@
 # Status — Rafa (backend / plataforma)
 
-## Tarefa desta rodada: S8 — tarefas e follow-up automático (motor de retenção)
+## Tarefa desta rodada: S9 — vendas, comissão e recebíveis (o dinheiro)
+
+Entrega: schema + Server Actions para converter uma proposta ACEITA numa venda, editar
+custo/comissão/taxa de serviço, parcelar o cliente com vencimento e conferir a comissão
+prometida pela operadora.
+
+### Pronto
+
+1. **Schema novo `src/db/schema/sales.ts`** (registrado no barril
+   `src/db/schema/index.ts`), duas tabelas:
+   - `sales` — nasce de `proposals.status = 'accepted'` + `accepted_option_id`
+     preenchido. `deal_id`/`proposal_id`/`proposal_option_id` de rastreio;
+     `fornecedor`, `valor_bruto_cents`, `custo_cents`, `comissao_prevista_cents`,
+     `taxa_servico_cents` e `comissao_status` (`prevista`/`recebida`/`atrasada`) são os
+     campos de dinheiro. **Decisão registrada em comentário no schema**: os quatro
+     campos de dinheiro pedidos no roteiro em português (`valor_bruto`, `custo`,
+     `comissao_prevista`, `taxa_servico`) ganharam sufixo `_cents` — é a única convenção
+     de nome que este projeto usa para dinheiro em centavos (`price_cents`,
+     `cost_cents`, `commission_cents`, `amount_cents`...) e quebrar isso só numa tabela
+     criaria uma exceção sem motivo. `sales_proposal_id_key` (índice único em
+     `proposal_id`) garante que uma proposta vira **no máximo uma venda** — o banco
+     garante idempotência da conversão, não a Server Action.
+   - `receivables` — a parcela do CLIENTE (não confundir com `payments`, que é a
+     cobrança da assinatura do próprio agente — `money.ts`, S11/Asaas, não toquei).
+     `sale_id` em CASCADE (parcela é filha da venda), `vence_em` (`date`), `valor_cents`,
+     `status` (`pendente`/`pago`/`atrasado`/`cancelado`), `pago_em`. CHECK
+     `receivables_pago_em_check` trava que `status = 'pago' ⟺ pago_em IS NOT NULL` —
+     as duas metades da mesma informação não podem se desencontrar (mesmo padrão de
+     `tasks_dedupe_key_check`).
+   - Ambas com `tenant_id`, índice em toda FK, índice `(tenant_id, created_at)`, e um
+     índice parcial "em aberto por vencimento" em `receivables`
+     (`receivables_tenant_open_due_idx`, mesmo desenho de `tasks_tenant_open_due_idx`).
+   - `deal_id`/`proposal_id` de `sales` são `ON DELETE RESTRICT` — apagar o negócio ou a
+     proposta não pode sumir com o histórico financeiro (mesmo raciocínio de
+     `deals.contact_id`). `proposal_option_id` é `ON DELETE SET NULL` — é só linhagem,
+     apagar a opção depois da venda fechada não pode apagar a venda nem os valores já
+     fotografados.
+
+2. **Migration `drizzle/0007_vendas_e_recebiveis.sql`**, registrada em
+   `drizzle/meta/_journal.json` (idx 7) — RLS na MESMA migration que cria as tabelas:
+   `ENABLE`+`FORCE ROW LEVEL SECURITY` e uma policy `USING`+`WITH CHECK` por tabela contra
+   `current_setting('app.tenant_id', true)::uuid`, byte a byte no mesmo formato de
+   `0000_fundacao.sql` (`--> statement-breakpoint` entre cada comando). Nenhuma das duas
+   tabelas tem dono opcional — não precisou de escape hatch nomeado como
+   `library_items_platform_service`.
+
+3. **`src/server/sales.ts` (novo)**, exportado no barril `src/server/index.ts`:
+   - `converterPropostaEmVenda(propostaId, { fornecedor?, taxaServicoCents? })` —
+     confere `proposals.status === 'accepted'` e `accepted_option_id` preenchido, puxa
+     `price_cents`/`cost_cents`/`commission_cents` da opção ACEITA (nunca de outra opção
+     da mesma proposta) e fotografa em `sales`. **Idempotente de propósito**: chamar de
+     novo para a mesma proposta devolve a venda já existente em vez de erro — decisão
+     registrada em comentário no código, motivo: duplo clique de usuário é UX, não
+     exceção; `sales_proposal_id_key` garante que o banco nunca tem duas de verdade
+     mesmo sob concorrência real (dois requests simultâneos), a leitura antes do insert
+     é só o caminho feliz sem round-trip de erro.
+   - CRUD de venda: `listarVendas`, `obterVenda`, `atualizarVenda` (autosave, mesmo
+     padrão de `atualizarProposta` — só o que veio no patch muda),
+     `atualizarStatusComissao` (a conferência prevista→recebida/atrasada — **decisão**:
+     não é máquina de estado travada, dá para voltar de `recebida` para `prevista` se o
+     agente clicou errado; é conferência manual de extrato, não fluxo de aprovação) e
+     `excluirVenda` (recusa com `CONFLITO` se existir parcela `status: 'pago'` — não
+     deixa apagar histórico de pagamento).
+   - Parcelas: `criarParcela` (uma por vez, manual), `gerarParcelasDaVenda` (divide
+     `valor_bruto_cents` em N parcelas mensais iguais, a última absorvendo o resto da
+     divisão em centavos — nunca perde nem sobra 1 centavo; recusa se a venda já tiver
+     parcela, para não duplicar), `listarParcelas`, `atualizarParcela` (autosave;
+     trocar `status` para `pago` grava `pagoEm = agora` sozinho, trocar para qualquer
+     outro limpa `pagoEm` — resolvido na Server Action para nunca bater no CHECK do
+     banco por engano), `marcarParcelaPaga` (atalho) e `excluirParcela`.
+   - Reaproveitei `parseDataFlexivel` (`src/server/normalize.ts`) para validar
+     `venceEm`/`primeiraVencimento` em vez de inventar um segundo parser de data.
+
+4. **Contratos escritos**: `docs/handoffs/rafa-para-nina.md` (seção "S9", assinatura
+   completa de todas as actions, o que é autosave, o que é atalho, o que recusa e por
+   quê) e `docs/handoffs/rafa-para-teo.md` (seção "S9", cinco pontos concretos para virar
+   teste: unicidade de venda por proposta, as duas pontas do CHECK de `pago_em`,
+   vazamento de custo/comissão entre tenant, `ON DELETE RESTRICT` de negócio/proposta já
+   vendidos, e recusa de exclusão com parcela paga).
+
+### Não consegui verificar contra Postgres de verdade nesta rodada — risco real, registrado
+
+**O Docker Desktop não subiu nesta sessão.** Tentei `docker compose up -d db`,
+`open -a Docker` e esperas de vários minutos (`docker info` nunca saiu de "não pronto").
+Sem Postgres, não rodei `npm run db:migrate` nem `npx tsx scripts/check/known-failures.ts`
+— só verificação estática:
+
+- `npx tsc --noEmit`: limpo.
+- `npx eslint src/db/schema/sales.ts src/server/sales.ts src/server/index.ts
+  src/db/schema/index.ts`: limpo.
+- Revisei a migration linha a linha contra `0000_fundacao.sql` (sintaxe de `CREATE TABLE`,
+  `CREATE POLICY`, `ENABLE`/`FORCE ROW LEVEL SECURITY`) e `0006_regua_de_followup.sql`
+  (formato de comentário e de `_journal.json`) — mesmo padrão, sem desvio que eu tenha
+  encontrado lendo com atenção.
+
+O que isso significa na prática: **não confirmei ao vivo** que a migration aplica limpa
+do zero nem que `tenant-isolation.test.ts` cobre `sales`/`receivables` automaticamente
+(deveria, é varredura por catálogo — mas "deveria" não é "confirmei"). Registrei pedido
+explícito ao PO (`docs/handoffs/rafa-para-po.md`, item 8) e ao Téo
+(`docs/handoffs/rafa-para-teo.md`, seção "S9") para rodar isso na primeira máquina
+disponível com Docker de pé, antes de aceitar esta entrega como fechada. Isto NÃO é o
+padrão desta rodada anterior (S5–S8 sempre confirmei manualmente contra `zarpa_dev`/
+`zarpa_test`) — é uma exceção justificada por ambiente indisponível, não uma mudança de
+critério.
+
+### Decisões que tomei sozinha
+
+- Sufixo `_cents` em todo campo de dinheiro de `sales`/`receivables`, mesmo o roteiro
+  pedindo nomes sem sufixo (`valor_bruto`, `custo`, `comissao_prevista`, `taxa_servico`,
+  `valor`) — consistência com o resto do schema, ver item 1 de "Pronto".
+- `converterPropostaEmVenda` idempotente por leitura-antes-de-inserir, em vez de deixar o
+  segundo clique estourar em `CONFLITO` — ver item 3 de "Pronto".
+- `atualizarStatusComissao` sem máquina de estado travada — ver item 3 de "Pronto".
+- Não criei um endpoint "converter venda em X" para editar `deal_id`/`proposal_id`/
+  `proposal_option_id` depois de criada a venda — esses três são fixados na conversão e
+  não aparecem em `VendaPatch`. Se um dia a agente precisar "religar" uma venda a outra
+  proposta (raro, provavelmente erro de operação), é caso para nova action explícita, não
+  para abrir esses campos no patch genérico.
+- Não gerei parcela automaticamente dentro de `converterPropostaEmVenda` — a conversão só
+  cria a venda; parcelar é passo separado (`gerarParcelasDaVenda` ou `criarParcela`),
+  porque nem toda venda é parcelada do mesmo jeito que a opção sugeria (Pix à vista muda
+  tudo) e forçar geração automática criaria parcela para apagar na maioria dos casos.
+
+### Riscos
+
+- **Verificação ao vivo pendente** (ver seção acima) — o maior risco desta rodada, por
+  causa do ambiente, não do código.
+- Mesmos riscos estruturais já registrados nas rodadas anteriores (GUCs forjáveis por SQL
+  arbitrário) não mudam nesta rodada — `sales`/`receivables` usam a MESMA policy simples
+  de sempre, nenhum GUC novo.
+- `sales.fornecedor` é texto livre, não catálogo (sem tabela `suppliers`) — decisão
+  implícita do roteiro ("fornecedor" como campo, não como relação), mas se o produto
+  precisar de relatório "comissão por fornecedor" com nome consistente (evitar "CVC" vs.
+  "Cvc" vs. "cvc viagens"), vai precisar virar catálogo numa rodada futura.
+
+### O que precisa dos outros
+
+- **PO**: confirmar Docker/Postgres disponível e rodar `npm run db:migrate` +
+  `npx tsx scripts/check/known-failures.ts` antes de fechar a entrega — item 8 de
+  `docs/handoffs/rafa-para-po.md`.
+- **Nina**: tela de venda (a partir da proposta aceita) e tela de parcelas — contrato
+  completo em `docs/handoffs/rafa-para-nina.md`, seção "S9".
+- **Téo**: os cinco pontos de teste listados em `docs/handoffs/rafa-para-teo.md`, seção
+  "S9", mais a confirmação de que a varredura por catálogo de
+  `tenant-isolation.test.ts` pega as duas tabelas novas sem mudança de arquivo.
+
+---
+
+## Rodada anterior: S8 — tarefas e follow-up automático (motor de retenção)
 
 Critério de aceite ao pé da letra: proposta enviada numa sexta gera três tarefas
 (D+2, D+5, D+10) nas datas certas, com mensagem sugerida pronta, sem duplicar quando o

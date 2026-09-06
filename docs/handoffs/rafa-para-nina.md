@@ -495,3 +495,92 @@ async function listarTarefasDeHoje(opcoes?: { limite?: number }): Promise<Servic
   ver `docs/status/rafa.md`). Se quiser diferenciar visualmente ("follow-up de proposta"
   vs. "alerta de passaporte" vs. "tarefa manual"), o campo `source` já traz a distinção —
   não precisei inventar um segundo enum para isso.
+
+## S9 — vendas, comissão e recebíveis (o dinheiro), contrato completo
+
+Tudo em `src/server/sales.ts`, exportado no barril. Duas tabelas novas —
+`sales` e `receivables` — ver `src/db/schema/sales.ts` e
+`drizzle/0007_vendas_e_recebiveis.sql`. **Autenticado, sempre**: nenhuma dessas duas
+tabelas tem (ou deve ter) equivalente público — diferente de `proposals`, aqui não existe
+"link que o cliente vê".
+
+```ts
+type ComissaoStatus = 'prevista' | 'recebida' | 'atrasada';
+type ParcelaStatus = 'pendente' | 'pago' | 'atrasado' | 'cancelado';
+
+type VendaResumo = {
+  id: string;
+  dealId: string;
+  proposalId: string;
+  proposalOptionId: string | null;
+  fornecedor: string | null;       // operadora/fornecedor — texto livre, não catálogo
+  valorBrutoCents: number;         // preço cobrado do cliente (fotografia da opção aceita)
+  custoCents: number;              // NUNCA público — margem do agente
+  comissaoPrevistaCents: number;   // NUNCA público
+  taxaServicoCents: number;        // honorário do agente, além do preço do produto
+  comissaoStatus: ComissaoStatus;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type ParcelaResumo = {
+  id: string;
+  saleId: string;
+  venceEm: string;   // 'AAAA-MM-DD'
+  valorCents: number;
+  status: ParcelaStatus;
+  pagoEm: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+// Conversão — botão "gerar venda" na tela de proposta aceita
+async function converterPropostaEmVenda(
+  propostaId: string,
+  input?: { fornecedor?: string; taxaServicoCents?: number },
+): Promise<ServiceResult<VendaResumo>>
+
+// CRUD de venda
+async function listarVendas(filtro?: { comissaoStatus?: ComissaoStatus; limite?: number }): Promise<ServiceResult<VendaResumo[]>>
+async function obterVenda(vendaId: string): Promise<ServiceResult<VendaResumo>>
+async function atualizarVenda(vendaId: string, patch: {
+  fornecedor?: string; valorBrutoCents?: number; custoCents?: number;
+  comissaoPrevistaCents?: number; taxaServicoCents?: number;
+}): Promise<ServiceResult<VendaResumo>>
+async function atualizarStatusComissao(vendaId: string, status: ComissaoStatus): Promise<ServiceResult<VendaResumo>>
+async function excluirVenda(vendaId: string): Promise<ServiceResult<null>>
+
+// Parcelas do cliente
+async function listarParcelas(vendaId: string): Promise<ServiceResult<ParcelaResumo[]>>
+async function criarParcela(vendaId: string, input: { venceEm: string; valorCents: number }): Promise<ServiceResult<ParcelaResumo>>
+async function gerarParcelasDaVenda(vendaId: string, input: { quantidade: number; primeiraVencimento: string }): Promise<ServiceResult<ParcelaResumo[]>>
+async function atualizarParcela(parcelaId: string, patch: { venceEm?: string; valorCents?: number; status?: ParcelaStatus }): Promise<ServiceResult<ParcelaResumo>>
+async function marcarParcelaPaga(parcelaId: string): Promise<ServiceResult<ParcelaResumo>>
+async function excluirParcela(parcelaId: string): Promise<ServiceResult<null>>
+```
+
+Pontos que valem atenção na tela:
+
+- **`converterPropostaEmVenda` é idempotente**: chamar duas vezes (duplo clique) devolve a
+  MESMA venda, nunca cria duas — o índice único `sales_proposal_id_key` garante isso no
+  banco. Não precisa desabilitar o botão no cliente para segurança (embora seja boa
+  prática de UX desabilitar durante o request).
+- Recusa a conversão (`CONFLITO`) se a proposta ainda não estiver `status: 'accepted'`
+  com `acceptedOptionId` preenchido — mostre o botão "gerar venda" só depois do aceite.
+- `atualizarVenda`/`atualizarParcela` seguem o mesmo padrão de autosave de
+  `atualizarProposta`: só o que veio no patch muda, chame por campo perdendo foco.
+- `atualizarStatusComissao` NÃO é uma máquina de estado travada — dá para voltar de
+  `recebida` para `prevista` se o agente clicou errado. É conferência manual, não um fluxo
+  de aprovação.
+- `gerarParcelasDaVenda` divide `valorBrutoCents` em N parcelas mensais iguais (a última
+  absorve o resto em centavos) a partir de `primeiraVencimento` — recusa
+  (`CONFLITO`) se a venda já tiver parcela; para parcelamento manual/desigual (ex.: entrada
+  maior), use `criarParcela` direto, quantas vezes precisar.
+- `marcarParcelaPaga` é atalho de `atualizarParcela(id, { status: 'pago' })` — grava
+  `pagoEm = agora`. Mudar para qualquer outro status limpa `pagoEm` sozinho.
+- `excluirVenda` recusa (`CONFLITO`) se existir parcela `status: 'pago'` — peça para
+  cancelar as parcelas em aberto antes, nunca para apagar uma venda com pagamento
+  registrado.
+- Nenhum campo de `sales`/`receivables` tem rota pública. Se um dia a proposta pública
+  precisar mostrar "opções de parcelamento" ao cliente, isso já existe em
+  `proposal_options.installments`/`installment_cents` (S5/S6) — não é isto aqui.

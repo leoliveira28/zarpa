@@ -154,3 +154,18 @@ Pontos que importam para você decidir a proteção:
 - Resposta da função: `{ ok, data: { tenantsProcessados, followupsCriados,
   passaporteCriadas, aniversarioCriadas } }` (ou `{ ok: false, error }`) — dá para logar
   isso e não precisa de mais nada no corpo da resposta HTTP.
+
+## 8. S9 — Docker Desktop não subiu nesta sessão (ambiente, não código)
+
+Tentei `docker compose up -d db` / `open -a Docker` várias vezes nesta rodada (S9 —
+`sales`/`receivables`) e o daemon nunca ficou pronto (`docker info` sempre "não pronto",
+mesmo depois de esperas de minutos). Sem Postgres de pé, não consegui rodar
+`npm run db:migrate` nem `npx tsx scripts/check/known-failures.ts` para confirmar ao vivo
+que `drizzle/0007_vendas_e_recebiveis.sql` aplica limpa e que
+`tests/security/tenant-isolation.test.ts` cobre as duas tabelas novas — revisei a
+migration byte a byte contra o padrão das anteriores e `tsc`/`eslint` estão limpos, mas
+isso é verificação estática, não a mesma coisa que rodar contra Postgres de verdade.
+Pedido: alguém com Docker funcionando nesta máquina (ou no CI) rode a migration e a suíte
+antes de considerar a entrega fechada — detalhe completo em
+`docs/handoffs/rafa-para-teo.md`, seção "S9". Se isso se repetir em rodadas futuras, vale
+investigar se é específico desta sessão/sandbox ou algo mais estrutural no ambiente.

@@ -50,6 +50,13 @@
       "when": 1757808000000,
       "tag": "0006_regua_de_followup",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1757894400000,
+      "tag": "0007_vendas_e_recebiveis",
+      "breakpoints": true
     }
   ]
 }
