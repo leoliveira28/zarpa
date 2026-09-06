@@ -9,7 +9,7 @@ em `docs/handoffs/<seu-nome>-para-<destino>.md` e siga — não edite.
 | Backend / dados | Rafa | `src/db/**`, `src/lib/auth/**`, `src/lib/crypto/**`, `src/lib/tenant/**`, `src/server/**`, `drizzle/**`, `drizzle.config.ts` |
 | Frontend / design system | Nina | `src/components/**`, `src/styles/**`, `src/app/**` (exceto `src/app/api/**`), `src/lib/ui/**` |
 | Qualidade | Téo | `tests/**`, `vitest.config.ts`, `playwright.config.ts`, `.github/workflows/**`, `scripts/check/**` |
-| Raiz e config | PO (Claude) | `package.json`, `tsconfig.json`, `next.config.ts`, `.env*`, `CLAUDE.md`, `docs/**` |
+| Raiz e config | PO (Claude) | `package.json`, `tsconfig.json`, `next.config.ts`, `.env*`, `CLAUDE.md`, `docs/**`, `src/app/api/**` (glue de rota; auth por ora) |
 
 ## Regras
 1. **Não instale dependência.** Peça ao PO em `docs/handoffs/`. Evita conflito no `package.json`.
