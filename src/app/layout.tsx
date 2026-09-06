@@ -35,7 +35,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="pt-BR" className={`h-full ${display.variable}`}>
+    <html lang="pt-BR" className={`h-full ${display.variable}`} suppressHydrationWarning>
       <head>
         {/* Antes do primeiro paint: sem isso a tela pisca clara antes de escurecer. */}
         <script
