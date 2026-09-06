@@ -1,120 +1,140 @@
-# Status — Nina (frontend / design system)
+# Nina — status
 
-## Tarefa
-Fechar o loop de autenticação: construir a tela de login e proteger o grupo `(app)`
-para que ele pare de vazar `NÃO_AUTENTICADO` cru. Segui o contrato do `authClient` em
-`docs/handoffs/rafa-para-nina.md` à risca — não adivinhei nenhum shape de dado.
+## S5/S6 — Construtor de proposta
 
-## O que ficou pronto
+### Entregue
 
-### Rotas
-- **`/entrar`** (`src/app/entrar/page.tsx` + `LoginScreen.tsx`) — fora do grupo `(app)`,
-  então sem `AppShell`: registro "entrada/intermediário" do CLAUDE.md, não o miolo
-  silencioso. Uma `CompassPlate` (a única prancha que pode aparecer sozinha) a 14% de
-  opacidade, sangrando pelo canto superior direito, some em telas estreitas (`hidden
-  sm:block`) — em 390px ela brigaria com o formulário por espaço, e o registro pede
-  "discreta", não "presente a qualquer custo". Coluna ancorada à esquerda com margem de
-  livro (`max-w-[26rem]`, `pt-14`/`pt-20`), não um card flutuante centralizado — decisão
-  deliberada contra o "tudo centralizado" proibido no CLAUDE.md: um login de SaaS genérico
-  é exatamente uma caixa branca no meio da tela.
-- **`src/app/(app)/layout.tsx`** virou Server Component `async`: chama `getAuthContext()`
-  (barril de servidor do Rafa) antes de montar o `AppShell` e manda para `/entrar` com
-  `redirect()` se não houver sessão. Guard num lugar só — nenhuma tela-filha de `(app)`
-  precisa checar sessão sozinha, e nenhuma delas mais mostra `NÃO_AUTENTICADO` cru.
+- **`/propostas`** (`src/app/(app)/propostas/page.tsx`,
+  `src/app/(app)/propostas/PropostasScreen.tsx`) — lista real (`listarPropostas`),
+  busca com debounce, alternância "mostrar arquivadas" (`restaurarProposta`),
+  vazio com conteúdo de exemplo. "Nova proposta" abre uma Sheet
+  (`NovaPropostaSheet`) e chama `criarPropostaAPartirDoNegocio`.
 
-### Formulário
-- E-mail + senha (`authClient.signIn.email`) e link mágico (`authClient.signIn.magicLink`)
-  como segunda via — trocam de lugar num toggle, nunca lado a lado (a mesma regra do
-  rodapé de card: duas ações no mesmo peso viram indecisão, então a segunda é texto —
-  reusei `CardAction` para isso).
-- Erro com correção junto (`Field`/`FieldError` já prontos): senha errada destaca o campo
-  de senha e oferece "Corrigir a senha" (foca o input); e-mail sem conta destaca o e-mail.
-  Nunca "erro ao processar".
-- Olho de mostrar/ocultar senha (`EyeIcon`/`EyeOffIcon`, já existiam em `app/icons.tsx`) —
-  reage no `pointerdown`.
-- Skeleton (nunca spinner) enquanto `useSession()` resolve OU quando já existe sessão e a
-  tela está prestes a te tirar de lá — evita o flash de formulário que vai sumir.
+- **`/propostas/[id]/editar`** — o editor:
+  - `page.tsx` (server, resolve `params`) → `PropostaEditorScreen.tsx` (client).
+  - **Meta**: título (editável inline, estilo display), validade, moeda
+    (somente leitura — não há endpoint para trocar de moeda no meio da
+    proposta e não faria sentido de produto), resumo e condições/pagamento —
+    tudo com autosave granular (`atualizarProposta`, um campo por vez, como o
+    contrato pede) e `SavedMark` discreto, sem botão Salvar.
+  - **Opções (até 3)**: criar/remover (remoção usa o mesmo padrão de
+    `useDeferredDelete` — remove da tela na hora, some de verdade só se os 8s
+    do toast passarem sem "Desfazer" — porque `excluirOpcao` não tem endpoint
+    de restauração, é cascade real), reordenar com setas esquerda/direita
+    (`reordenarOpcoes`), campos de preço/custo/comissão com `CentsInput` novo
+    (ver abaixo), parcelas com o palpite de `sugerirValorParcelaCents`/
+    `sugerirComissaoCents` (`src/server/pricing.ts`, importado direto — são
+    funções síncronas, não `'use server'`, o próprio handoff do Rafa autoriza
+    isso), e "recomendar" (desmarca as outras, espelhando a regra do servidor
+    sem round-trip).
+  - **Blocos**: `BlocksEditor.tsx`. Abas por escopo ("Todas as opções" + uma
+    por opção — `position` é uma sequência por escopo no servidor, então cada
+    aba é uma lista arrastável independente). Reordenação por arrasto com
+    `Reorder.Group`/`Reorder.Item` (`motion/react`), alça própria
+    (`useDragControls`, sem "arrastar ao tocar em qualquer lugar do card" —
+    os campos de texto do bloco continuam clicáveis), incluindo teclado
+    (setas ▲▼) quando `prefers-reduced-motion` está ligado — nesse caso o
+    `Reorder.Group` nem monta, vira lista comum com botões. Cada bloco:
+    título, campos específicos do tipo (`CONTENT_FIELDS` — 4 a 6 campos por
+    tipo: hotel, voo, transfer, passeio, cruzeiro, seguro; texto/imagem/nota
+    de preço só têm título+corpo), descrição, upload de imagem
+    (`enviarImagemDaProposta`, até 10 por bloco), seletor "aparece em"
+    (move o bloco entre escopos, `atualizarBloco({ optionId })`), remoção com
+    o mesmo padrão de desfazer de 8s dos itens não restauráveis.
+  - **Biblioteca**: sheet "Adicionar bloco" com duas abas — "Novo" (grade de
+    tipos) e "Da biblioteca" (busca com debounce em `listarBiblioteca`,
+    "Inserir" chama `inserirItemDaBibliotecaComoBloco`).
+  - **Prévia** (`ProposalPreview.tsx`): registro editorial ao lado do
+    editor — display, arco (`ArchPlate`) como divisor de seção, cards de
+    opção lado a lado. Nunca lê `costCents`/`commissionCents` mesmo tendo
+    acesso a eles no mesmo objeto (regra do contrato: a prévia é uma
+    aproximação HONESTA da proposta pública, não pode vazar margem mesmo
+    sendo renderizada dentro do construtor autenticado).
+  - **Mobile (390px)**: editor e prévia não cabem lado a lado — viram um
+    segmented control "Editar"/"Prévia" no topo (`ViewToggle`). Os dois
+    painéis ficam sempre no DOM; só a visibilidade muda por breakpoint
+    (`hidden lg:flex` / `hidden lg:block`), então nada resincroniza ao trocar
+    de aba.
+  - Rota entrou em `WIDE_PATH_PATTERNS` no `AppShell` (só o editor, não a
+    lista) — no desktop ocupa a largura da janela porque é dois registros
+    lado a lado; comprimir os dois em 64rem fazia a prévia nascer estreita
+    demais para servir de prévia de verdade.
 
-### Loop fechado de verdade
-- Adicionei "Sair" no `SideNav` do `AppShell` (`signOut()` do client + `router.push` +
-  `router.refresh`). Sem isso a sessão só terminava apagando cookie na mão — não dava para
-  testar o guard de ponta a ponta pela própria interface.
+### Peças novas no design system (reaproveitáveis fora da proposta)
 
-### `src/lib/ui/authErrors.ts` (novo)
-Tradução pt-BR do erro do Better Auth. Testei `signIn.email` com senha errada direto no
-handler e confirmei que o `code` real é `INVALID_EMAIL_OR_PASSWORD` — então o mapeamento
-compara por `code` primeiro (estável) e só cai para `message.toLowerCase()` como rede de
-segurança nos casos que ainda não confirmei (usuário inexistente no magic link, e-mail não
-confirmado, limite de tentativas). Pedido aberto em `docs/handoffs/nina-para-rafa.md` para
-o Rafa confirmar os `code`s que faltam.
+- `parseBRLCents` em `src/lib/ui/format.ts` — o inverso tolerante de
+  `formatBRL`, para campo de dinheiro editável (nunca guarda float).
+- `CentsInput` em `src/components/ui/Money.tsx` — a metade "edição" do par
+  com `<Money>`: digita em reais, converte pra centavos só no commit
+  (blur/Enter), nunca mostra o rolo de dígitos (isso é para leitura, não
+  para o meio de uma digitação).
 
-## Decisões tomadas sozinha
-- **Uma prancha só, e ela some no celular estreito.** A regra "no máximo uma prancha por
-  tela" eu já esperava seguir; a parte que decidi sozinha foi escondê-la abaixo de `sm:` —
-  390px é o alvo real (CLAUDE.md: "o agente vive no celular"), e um enfeite que rouba
-  espaço do formulário na primeira tela que a pessoa vê é o oposto do que a direção pede.
-- **Coluna ancorada à esquerda, não centralizada.** Ver acima — evitar a "cara de template
-  gerado" de login boxado no centro da viewport. Também ajuda o teclado do celular: um
-  layout centralizado verticalmente pula quando o teclado abre; um layout em fluxo normal
-  (padding no topo, sem `justify-center`) não.
-- **`router.push('/hoje')` manual depois de `signIn.email`, além do `callbackURL`.** O
-  contrato documenta `callbackURL` como "para onde o Better Auth redireciona depois", mas
-  a chamada de e-mail/senha é um `fetch` do client, não uma navegação de página — testei
-  contra o handler e confirmei que ela não redireciona sozinha (só devolve JSON). Quem move
-  a agente de tela é o router do Next. `callbackURL` continua sendo passado porque o
-  contrato pede e ele importa de verdade no fluxo de magic link (ali é o servidor que
-  redireciona de fato, confirmado testando `/magic-link/verify` — devolve `302` com
-  `Location`).
-- **"Sair" só no `SideNav` (desktop), não na barra inferior do celular.** A barra inferior
-  já tem os 4 destinos no alvo de toque certo; enfiar um quinto item ali para uma ação rara
-  (sair) competiria por espaço todo dia com uma ação que a agente usa uma vez a cada trinta.
-  Testei o guard inteiro por `curl` (login, sessão, sign-out, redirecionamento), então a
-  ausência de "Sair" no mobile não bloqueou a verificação — mas é uma lacuna real que
-  registro aqui: alguém vai precisar de um jeito de sair pelo celular antes do S3 fechar.
-- **Mapeamento de erro por `code`, não só por `message`.** Ver seção acima. Escolhi
-  verificar isso na prática (`curl` contra o handler) em vez de assumir o texto do Better
-  Auth, porque comparar substring de mensagem em inglês quebra silenciosamente na primeira
-  atualização de dependência.
-- **Sem "Criar conta" na tela.** `signUp.email` existe no client mas não tem
-  `src/server/signup.ts` por trás (documentado pelo Rafa) — colocar o link levaria a uma
-  tela que estoura. Fica para quando o Rafa priorizar.
+### Decisões que tomei sozinha
 
-## Verificação
-- `npx tsc --noEmit` — limpo.
-- `npx vitest run tests/design/guards.test.ts` — 6/6 verde (tipografia, cor em contexto,
-  paridade de tema escuro, movimento só em `transform`/`opacity`, motion em JS com
-  reduced-motion, corte de `prefers-reduced-motion`). Não usei `transition-colors` nem
-  nenhum outro novo site fora de `transform`/`opacity` nos arquivos que criei.
-- `npm run build` — limpo. `/entrar` sai estático; todo o grupo `(app)` virou dinâmico
-  (`ƒ`), esperado — o guard lê `headers()` a cada request.
-- **Teste manual de ponta a ponta, via `npm run dev` + `curl`** (o dev server já estava no
-  ar em `:3000` de outra sessão; usei ele em vez de subir um segundo):
-  - `GET /clientes` sem cookie → `307` para `/entrar`. ✅ (o "fechar o loop" pedido).
-  - `POST /api/auth/sign-in/email` com `dev@zarpa.local` / `dev12345` → `200`, sessão
-    criada (`set-cookie` de `session_token`/`session_data`), `user.tenantId` presente.
-  - `GET /hoje` e `GET /clientes` com o cookie da sessão → `200` nos dois.
-  - Senha errada → `401`, `{"code":"INVALID_EMAIL_OR_PASSWORD"}` — confirma o `code` que
-    `authErrors.ts` compara.
-  - `POST /api/auth/sign-in/magic-link` → `{"status":true}`, link caiu no log do servidor
-    (`.next/dev/logs/next-development.log`), exatamente como o Rafa documentou (sem
-    `RESEND_API_KEY`). Segui o link (`GET /api/auth/magic-link/verify?...`) → `302` para
-    `/hoje` com sessão nova.
-  - `POST /api/auth/sign-out` (com `Origin` e cookie jar corretos) → `{"success":true}`,
-    cookies voltam com `Max-Age=0`; `GET /clientes` com esses cookies limpos → `307` para
-    `/entrar` de novo.
-  - Não abri um navegador de verdade para julgar o visual a olho (não tenho como dirigir
-    um aqui) — a verificação de pixel/animação fica para quem revisar a tela ao vivo.
+1. **Remoção de opção e de bloco usa "desfazer de 8s" mesmo sem endpoint de
+   restauração no servidor** — mesmo padrão de `useDeferredDelete` que já
+   existe em Clientes: a interface tira da tela na hora, e só manda
+   `excluirOpcao`/`excluirBloco` de verdade depois de 8s sem toque em
+   "Desfazer". Cumpre a regra do CLAUDE.md ("destrutivo = toast com desfazer,
+   não modal") sem esperar por um endpoint que o contrato deixa claro que não
+   vai existir (é cascade real).
+2. **Parcelamento não tem "limpar"**: o zod de `atualizarOpcao` não aceita
+   `null` para `installments`/`installmentCents` (exige inteiro válido
+   quando o campo vem no patch). Uma vez definido o número de parcelas, o
+   campo só troca para outro número — não há como voltar a "sem parcelamento"
+   pela interface hoje. Documentei isso no próprio componente; se for um
+   problema de produto, é uma linha nova no contrato (patch aceitando
+   `installments: null`), não algo para eu contornar do lado do cliente.
+3. **Conteúdo por tipo de bloco é um conjunto fixo de campos de texto**
+   (`CONTENT_FIELDS`) — o contrato não define forma interna para `content`
+   (é `Record<string, unknown>` livre). Escolhi 4–6 campos por tipo (ex.:
+   hotel → nome, categoria do quarto, check-in, check-out, regime) em vez de
+   um editor de JSON genérico, para caber no critério de "3 opções e 12
+   blocos em 4 minutos" — um editor JSON solto teria sido mais flexível e
+   muito mais lento de preencher.
+4. **Moeda da proposta é somente leitura no editor.** `atualizarProposta`
+   aceita trocar `currency`, mas não há regra de produto clara sobre o que
+   acontece com preços de opção já digitados numa moeda diferente — decidi
+   não expor a troca até isso ser uma decisão consciente, não um campo solto.
+5. **"Nova proposta" pede o `dealId` colado, não escolhido por nome** — não
+   existe hoje nenhum serviço que liste negócios do tenant (ver handoff).
+   Testei o caminho ponta a ponta colando um `id` de negócio direto do
+   Postgres do ambiente de dev.
 
-## Preciso dos outros
-`docs/handoffs/nina-para-rafa.md`: pedido para trocar o mapeamento de erro de
-`message.toLowerCase()` (frágil) para `error.code` (estável) nos casos que não testei
-diretamente — usuário inexistente no magic link, e-mail não confirmado, limite de
-tentativas. Não bloqueia nada, é robustez.
+### Bloqueio grave, fora da minha fronteira — não consegui completar a verificação manual
 
-## Fora desta entrega
-- **Cadastro público.** Depende de `src/server/signup.ts` (Rafa ainda não escreveu).
-- **"Sair" acessível no celular.** Só existe no `SideNav` de desktop hoje — ver decisão
-  acima.
-- **Julgamento visual em navegador real.** Verifiquei o contrato HTTP inteiro por `curl`;
-  a conferência de tipografia/espaçamento/movimento a olho, em 390px de verdade, fica para
-  quem tiver um navegador para abrir.
+`docs/handoffs/nina-para-rafa.md` tem o relato completo, mas o resumo: **o
+app inteiro (`npm run build` E `npm run dev`, qualquer rota, incluindo
+`/entrar`) quebra com `Module not found: Can't resolve '@vercel/blob'`**,
+vindo de `src/server/storage.ts` (o import dinâmico por especificador não
+literal engana o `tsc` mas não engana o bundler do Next/Turbopack — e como
+Next precisa de um manifesto global de Server Actions, o erro de bundling de
+`storage.ts` derruba toda rota, não só `/propostas`). Fiz:
+
+- `npx tsc --noEmit` — **limpo**.
+- `npx vitest run tests/design/guards.test.ts` — **6/6 verde**.
+- `npm run build` — **quebra** no arquivo acima (fora da minha fronteira,
+  não posso editar `src/server/**`).
+- Verificação manual ("logar com `dev@zarpa.local`, montar uma proposta") —
+  **não consegui rodar**: `npm run dev` cai no mesmo erro em qualquer rota,
+  inclusive `/entrar`, com `.next` limpo. Não é algo que eu tenha causado
+  agora (o arquivo já existia e já estava exportado por `@/server` antes
+  desta sessão) — é a primeira vez que alguém builda/sobe o app depois que
+  `proposals.ts`/`storage.ts` entraram no repositório.
+- Em compensação, **populei o banco de dev** (`npm run db:migrate` +
+  `npm run db:seed`, que ainda não tinham rodado neste ambiente — o banco
+  estava sem `deals`) e confirmei via `psql`/`docker exec` que os dois
+  tenants têm negócio, contato e proposta de exemplo, incluindo um negócio
+  SEM proposta (Buenos Aires, tenant "Volta ao Mundo") pronto para testar
+  "Nova proposta" assim que o build voltar a subir.
+- Revisei manualmente o contrato de cada action contra o código do editor
+  (assinaturas, shape de retorno, campos que nunca podem vazar) — não é
+  substituto de testar no navegador, mas reduz a chance de o primeiro teste
+  real revelar um erro de tipagem/contrato.
+
+### Handoffs abertos
+
+- `docs/handoffs/nina-para-rafa.md` — os dois itens acima: (1) o bloqueio de
+  build/dev em `storage.ts` (grave, bloqueia o app inteiro), (2) pedido de
+  `listarNegocios()` para trocar o campo de ID colado por um seletor de
+  verdade.

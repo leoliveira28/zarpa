@@ -2,8 +2,9 @@
 
 import * as React from "react";
 import { cn } from "@/lib/ui/cn";
-import { brlWidthTemplate, formatBRL } from "@/lib/ui/format";
+import { brlWidthTemplate, formatBRL, parseBRLCents } from "@/lib/ui/format";
 import { usePrefersReducedMotion } from "@/lib/ui/motion";
+import { Input } from "./Input";
 
 /* =============================================================================
    Money — o componente mais importante do produto.
@@ -285,6 +286,78 @@ function RollingDigit({
 
 function isDigit(character: string | undefined): boolean {
   return character !== undefined && character >= "0" && character <= "9";
+}
+
+/**
+ * Campo de valor em centavos — a metade "edição" do par com `<Money>`
+ * ("leitura"). Digita em reais ("1.234,56"), mas nunca guarda float: converte
+ * pra centavos no `onCommit` (blur, ou Enter), que é quando o autosave manda
+ * pro servidor. Enquanto o dedo digita, o campo é só texto — nenhum símbolo
+ * pulando de posição, nenhum `tabular-nums` brigando com o cursor.
+ */
+export function CentsInput({
+  cents,
+  onCommit,
+  placeholder = "0,00",
+  className,
+  invalid,
+  ...props
+}: {
+  cents: number | null;
+  onCommit: (cents: number) => void;
+  placeholder?: string;
+  className?: string;
+  invalid?: boolean;
+} & Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "value" | "onChange" | "onBlur" | "onCommit" | "placeholder" | "className" | "size"
+>) {
+  const [text, setText] = React.useState(() =>
+    cents == null ? "" : formatBRL(cents, { withSymbol: false }),
+  );
+  const lastCommitted = React.useRef(cents);
+
+  React.useEffect(() => {
+    // valor mudou por fora (ex.: outro campo recalculou) — sincroniza o texto
+    if (cents !== lastCommitted.current) {
+      lastCommitted.current = cents;
+      setText(cents == null ? "" : formatBRL(cents, { withSymbol: false }));
+    }
+  }, [cents]);
+
+  function commit() {
+    const parsed = parseBRLCents(text);
+    const next = parsed ?? 0;
+    if (next === lastCommitted.current) {
+      setText(formatBRL(next, { withSymbol: false }));
+      return;
+    }
+    lastCommitted.current = next;
+    setText(formatBRL(next, { withSymbol: false }));
+    onCommit(next);
+  }
+
+  return (
+    <Input
+      inputMode="decimal"
+      numeric
+      prefix="R$"
+      placeholder={placeholder}
+      aria-invalid={invalid || undefined}
+      className={className}
+      value={text}
+      onChange={(event) => setText(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit();
+          (event.target as HTMLInputElement).blur();
+        }
+      }}
+      {...props}
+    />
+  );
 }
 
 /**

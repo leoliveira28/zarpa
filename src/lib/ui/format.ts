@@ -35,6 +35,42 @@ export function formatBRL(
 }
 
 /**
+ * O inverso de `formatBRL`, tolerante ao que o dedo digita: aceita
+ * "1234,56", "1.234,56", "1234.56" ou só dígitos ("123456" -> R$ 1.234,56,
+ * como uma calculadora de valor). `null` para campo vazio ou lixo.
+ * Existe porque o campo de preço da proposta grava CENTAVOS (regra do
+ * contrato do servidor), nunca float — quem converte na borda é a interface.
+ */
+export function parseBRLCents(input: string): number | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  const cleaned = trimmed.replace(/[^\d,.-]/g, "");
+  if (!cleaned) return null;
+  const negative = cleaned.startsWith("-");
+  const body = cleaned.replace(/-/g, "");
+
+  // separador decimal: a vírgula, se existir; senão o último ponto, se ele
+  // tiver 1-2 dígitos depois (senão é separador de milhar, não decimal)
+  let integerPart = body;
+  let fracPart = "";
+  const lastComma = body.lastIndexOf(",");
+  const lastDot = body.lastIndexOf(".");
+  const decimalAt = lastComma >= 0 ? lastComma : lastDot >= 0 && body.length - lastDot <= 3 ? lastDot : -1;
+
+  if (decimalAt >= 0) {
+    integerPart = body.slice(0, decimalAt);
+    fracPart = body.slice(decimalAt + 1);
+  }
+  integerPart = integerPart.replace(/[.,]/g, "");
+  fracPart = fracPart.replace(/[.,]/g, "").slice(0, 2).padEnd(2, "0");
+
+  if (!integerPart && !fracPart) return null;
+  const cents = Number(integerPart || "0") * 100 + Number(fracPart || "0");
+  if (!Number.isFinite(cents)) return null;
+  return negative ? -cents : cents;
+}
+
+/**
  * Molde de largura: o mesmo número com todo dígito trocado por zero. Mantém
  * separador de milhar e vírgula exatamente onde estarão, então a largura
  * reservada é a largura real — não um chute.

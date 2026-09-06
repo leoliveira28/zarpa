@@ -61,13 +61,23 @@ const NAV: NavItem[] = [
  */
 const WIDE_ROUTES = ["/funil"];
 
+/**
+ * O construtor de proposta (S5/S6) entra na mesma exceção, mas só a TELA DE
+ * EDIÇÃO — a lista de propostas continua com medida de linha, como Clientes.
+ * O editor precisa da largura da janela porque no desktop ele é DOIS
+ * registros lado a lado (miolo silencioso + prévia editorial); comprimir os
+ * dois em 64rem é o que fazia o preview nascer estreito demais para
+ * comunicar "é assim que o cliente vê".
+ */
+const WIDE_PATH_PATTERNS = [/^\/propostas\/[^/]+\/editar$/];
+
 function useWideRoute(): boolean {
   const pathname = usePathname();
   return React.useMemo(
     () =>
       WIDE_ROUTES.some(
         (route) => pathname === route || pathname.startsWith(`${route}/`),
-      ),
+      ) || WIDE_PATH_PATTERNS.some((pattern) => pattern.test(pathname)),
     [pathname],
   );
 }
