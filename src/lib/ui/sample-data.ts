@@ -223,6 +223,403 @@ export function byStage(list: Proposal[] = PROPOSALS) {
   }));
 }
 
+/**
+ * Data da viagem, derivada de `travelIn` (dias a partir de hoje). Fica relativa
+ * a agora de propósito: com data fixa, a tela de exemplo envelhece e em três
+ * meses mostra viagem no passado. Formate com `formatDayMonthUTC` — a razão
+ * está lá.
+ */
+export function travelDate(proposal: Proposal, now: number = Date.now()): Date {
+  return new Date(now + proposal.travelIn * 86_400_000);
+}
+
 export function sumCents(list: Proposal[]): number {
   return list.reduce((total, proposal) => total + proposal.cents, 0);
+}
+
+/* =============================================================================
+   Contatos e passageiros — em memória, na forma exata do serviço real
+   -----------------------------------------------------------------------------
+   FRONTEIRA DE DADOS: `src/server/contacts.ts` e `src/server/travelers.ts` (Rafa)
+   já existem e já validam, cifram e auditam de verdade — mas exigem uma sessão
+   autenticada (`requireAuthContext`), e ainda não existe tela de login
+   (`docs/handoffs/rafa-para-nina.md`). Chamar os dois hoje devolveria
+   `NAO_AUTENTICADO` em toda visita, então a tela de Clientes lê DAQUI por
+   enquanto.
+
+   Os tipos abaixo (`ContatoAmostra`, `ViajanteAmostra`) são a MESMA FORMA de
+   `ContatoResumo`/`ContatoDetalhe`/`ViajanteResumo` do servidor — mesmo nome de
+   campo, mesma unidade (centavos, `MM-DD`, ISO). Não é coincidência: é o que
+   torna a troca um `import` só, no dia em que o login existir. Nenhum outro
+   componente deveria importar daqui além de `clientes/**`.
+   ========================================================================== */
+
+export type ContatoAmostra = {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  source: "whatsapp" | "instagram" | "indicacao" | "site" | "evento" | "outro" | null;
+  tags: string[];
+  temDocumento: boolean;
+  arquivado: boolean;
+  createdAt: Date;
+  notes: string | null;
+  /** `MM-DD`. Ano fica de fora — mesma regra do servidor. */
+  aniversario: string | null;
+  updatedAt: Date;
+  totalViajantes: number;
+  totalNegocios: number;
+};
+
+export type ViajanteAmostra = {
+  id: string;
+  contactId: string;
+  fullName: string;
+  kind: "adult" | "child" | "infant";
+  nationality: string;
+  temCpf: boolean;
+  temPassaporte: boolean;
+  /** ISO `YYYY-MM-DD`. Em claro no servidor também — não é dado sensível. */
+  passportExpiresOn: string | null;
+  aniversario: string | null;
+  createdAt: Date;
+};
+
+/** `hoje + n dias`, em `MM-DD` — para o alerta de aniversário nunca ficar velho. */
+function monthDayInDays(n: number, now: number = Date.now()): string {
+  const d = new Date(now + n * 86_400_000);
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** `hoje + n dias`, em ISO — para o passaporte vencer sempre daqui a pouco. */
+function isoInDays(n: number, now: number = Date.now()): string {
+  return new Date(now + n * 86_400_000).toISOString().slice(0, 10);
+}
+
+const DAY = 86_400_000;
+
+export const CONTATOS: ContatoAmostra[] = [
+  {
+    id: "c-1",
+    name: "Marina Albuquerque",
+    email: "marina.albuquerque@gmail.com",
+    phone: "(81) 99123-4567",
+    whatsapp: "(81) 99123-4567",
+    source: "indicacao",
+    tags: ["lua de mel", "recorrente"],
+    temDocumento: true,
+    arquivado: false,
+    createdAt: new Date(Date.now() - 220 * DAY),
+    notes: "Prefere resort com tudo incluído. Já fechou duas vezes.",
+    aniversario: monthDayInDays(9),
+    updatedAt: new Date(Date.now() - 2 * DAY),
+    totalViajantes: 2,
+    totalNegocios: 3,
+  },
+  {
+    id: "c-2",
+    name: "Kenji Tanaka",
+    email: "kenji.tanaka@outlook.com",
+    phone: "(11) 98877-2211",
+    whatsapp: "(11) 98877-2211",
+    source: "site",
+    tags: ["família"],
+    temDocumento: true,
+    arquivado: false,
+    createdAt: new Date(Date.now() - 140 * DAY),
+    notes: null,
+    aniversario: "03-18",
+    updatedAt: new Date(Date.now() - 9 * DAY),
+    totalViajantes: 4,
+    totalNegocios: 1,
+  },
+  {
+    id: "c-3",
+    name: "Rodrigo Sá",
+    email: null,
+    phone: "(41) 99654-8890",
+    whatsapp: "(41) 99654-8890",
+    source: "whatsapp",
+    tags: [],
+    temDocumento: false,
+    arquivado: false,
+    createdAt: new Date(Date.now() - 30 * DAY),
+    notes: null,
+    aniversario: null,
+    updatedAt: new Date(Date.now() - 12 * DAY),
+    totalViajantes: 1,
+    totalNegocios: 1,
+  },
+  {
+    id: "c-4",
+    name: "Cláudia Nogueira",
+    email: "claudia.wilson@gmail.com",
+    phone: "(21) 98111-3344",
+    whatsapp: "(21) 98111-3344",
+    source: "instagram",
+    tags: ["casal", "recorrente"],
+    temDocumento: true,
+    arquivado: false,
+    createdAt: new Date(Date.now() - 400 * DAY),
+    notes: "Wilson (marido) viaja junto sempre. Ele tem restrição alimentar.",
+    aniversario: monthDayInDays(3),
+    updatedAt: new Date(Date.now() - 1 * DAY),
+    totalViajantes: 2,
+    totalNegocios: 4,
+  },
+  {
+    id: "c-5",
+    name: "Ana Beatriz Nogueira",
+    email: "ana.bia@gmail.com",
+    phone: "(82) 99222-1010",
+    whatsapp: "(82) 99222-1010",
+    source: "evento",
+    tags: [],
+    temDocumento: false,
+    arquivado: false,
+    createdAt: new Date(Date.now() - 5 * DAY),
+    notes: null,
+    aniversario: null,
+    updatedAt: new Date(Date.now() - 5 * DAY),
+    totalViajantes: 0,
+    totalNegocios: 1,
+  },
+  {
+    id: "c-6",
+    name: "Sérgio Muniz",
+    email: "sergio.muniz@empresa.com.br",
+    phone: "(85) 98765-4321",
+    whatsapp: null,
+    source: "outro",
+    tags: ["corporativo"],
+    temDocumento: true,
+    arquivado: false,
+    createdAt: new Date(Date.now() - 600 * DAY),
+    notes: "Sempre viaja a trabalho, prefere voo cedo.",
+    aniversario: "11-02",
+    updatedAt: new Date(Date.now() - 40 * DAY),
+    totalViajantes: 1,
+    totalNegocios: 5,
+  },
+  {
+    id: "c-7",
+    name: "Letícia Moraes",
+    email: "leticia.moraes@gmail.com",
+    phone: "(31) 99456-7788",
+    whatsapp: "(31) 99456-7788",
+    source: "site",
+    tags: ["família"],
+    temDocumento: true,
+    arquivado: true,
+    createdAt: new Date(Date.now() - 500 * DAY),
+    notes: "Arquivada — não viaja há mais de um ano.",
+    aniversario: null,
+    updatedAt: new Date(Date.now() - 200 * DAY),
+    totalViajantes: 3,
+    totalNegocios: 2,
+  },
+];
+
+export const VIAJANTES: ViajanteAmostra[] = [
+  {
+    id: "v-1",
+    contactId: "c-1",
+    fullName: "Marina Albuquerque",
+    kind: "adult",
+    nationality: "BR",
+    temCpf: true,
+    temPassaporte: true,
+    passportExpiresOn: isoInDays(48),
+    aniversario: monthDayInDays(9),
+    createdAt: new Date(Date.now() - 220 * DAY),
+  },
+  {
+    id: "v-2",
+    contactId: "c-1",
+    fullName: "Felipe Andrade",
+    kind: "adult",
+    nationality: "BR",
+    temCpf: true,
+    temPassaporte: true,
+    passportExpiresOn: isoInDays(400),
+    aniversario: "07-22",
+    createdAt: new Date(Date.now() - 220 * DAY),
+  },
+  {
+    id: "v-3",
+    contactId: "c-2",
+    fullName: "Kenji Tanaka",
+    kind: "adult",
+    nationality: "BR",
+    temCpf: true,
+    temPassaporte: true,
+    passportExpiresOn: isoInDays(720),
+    aniversario: "03-18",
+    createdAt: new Date(Date.now() - 140 * DAY),
+  },
+  {
+    id: "v-4",
+    contactId: "c-2",
+    fullName: "Yuki Tanaka",
+    kind: "adult",
+    nationality: "BR",
+    temCpf: true,
+    temPassaporte: true,
+    passportExpiresOn: isoInDays(15),
+    aniversario: "05-30",
+    createdAt: new Date(Date.now() - 140 * DAY),
+  },
+  {
+    id: "v-5",
+    contactId: "c-2",
+    fullName: "Sofia Tanaka",
+    kind: "child",
+    nationality: "BR",
+    temCpf: false,
+    temPassaporte: true,
+    passportExpiresOn: isoInDays(15),
+    aniversario: "12-08",
+    createdAt: new Date(Date.now() - 140 * DAY),
+  },
+  {
+    id: "v-6",
+    contactId: "c-2",
+    fullName: "Haru Tanaka",
+    kind: "child",
+    nationality: "BR",
+    temCpf: false,
+    temPassaporte: false,
+    passportExpiresOn: null,
+    aniversario: "12-08",
+    createdAt: new Date(Date.now() - 140 * DAY),
+  },
+  {
+    id: "v-7",
+    contactId: "c-3",
+    fullName: "Rodrigo Sá",
+    kind: "adult",
+    nationality: "BR",
+    temCpf: false,
+    temPassaporte: false,
+    passportExpiresOn: null,
+    aniversario: null,
+    createdAt: new Date(Date.now() - 30 * DAY),
+  },
+  {
+    id: "v-8",
+    contactId: "c-4",
+    fullName: "Cláudia Nogueira",
+    kind: "adult",
+    nationality: "BR",
+    temCpf: true,
+    temPassaporte: true,
+    passportExpiresOn: isoInDays(200),
+    aniversario: monthDayInDays(3),
+    createdAt: new Date(Date.now() - 400 * DAY),
+  },
+  {
+    id: "v-9",
+    contactId: "c-4",
+    fullName: "Wilson Nogueira",
+    kind: "adult",
+    nationality: "BR",
+    temCpf: true,
+    temPassaporte: true,
+    passportExpiresOn: isoInDays(80),
+    aniversario: "09-30",
+    createdAt: new Date(Date.now() - 400 * DAY),
+  },
+  {
+    id: "v-10",
+    contactId: "c-6",
+    fullName: "Sérgio Muniz",
+    kind: "adult",
+    nationality: "BR",
+    temCpf: true,
+    temPassaporte: true,
+    passportExpiresOn: isoInDays(600),
+    aniversario: "11-02",
+    createdAt: new Date(Date.now() - 600 * DAY),
+  },
+];
+
+/** Contatos não arquivados que batem com nome, e-mail ou telefone. */
+export function buscarContatos(
+  termo: string,
+  { incluirArquivados = false }: { incluirArquivados?: boolean } = {},
+): ContatoAmostra[] {
+  const base = incluirArquivados ? CONTATOS : CONTATOS.filter((c) => !c.arquivado);
+  const alvo = termo.trim().toLocaleLowerCase("pt-BR");
+  if (!alvo) return base;
+  return base.filter((c) =>
+    [c.name, c.email, c.phone, c.whatsapp]
+      .filter(Boolean)
+      .some((campo) => campo!.toLocaleLowerCase("pt-BR").includes(alvo)),
+  );
+}
+
+export function viajantesDoContato(contactId: string): ViajanteAmostra[] {
+  return VIAJANTES.filter((v) => v.contactId === contactId);
+}
+
+/** Passaportes vencendo em até `dias` (padrão 90) — mesma janela do servidor. */
+export function passaportesVencendo(
+  dias = 90,
+): (ViajanteAmostra & { contatoNome: string; contactId: string })[] {
+  const limite = isoInDays(dias);
+  return VIAJANTES.filter((v) => v.passportExpiresOn && v.passportExpiresOn <= limite)
+    .map((v) => ({
+      ...v,
+      contatoNome: CONTATOS.find((c) => c.id === v.contactId)?.name ?? "—",
+    }))
+    .sort((a, b) => (a.passportExpiresOn ?? "").localeCompare(b.passportExpiresOn ?? ""));
+}
+
+/** Aniversários (contato + passageiro) nos próximos `dias` (padrão 14). */
+export function aniversariosProximos(
+  dias = 14,
+): { id: string; nome: string; aniversario: string; contactId: string }[] {
+  const hoje = new Date();
+  const alvo: { id: string; nome: string; aniversario: string; contactId: string }[] = [];
+
+  function diasAteProximoAniversario(monthDay: string): number {
+    const [month, day] = monthDay.split("-").map(Number);
+    const ano = hoje.getFullYear();
+    let proximo = new Date(ano, month - 1, day);
+    if (
+      Date.UTC(proximo.getFullYear(), proximo.getMonth(), proximo.getDate()) <
+      Date.UTC(hoje.getFullYear(), hoje.getMonth(), hoje.getDate())
+    ) {
+      proximo = new Date(ano + 1, month - 1, day);
+    }
+    return Math.round((proximo.getTime() - hoje.getTime()) / DAY);
+  }
+
+  for (const contato of CONTATOS) {
+    if (contato.arquivado || !contato.aniversario) continue;
+    if (diasAteProximoAniversario(contato.aniversario) <= dias) {
+      alvo.push({
+        id: contato.id,
+        nome: contato.name,
+        aniversario: contato.aniversario,
+        contactId: contato.id,
+      });
+    }
+  }
+  for (const viajante of VIAJANTES) {
+    if (!viajante.aniversario) continue;
+    if (diasAteProximoAniversario(viajante.aniversario) <= dias) {
+      alvo.push({
+        id: viajante.id,
+        nome: viajante.fullName,
+        aniversario: viajante.aniversario,
+        contactId: viajante.contactId,
+      });
+    }
+  }
+  return alvo.sort(
+    (a, b) => diasAteProximoAniversario(a.aniversario) - diasAteProximoAniversario(b.aniversario),
+  );
 }

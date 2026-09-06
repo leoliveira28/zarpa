@@ -13,7 +13,7 @@ export const metadata: Metadata = { title: "Propostas" };
 export default function PropostasPage() {
   return (
     <div className="flex flex-col gap-5">
-      <h2 className="text-32 font-semibold text-ink">Propostas</h2>
+      <h2 className="display text-32 text-ink">Propostas</h2>
       <EmptyState
         title="A lista de propostas chega na S3"
         description="A tela existe para a navegação não mentir. Quando o backend expuser leitura, esta lista mostra cada proposta com valor, estágio e quantas vezes o cliente abriu."

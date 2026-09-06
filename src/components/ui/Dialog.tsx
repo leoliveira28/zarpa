@@ -13,6 +13,9 @@ import { cn } from "@/lib/ui/cn";
 
    Entra com opacity + scale(0.98). Nada de deslizar de cima: o diálogo não vem
    de lugar nenhum, ele acontece no lugar onde a atenção já está.
+
+   O contorno de 1px aqui é deliberado: camada FLUTUANTE, não caixa sobre o
+   papel — ver a doutrina do fio em src/components/plates/index.tsx (Rule).
    ========================================================================== */
 
 export const Dialog = DialogPrimitive.Root;
@@ -78,7 +81,7 @@ export function DialogContent({
         ) : null}
 
         {footer ? (
-          <div className="flex items-center justify-end gap-2 border-t border-line-subtle px-4 py-3">
+          <div className="flex items-center justify-end gap-2 border-t border-hairline px-4 py-3">
             {footer}
           </div>
         ) : null}

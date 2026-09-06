@@ -18,6 +18,8 @@
   --color-veil: var(--surface-veil);
   --color-veil-strong: var(--surface-veil-strong);
   --color-scrim: var(--scrim);
+  --color-hairline: var(--hairline);
+  --color-plate: var(--plate);
 
   /* traço */
   --color-line: var(--border);
@@ -59,6 +61,7 @@
 
   /* tipografia — escala travada, sem degraus intermediários */
   --font-sans: var(--stack-ui);
+  --font-display: var(--stack-display);
   --font-mono: var(--stack-mono);
 
   --text-13: var(--fs-13);
@@ -94,6 +97,34 @@
   /* tempo */
   --ease-out-soft: var(--curve-out);
   --ease-in-out-soft: var(--curve-in-out);
+}
+
+/* =============================================================================
+   Variantes próprias
+   -----------------------------------------------------------------------------
+   `hover:` é REDEFINIDO aqui, e por dois motivos:
+
+   1. `@media (hover: hover)` — no celular o hover "gruda" depois do toque, e o
+      botão fica realçado até você tocar em outro lugar. É o detalhe que faz um
+      app parecer um site aberto no navegador.
+   2. `.force-hover` — o /kitchen-sink precisa mostrar o estado de hover PARADO,
+      lado a lado com o estado normal, senão não dá para conferir os dois temas
+      sem ficar com o mouse em cima. Redefinir a variante é melhor do que
+      reescrever cada estilo de hover numa classe de demonstração: a fonte da
+      verdade continua sendo o componente.
+   ========================================================================== */
+@custom-variant hover {
+  @media (hover: hover) {
+    &:hover {
+      @slot;
+    }
+  }
+  :where(.force-hover) & {
+    @slot;
+  }
+  &.force-hover {
+    @slot;
+  }
 }
 
 /* =============================================================================
@@ -145,6 +176,17 @@
   /* Radix marca o item ativo do teclado com data-highlighted; tratamos como foco. */
   [data-highlighted]:focus-visible {
     outline: none;
+  }
+
+  /* Foco de teclado CONGELADO, só para o /kitchen-sink: o anel do
+     `:focus-visible` some no instante em que você clica em outra coisa, e o
+     critério de aceite pede o estado visível parado, nos dois temas.
+     Repete as mesmas duas declarações e os mesmos tokens — se o anel mudar,
+     muda nos dois lugares e o kitchen-sink deixa de mentir. */
+  .force-focus,
+  .force-focus :is(button, a, input, textarea, select, [tabindex]) {
+    outline: var(--focus-ring-width) solid var(--focus);
+    outline-offset: var(--focus-ring-offset);
   }
 
   h1,

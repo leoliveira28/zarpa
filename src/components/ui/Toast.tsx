@@ -22,6 +22,9 @@ import { springDefault, usePrefersReducedMotion } from "@/lib/ui/motion";
      - o toast fica acima da barra inferior no celular (bottom-nav + safe-area)
      - `role="status"` + `aria-live="polite"`: o leitor de tela recebe a mesma
        chance de desfazer
+
+   O contorno de 1px aqui é deliberado: camada FLUTUANTE, não caixa sobre o
+   papel — ver a doutrina do fio em src/components/plates/index.tsx (Rule).
    ========================================================================== */
 
 export type ToastTone = "neutral" | "ok" | "warn" | "danger";

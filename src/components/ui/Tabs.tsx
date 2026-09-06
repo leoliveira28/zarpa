@@ -39,7 +39,8 @@ export function TabsList({
     <TabsPrimitive.List
       className={cn(
         "relative -mx-4 flex gap-1 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-        "border-b border-line",
+        // cornija: separa a fita de abas do painel, e usa o fio do sistema
+        "border-b border-hairline",
         className,
       )}
       {...props}

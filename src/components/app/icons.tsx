@@ -101,6 +101,15 @@ export function ChevronRightIcon(props: IconProps) {
   );
 }
 
+/** Checagem — rótulo da coluna "Fechada": venda confirmada, não um estado a monitorar. */
+export function CheckIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M3.5 8.5 6.5 11.5 12.5 5" />
+    </Icon>
+  );
+}
+
 export function ClockIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -133,6 +142,70 @@ export function SparkIcon(props: IconProps) {
   return (
     <Icon {...props}>
       <path d="M8 2.25 9.3 6.2l3.95 1.3-3.95 1.3L8 12.75 6.7 8.8 2.75 7.5 6.7 6.2z" />
+    </Icon>
+  );
+}
+
+/** Passaporte — caderneta com o brasão simplificado, para o alerta de validade. */
+export function PassportIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="3.25" y="1.75" width="9.5" height="12.5" rx="1.25" />
+      <circle cx="8" cy="6.1" r="1.5" />
+      <path d="M6 9.4h4M6.5 11.4h3" />
+    </Icon>
+  );
+}
+
+/** Bolo de aniversário — vela única, para o alerta de data de nascimento. */
+export function CakeIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M8 2.75v1.4" />
+      <path d="M7.3 2.1c0 .5.7.5.7 0s.7-.5.7 0" />
+      <path d="M2.75 13.25v-4a1.5 1.5 0 0 1 1.5-1.5h7.5a1.5 1.5 0 0 1 1.5 1.5v4Z" />
+      <path d="M2.75 10.75c.9.6 1.6.6 2.5 0s1.6-.6 2.5 0 1.6.6 2.5 0 1.6-.6 2.5 0" />
+    </Icon>
+  );
+}
+
+/** Documento — folha com dobra, para CPF/passaporte e itens de importação. */
+export function DocumentIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4.5 1.75h4.75L11.5 4.5v9.75h-7Z" />
+      <path d="M9.25 1.75V4.5H11.5" />
+      <path d="M6 8h3.5M6 10.25h3.5" />
+    </Icon>
+  );
+}
+
+/** Envio — seta subindo para dentro de uma bandeja, para o upload de planilha. */
+export function UploadIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M8 10.25v-7.5M5.25 5.25 8 2.5l2.75 2.75" />
+      <path d="M2.75 10.75v1.5a1 1 0 0 0 1 1h8.5a1 1 0 0 0 1-1v-1.5" />
+    </Icon>
+  );
+}
+
+/** Olho fechado — mostrar/esconder documento sensível (CPF, passaporte). */
+export function EyeIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M1.5 8s2.6-4.25 6.5-4.25S14.5 8 14.5 8s-2.6 4.25-6.5 4.25S1.5 8 1.5 8Z" />
+      <circle cx="8" cy="8" r="1.85" />
+    </Icon>
+  );
+}
+
+export function EyeOffIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M2.25 2.25l11.5 11.5" />
+      <path d="M6.6 4.1A6.9 6.9 0 0 1 8 3.95c3.9 0 6.5 4.05 6.5 4.05a11.4 11.4 0 0 1-2.15 2.55M4.5 5.15C2.6 6.5 1.5 8 1.5 8s2.6 4.25 6.5 4.25c.85 0 1.63-.16 2.32-.43" />
+      <path d="M6.6 9.4a1.85 1.85 0 0 0 2.6-2.6" />
     </Icon>
   );
 }

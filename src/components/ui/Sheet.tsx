@@ -28,6 +28,9 @@ import {
       arrastar pra ler vira arrastar pra fechar, e o usuário perde o lugar.
 
    O foco, o Esc e o `aria-modal` são do Radix Dialog. O movimento é nosso.
+
+   O contorno de 1px aqui é deliberado: camada FLUTUANTE, não caixa sobre o
+   papel — ver a doutrina do fio em src/components/plates/index.tsx (Rule).
    ========================================================================== */
 
 type Side = "bottom" | "right";
@@ -229,7 +232,7 @@ export function SheetContent({
                   </div>
 
                   {footer ? (
-                    <div className="shrink-0 border-t border-line-subtle bg-surface px-4 py-3 pb-safe">
+                    <div className="shrink-0 border-t border-hairline bg-surface px-4 py-3 pb-safe">
                       {footer}
                     </div>
                   ) : null}

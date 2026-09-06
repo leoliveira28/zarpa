@@ -4,8 +4,10 @@ import { cn } from "@/lib/ui/cn";
 /* =============================================================================
    Badge
    -----------------------------------------------------------------------------
-   Nada de pílula colorida gritante. Fundo suave, texto na cor forte do mesmo
-   matiz, traço de 1px pra segurar a forma em fundo escuro.
+   Nada de pílula colorida gritante. Fundo suave e texto na cor forte do mesmo
+   matiz — e SEM contorno: o fundo já define a forma nos dois temas, e um traço
+   a mais em volta de cada status vira renda na tela de funil, onde cabem vinte
+   badges de uma vez.
 
    `dot` desenha um ponto sólido antes do rótulo: cor sozinha não é informação
    acessível, e o ponto ajuda a bater o olho na coluna de status.
@@ -16,23 +18,23 @@ type BadgeSize = "sm" | "md";
 
 const tones: Record<BadgeTone, { chip: string; dot: string }> = {
   neutral: {
-    chip: "bg-surface-3 text-muted border-line",
+    chip: "bg-surface-3 text-muted",
     dot: "bg-muted",
   },
   accent: {
-    chip: "bg-accent-soft text-accent-soft-ink border-accent-line/50",
+    chip: "bg-accent-soft text-accent-soft-ink",
     dot: "bg-accent",
   },
   ok: {
-    chip: "bg-ok-soft text-ok-soft-ink border-ok/25",
+    chip: "bg-ok-soft text-ok-soft-ink",
     dot: "bg-ok",
   },
   warn: {
-    chip: "bg-warn-soft text-warn-soft-ink border-warn/25",
+    chip: "bg-warn-soft text-warn-soft-ink",
     dot: "bg-warn",
   },
   danger: {
-    chip: "bg-danger-soft text-danger-soft-ink border-danger/25",
+    chip: "bg-danger-soft text-danger-soft-ink",
     dot: "bg-danger",
   },
 };
@@ -59,7 +61,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center rounded-sm border font-medium whitespace-nowrap",
+        "inline-flex shrink-0 items-center rounded-sm font-medium whitespace-nowrap",
         tones[tone].chip,
         sizes[size],
         className,

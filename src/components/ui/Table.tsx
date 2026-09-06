@@ -8,8 +8,10 @@ import { Skeleton } from "./Skeleton";
    Densa de propósito: 40px de linha. Tabela arejada demais obriga a rolar para
    comparar duas linhas, e comparar é a única razão de existir uma tabela.
 
-   Sem zebra. A separação vem de um filete de 1px em --border-subtle; zebra
-   compete com o realce de hover e com a cor de status.
+   Sem zebra e SEM MOLDURA. A separação vem do fio horizontal — cornija entre
+   registros, na regra da direção Papel e Pedra. Zebra compete com o realce de
+   hover e com a cor de status; borda em volta transforma a tabela numa caixa,
+   e uma tabela não é uma caixa: é uma pilha de registros.
 
    O cabeçalho gruda no topo ao rolar. Coluna numérica alinha à direita —
    sempre, sem exceção — e usa tabular-nums.
@@ -22,7 +24,9 @@ export function TableFrame({
   return (
     <div
       className={cn(
-        "overflow-x-auto rounded-lg border border-line bg-surface",
+        // papel, raio de card, sem contorno: o que delimita a tabela é o fio
+        // do cabeçalho em cima e o fim das linhas embaixo
+        "overflow-x-auto rounded-lg bg-surface",
         className,
       )}
       {...props}
@@ -49,7 +53,8 @@ export function THead({
   return (
     <thead
       className={cn(
-        "sticky top-0 z-10 bg-surface-2 [box-shadow:inset_0_-1px_0_var(--border)]",
+        // o fio do cabeçalho é a cornija da tabela: --hairline, não --border
+        "sticky top-0 z-10 bg-surface-2 [box-shadow:inset_0_-1px_0_var(--hairline)]",
         className,
       )}
       {...props}

@@ -1,3 +1,4 @@
+import * as React from "react";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type { Transition } from "motion/react";
 
@@ -189,9 +190,40 @@ export function useMediaQuery(query: string): boolean {
   );
 }
 
-/** `true` quando o usuário pediu menos movimento. */
+/**
+ * Força reduced-motion (ligado ou desligado) numa sub-árvore, sem tocar na
+ * preferência real do sistema.
+ *
+ * Existe por um motivo só: o critério de aceite do S2 pede o /kitchen-sink
+ * "verificado com reduced-motion ligado", e verificar isso trocando a
+ * preferência do SO no meio da conferência — e lembrando de voltar depois —
+ * é o tipo de fricção que faz a conferência não acontecer de novo na próxima
+ * mudança. Com o override, a página mostra as duas versões lado a lado, e
+ * `usePrefersReducedMotion` abaixo simplesmente prefere o override quando
+ * existe. Fora do kitchen-sink ninguém deveria usar isto — o normal é ler a
+ * preferência real.
+ */
+const ReducedMotionOverrideContext = React.createContext<boolean | null>(null);
+
+export function ReducedMotionOverride({
+  value,
+  children,
+}: {
+  value: boolean;
+  children: React.ReactNode;
+}) {
+  return React.createElement(
+    ReducedMotionOverrideContext.Provider,
+    { value },
+    children,
+  );
+}
+
+/** `true` quando o usuário pediu menos movimento (ou quando o kitchen-sink forçou). */
 export function usePrefersReducedMotion(): boolean {
-  return useMediaQuery("(prefers-reduced-motion: reduce)");
+  const override = React.useContext(ReducedMotionOverrideContext);
+  const system = useMediaQuery("(prefers-reduced-motion: reduce)");
+  return override ?? system;
 }
 
 /** `true` quando o usuário pediu menos transparência (some o blur). */

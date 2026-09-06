@@ -3,7 +3,6 @@
 import * as React from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/ui/cn";
-import { formatBRL } from "@/lib/ui/format";
 import { useTransitionPreset } from "@/lib/ui/motion";
 import {
   PROPOSALS,
@@ -213,8 +212,14 @@ export function TodayScreen() {
       <section aria-labelledby="hoje-paradas">
         <SectionHeading
           action={
-            <span className="text-13 text-muted">
-              {formatBRL(sumCents(parked))} parados
+            <span className="flex items-baseline gap-1 text-13 text-muted">
+              <Money
+                cents={parked.length > 0 ? sumCents(parked) : 0}
+                size="13"
+                tone="muted"
+                reserveFor={30_000_000}
+              />
+              parados
             </span>
           }
         >
@@ -318,7 +323,7 @@ function Greeting({
             ][now.getMonth()]
           }
         </p>
-        <h2 className="mt-1 text-32 font-semibold text-ink">Hoje</h2>
+        <h2 className="display mt-1 text-32 text-ink">Hoje</h2>
       </div>
 
       {/* Dois números, não seis. Painel com muita métrica não informa, decora. */}
@@ -350,7 +355,9 @@ function Greeting({
 /** Amostra do que aparece quando alguém abre a proposta. Só visual. */
 function OpenedPreview() {
   return (
-    <div className="flex items-center gap-3 rounded-md border border-line bg-surface p-3">
+    // Papel, não caixa: um preview é conteúdo que mora na página, e a regra do
+    // fio proíbe contorno nos quatro lados aí (Rule > "onde o traço pode").
+    <div className="flex items-center gap-3 rounded-md bg-surface p-3 shadow-1">
       <span className="grid size-9 shrink-0 place-items-center rounded-md bg-accent-soft text-accent-soft-ink">
         <OpenedIcon className="size-4" />
       </span>

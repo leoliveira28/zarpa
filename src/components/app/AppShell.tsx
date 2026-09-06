@@ -45,6 +45,32 @@ const NAV: NavItem[] = [
   { href: "/clientes", label: "Clientes", icon: ClientsIcon },
 ];
 
+/**
+ * Rotas de QUADRO: ocupam a largura útil da janela e não rolam a página.
+ *
+ * O `max-w-[64rem]` do miolo existe para medida de linha — Hoje, Propostas e
+ * Clientes são leitura, e leitura larga demais cansa. O funil não é leitura: é
+ * uma comparação entre cinco conjuntos, e comparar pede que os cinco caibam na
+ * tela ao mesmo tempo. Espremer isso em 64rem é o que fazia a tela parecer um
+ * padrão de celular esticado.
+ *
+ * A exceção mora AQUI, nomeada, e não em margem negativa dentro da tela: uma
+ * `-mx-*` que tenta desfazer um `mx-auto max-w` não desfaz — ela desalinha, e
+ * some no dia em que o shell mudar de padding.
+ */
+const WIDE_ROUTES = ["/funil"];
+
+function useWideRoute(): boolean {
+  const pathname = usePathname();
+  return React.useMemo(
+    () =>
+      WIDE_ROUTES.some(
+        (route) => pathname === route || pathname.startsWith(`${route}/`),
+      ),
+    [pathname],
+  );
+}
+
 function useActiveHref() {
   const pathname = usePathname();
   return React.useMemo(() => {
@@ -58,15 +84,28 @@ function useActiveHref() {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const activeHref = useActiveHref();
   const pathname = usePathname();
+  const wide = useWideRoute();
   const title =
     NAV.find((item) => item.href === activeHref)?.label ??
     (pathname === "/kitchen-sink" ? "Kitchen sink" : APP_NAME);
 
   return (
-    <div className="min-h-dvh bg-bg lg:grid lg:grid-cols-[15rem_minmax(0,1fr)]">
+    <div
+      className={cn(
+        "min-h-dvh bg-bg lg:grid lg:grid-cols-[15rem_minmax(0,1fr)]",
+        // altura travada na viewport: quem rola passa a ser o conteúdo do
+        // quadro, não a página. Só no desktop — no celular a página rola.
+        wide && "lg:h-dvh",
+      )}
+    >
       <SideNav activeHref={activeHref} />
 
-      <div className="flex min-h-dvh min-w-0 flex-col">
+      <div
+        className={cn(
+          "flex min-h-dvh min-w-0 flex-col",
+          wide && "lg:h-full lg:min-h-0",
+        )}
+      >
         <TopBar title={title} />
 
         <main
@@ -76,6 +115,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             // espaço para a barra inferior + safe area do iPhone
             "pb-[calc(env(safe-area-inset-bottom,0px)+5.5rem)]",
             "sm:px-6 lg:px-8 lg:pb-10",
+            wide &&
+              cn(
+                "lg:mx-0 lg:max-w-none",
+                // min-h-0 é o que permite a um filho rolar dentro de um flex:
+                // sem ele o item cresce até o conteúdo e a página volta a rolar
+                "lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden",
+                "lg:px-6 lg:pb-6",
+              ),
           )}
         >
           {children}
@@ -92,7 +139,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 function SideNav({ activeHref }: { activeHref: string | null }) {
   const transition = useTransitionPreset("snap");
   return (
-    <aside className="sticky top-0 hidden h-dvh flex-col border-r border-line bg-surface lg:flex">
+    <aside className="sticky top-0 hidden h-dvh flex-col border-r border-hairline bg-surface lg:flex">
       <div className="flex h-14 shrink-0 items-center gap-2 px-5">
         <Wordmark />
       </div>
@@ -125,7 +172,7 @@ function SideNav({ activeHref }: { activeHref: string | null }) {
         })}
       </nav>
 
-      <div className="mt-auto flex flex-col gap-3 border-t border-line p-3">
+      <div className="mt-auto flex flex-col gap-3 border-t border-hairline p-3">
         <Link
           href="/kitchen-sink"
           className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
@@ -147,7 +194,7 @@ function TopBar({ title }: { title: string }) {
   return (
     <header
       className={cn(
-        "veil sticky top-0 z-30 border-b border-line",
+        "veil sticky top-0 z-30 border-b border-hairline",
         "flex h-14 shrink-0 items-center gap-3 px-4 sm:px-6 lg:px-8",
       )}
     >
@@ -181,7 +228,7 @@ function BottomNav({ activeHref }: { activeHref: string | null }) {
     <nav
       aria-label="Principal"
       className={cn(
-        "veil-strong fixed inset-x-0 bottom-0 z-30 border-t border-line lg:hidden",
+        "veil-strong fixed inset-x-0 bottom-0 z-30 border-t border-hairline lg:hidden",
         "pb-safe",
       )}
     >

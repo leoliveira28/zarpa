@@ -71,6 +71,26 @@ export function formatDayMonth(date: Date, reference = new Date()): string {
     : `${base} ${date.getFullYear()}`;
 }
 
+/**
+ * A mesma coisa, lida em UTC.
+ *
+ * Existe por um motivo só, e é grave o bastante para ter função própria: uma
+ * data derivada de `Date.now()` e formatada com `getDate()` **local** sai
+ * diferente no servidor (UTC) e no navegador (America/Sao_Paulo) no mesmo
+ * instante, durante três horas por dia. O React vê o texto divergir na
+ * hidratação e o repinta — ou seja, a data PISCA na tela. Lida em UTC, a conta
+ * é a mesma dos dois lados.
+ *
+ * Use esta quando a data vier de um deslocamento em dias (`hoje + n`). Para
+ * data de calendário vinda do banco, `formatDayMonth` continua valendo.
+ */
+export function formatDayMonthUTC(date: Date, reference = new Date()): string {
+  const base = `${date.getUTCDate()} ${MONTHS_SHORT[date.getUTCMonth()]}`;
+  return date.getUTCFullYear() === reference.getUTCFullYear()
+    ? base
+    : `${base} ${date.getUTCFullYear()}`;
+}
+
 export function formatWeekday(date: Date): string {
   return WEEKDAYS_SHORT[date.getDay()];
 }

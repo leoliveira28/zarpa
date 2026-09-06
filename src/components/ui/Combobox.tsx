@@ -38,6 +38,8 @@ export interface ComboboxProps {
   invalid?: boolean;
   className?: string;
   id?: string;
+  /** Nasce aberto. Só para o /kitchen-sink mostrar o painel parado. */
+  defaultOpen?: boolean;
 }
 
 export function Combobox({
@@ -52,9 +54,10 @@ export function Combobox({
   invalid,
   className,
   id,
+  defaultOpen = false,
 }: ComboboxProps) {
   const fieldProps = useFieldControl();
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpen] = React.useState(defaultOpen);
   const [query, setQuery] = React.useState("");
   const [activeIndex, setActiveIndex] = React.useState(0);
   const listRef = React.useRef<HTMLDivElement>(null);
