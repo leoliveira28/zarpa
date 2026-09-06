@@ -1,0 +1,113 @@
+name: CI
+
+# Critério de aceite da S1, ao pé da letra: "um teste automatizado que tenta ler dado
+# de outro tenant retorna zero linhas, rodando no CI". Este workflow existe para que
+# essa frase pare de depender de alguém lembrar de rodar `npm test` na própria máquina.
+#
+# `tests/security/tenant-isolation.test.ts` e `tests/security/rls-enabled.test.ts` não
+# têm passo dedicado aqui: eles rodam dentro da suíte inteira do vitest (o
+# `globalSetup` do vitest.config.ts recria o schema e aplica TODAS as migrations antes
+# de qualquer teste, então não há como rodar a suíte sem rodá-los).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancela execução anterior do mesmo PR/branch quando chega um push novo — não faz
+# sentido gastar o serviço de Postgres rodando uma revisão que já foi substituída.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: typecheck + migrations + vitest (com allowlist da S7)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # Sobe com o superusuário padrão da imagem. O papel `zarpa` — o mesmo
+          # NOSUPERUSER/NOBYPASSRLS que o CLAUDE.md exige — é criado no passo
+          # "Bootstrap Postgres" abaixo, rodando o MESMO script SQL do ambiente
+          # local (scripts/db-init/01-init.sql). Duas fontes de verdade para o
+          # mesmo papel seria o tipo de deriva que faz "passa na minha máquina,
+          # quebra no CI" acontecer.
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      - name: npm run typecheck
+        run: npm run typecheck
+
+      - name: Bootstrap Postgres (papel zarpa + zarpa_dev/zarpa_test, via scripts/db-init)
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f scripts/db-init/01-init.sql
+
+      - name: Escrever .env.local do job
+        # Efêmero — vive só neste runner e é apagado com ele. Nada aqui é segredo real:
+        # são as MESMAS credenciais de desenvolvimento do docker-compose.yml (zarpa/zarpa,
+        # localhost:5432), e a chave de cifra é gerada na hora, 32 bytes de verdade — é
+        # exatamente a chave que scripts/check/known-failures.ts espera encontrar válida
+        # (ver o comentário lá sobre a entrada da allowlist que ficou obsoleta).
+        run: |
+          cat > .env.local <<EOF
+          DATABASE_URL=postgres://zarpa:zarpa@localhost:5432/zarpa_dev
+          TEST_DATABASE_URL=postgres://zarpa:zarpa@localhost:5432/zarpa_test
+          BETTER_AUTH_SECRET=ci-$(openssl rand -hex 24)
+          BETTER_AUTH_URL=http://localhost:3000
+          ENCRYPTION_KEY_V1=$(openssl rand -base64 32)
+          APP_NAME=Zarpa
+          EOF
+
+      - name: Aplicar migrations no banco de teste (drizzle-orm migrator, mesmo caminho de produção)
+        # USE_TEST_DATABASE=1 é o que faz src/db/env.ts#databaseUrl() apontar para
+        # TEST_DATABASE_URL em vez de DATABASE_URL — ver o próprio arquivo.
+        # Isto é redundante com o globalSetup do vitest de propósito: o globalSetup
+        # aplica o `.sql` cru statement a statement (ver tests/setup/global-setup.ts);
+        # este passo aplica pelo migrator real do drizzle-orm, o caminho que produção
+        # vai usar de fato. Se um dia os dois divergirem, é aqui que aparece primeiro.
+        run: npm run db:migrate
+        env:
+          USE_TEST_DATABASE: '1'
+
+      - name: vitest — portão com allowlist nomeada dos 3 vermelhos da S7
+        # Não é `npm test` puro de propósito. `public-proposal.test.ts` tem 3 casos
+        # vermelhos DE PROPÓSITO: a leitura pública da proposta (função SECURITY
+        # DEFINER) é trabalho da S7 e ainda não existe — ver
+        # docs/handoffs/rafa-para-teo.md, item 5, e o cabeçalho de
+        # scripts/check/known-failures.ts. `npm test` cru quebraria o CI HOJE por um
+        # motivo que não é regressão nenhuma.
+        #
+        # scripts/check/known-failures.ts roda a suíte inteira (é o mesmo `vitest run`
+        # de `npm test`, só que via reporter JSON) e falha o job se:
+        #   1. QUALQUER teste fora dos 3 nomeados estiver vermelho — regressão de
+        #      verdade continua parando o CI, sem exceção nenhuma;
+        #   2. um dos 3 da lista virar verde — allowlist que sobra depois que a S7
+        #      chegou é cobertura falsa; o dia em que a Rafa entregar a função, este
+        #      job fica VERMELHO até alguém tirar a entrada (isto já aconteceu uma vez
+        #      nesta mesma sprint com uma 4ª entrada de chave de cifra — o script pegou).
+        run: npx tsx scripts/check/known-failures.ts

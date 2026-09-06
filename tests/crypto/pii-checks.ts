@@ -59,15 +59,60 @@ function throws(fn: () => unknown): boolean {
   }
 }
 
-export function flipLastAlphanumeric(s: string): string {
-  for (let i = s.length - 1; i >= 0; i--) {
-    const ch = s[i]
-    if (/[A-Za-z0-9]/.test(ch)) {
-      const next = ch === 'A' ? 'B' : ch === '0' ? '1' : ch === 'a' ? 'b' : 'A'
-      return s.slice(0, i) + next + s.slice(i + 1)
-    }
+/**
+ * Corrompe UM caractere do envelope, de um jeito que garante byte decodificado
+ * diferente — não só caractere diferente.
+ *
+ * A versão anterior desta função trocava o ÚLTIMO caractere alfanumérico do
+ * envelope inteiro, que quase sempre é o último caractere do segmento de
+ * ciphertext em base64url. Quando o ciphertext (ou a tag) não tem comprimento
+ * múltiplo de 3 bytes — aqui SEMPRE não tem: `SEGREDO` tem 14 bytes, a tag do
+ * GCM tem 16 — o último caractere de base64 carrega só 2 dos 6 bits em dado
+ * de verdade; os outros 4 bits são padding, descartados na decodificação.
+ * Descoberto rodando este arquivo em loop: em ~1 a cada 3 execuções o
+ * caractere sorteado (o resultado do IV aleatório) caía inteiramente na zona
+ * de padding e o `decrypt` do ciphertext "adulterado" tinha os MESMOS bytes de
+ * antes — passava batido, tag do GCM intacta, teste ficava verde por sorte.
+ * Isso é exatamente o tipo de teste de segurança que eu não quero: verde sem
+ * garantir nada, ~33% do tempo.
+ *
+ * A correção: mutar um caractere no MEIO do maior segmento do envelope
+ * (afastado de qualquer borda de grupo incompleto de base64), e substituí-lo
+ * por um caractere de valor bem diferente (não um "+1" que pode cair só no
+ * bit de padding). No meio de um segmento longo, todo grupo de base64 está
+ * completo — os 6 bits do caractere são todos dado real, então qualquer
+ * caractere diferente produz byte(s) decodificado(s) diferente(s), e a tag do
+ * GCM (que autentica CADA byte do ciphertext, não só a borda) sempre rejeita.
+ */
+export function tamperEnvelope(s: string): string {
+  const parts = s.split('.')
+  let targetIndex = 0
+  for (let i = 1; i < parts.length; i++) {
+    if (parts[i].length > parts[targetIndex].length) targetIndex = i
   }
-  return `${s}X`
+  const target = parts[targetIndex]
+
+  if (target.length === 0) {
+    parts[targetIndex] = 'X'
+    return parts.join('.')
+  }
+
+  // Fica pelo menos 2 caracteres longe de qualquer borda (início ou fim do
+  // segmento) quando o segmento é comprido o bastante; em segmento curto,
+  // cai no meio mesmo — ainda assim longe da borda mais do que um flip no
+  // último caractere estaria.
+  const margin = target.length > 4 ? 2 : 0
+  const pos = Math.min(
+    Math.max(margin, Math.floor(target.length / 2)),
+    target.length - 1 - margin,
+  )
+  const original = target[pos]
+  // 'Z' é um valor de 6 bits bem afastado da maioria dos caracteres de
+  // base64/base64url (A–Z, a–z, 0–9, -, _); se o original já for 'Z', usa 'A'
+  // (o outro extremo do alfabeto) — o que importa é NUNCA repetir o valor.
+  const replacement = original === 'Z' ? 'A' : 'Z'
+  parts[targetIndex] = target.slice(0, pos) + replacement + target.slice(pos + 1)
+  return parts.join('.')
 }
 
 export function runCryptoChecks(mod: CryptoModule): CryptoCheck[] {
@@ -153,7 +198,7 @@ export function runCryptoChecks(mod: CryptoModule): CryptoCheck[] {
   )
 
   // adulteração
-  const tampered = flipLastAlphanumeric(stored)
+  const tampered = tamperEnvelope(stored)
   add(
     'adulteracao-detectada',
     throws(() => mod.decrypt(tampered)),

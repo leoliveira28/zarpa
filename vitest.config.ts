@@ -1,6 +1,20 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  // Sem isto, qualquer módulo de `src/server/**` que use o alias `@/*` (a maioria —
+  // é o padrão do projeto, ver tsconfig.json `paths`) quebra a resolução assim que o
+  // vitest tenta importá-lo, mesmo que o TESTE em si só use caminho relativo. Os testes
+  // de segurança escapam disso hoje porque `src/lib/crypto` e `src/lib/tenant` (só o
+  // que eles importam) só usam caminho relativo internamente — `src/server/imports.ts`
+  // não tem essa sorte. Um alias só, espelhando o `tsconfig.json`, resolve para toda
+  // a árvore de uma vez — não é gambiarra por arquivo.
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
+
   test: {
     environment: 'node',
     globals: false,

@@ -1,12 +1,14 @@
 /**
  * Portão de CI para a suíte do vitest, sem baixar a régua.
  *
- * Hoje 4 testes ficam vermelhos DE PROPÓSITO:
- *   - 3 em `public-proposal.test.ts`: a leitura pública da proposta é
- *     trabalho da S7 (função SECURITY DEFINER ainda não existe). Ver
- *     `docs/handoffs/rafa-para-teo.md`, item 5.
- *   - 1 em `pii.test.ts`: `ENCRYPTION_KEY_V1` de desenvolvimento é um
- *     placeholder sem 32 bytes reais. O teste está certo em recusar.
+ * Hoje 3 testes ficam vermelhos DE PROPÓSITO, todos em `public-proposal.test.ts`:
+ * a leitura pública da proposta é trabalho da S7 (função SECURITY DEFINER ainda
+ * não existe). Ver `docs/handoffs/rafa-para-teo.md`, item 5.
+ *
+ * (Havia uma 4ª entrada aqui — `pii.test.ts` reclamando de `ENCRYPTION_KEY_V1`
+ * sem 32 bytes. A chave de desenvolvimento foi corrigida e o teste ficou verde;
+ * a entrada foi removida no dia em que este script apontou ela como OBSOLETA.
+ * Isto é o script funcionando como projetado — ver regra 2 abaixo.)
  *
  * A escolha aqui NÃO é `.todo`/`.skip`: isso pararia de rodar a asserção, e
  * o dia em que alguém quebrar a função por engano ninguém saberia — o teste
@@ -49,14 +51,6 @@ export const KNOWN_FAILURES: readonly KnownFailure[] = [
       'resposta da proposta pública não carrega dado sensível nenhum canário, campo proibido ou padrão sensível sai na resposta',
     owner: 'Rafa',
     reason: 'S7 — não dá para exercer a resposta pública sem a função.',
-  },
-  {
-    fullName:
-      'módulo de cifra de PII a chave configurada tem 32 bytes (AES-256, não AES-128 silencioso)',
-    owner: 'PO',
-    reason:
-      'ENCRYPTION_KEY_V1 em .env.local/.env de CI é placeholder de desenvolvimento sem 32 bytes ' +
-      'reais. O teste está certo em recusar — pedido em docs/handoffs/teo-para-po.md.',
   },
 ] as const
 
