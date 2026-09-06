@@ -134,6 +134,15 @@ export const receivables = pgTable(
     index('receivables_tenant_open_due_idx')
       .on(t.tenantId, t.venceEm)
       .where(sql`${t.status} = 'pendente'`),
+    // `gerarParcelasDaVenda` (src/server/sales.ts) calcula `vence_em` deterministicamente
+    // a partir de (venda, quantidade, primeiraVencimento) — duas chamadas concorrentes
+    // com o mesmo insumo produzem exatamente as mesmas datas. Este índice único é quem
+    // garante a idempotência sob concorrência (mesma doutrina de `sales_proposal_id_key`
+    // em `0007_vendas_e_recebiveis.sql`): a 2ª geração colide no banco em vez de duplicar
+    // parcela. `criarParcela` (parcelamento manual) respeita o mesmo limite — duas
+    // parcelas manuais no mesmo dia para a mesma venda precisam ser somadas em uma linha,
+    // não duas.
+    uniqueIndex('receivables_sale_id_vence_em_key').on(t.saleId, t.venceEm),
     check(
       'receivables_status_check',
       sql`${t.status} in ('pendente', 'pago', 'atrasado', 'cancelado')`,

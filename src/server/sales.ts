@@ -537,6 +537,16 @@ export type GerarParcelasInput = z.infer<typeof gerarParcelasInput>;
  * resto da divisão em centavos (nunca perde nem sobra 1 centavo — dinheiro não arredonda
  * para o nada). Conveniência para o caso comum; `criarParcela` continua disponível para
  * parcelamento manual/desigual (entrada maior, por exemplo).
+ *
+ * **Idempotente sob concorrência**: `vence_em` de cada parcela é função determinística de
+ * (venda, quantidade, primeiraVencimento) — duas chamadas simultâneas com o mesmo insumo
+ * (duplo clique no botão) geram exatamente as mesmas datas. A checagem de "já existe
+ * parcela" acima é só a mensagem amigável para o caso sequencial; quem garante a
+ * concorrência de verdade é o índice único `receivables_sale_id_vence_em_key`
+ * (`0008_receivables_dedupe.sql`) — o INSERT usa `ON CONFLICT DO NOTHING` e a resposta
+ * sempre reflete o estado JÁ PERSISTIDO no banco (reselect), nunca o que esta chamada
+ * pontual conseguiu inserir. Mesma doutrina de `sales_proposal_id_key` em
+ * `converterPropostaEmVenda`: o banco garante, não a sorte de nunca rodar duas vezes.
  */
 export async function gerarParcelasDaVenda(
   vendaId: string,
@@ -591,9 +601,26 @@ export async function gerarParcelasDaVenda(
         status: 'pendente' as const,
       }));
 
-      const criadas = await tx.insert(receivables).values(novasLinhas).returning(COLUNAS_PARCELA);
+      // `onConflictDoNothing` contra `receivables_sale_id_vence_em_key`: se uma chamada
+      // concorrente já inseriu (mesmo tenant, mesma venda, mesma data), esta simplesmente
+      // não duplica — sem lançar erro, sem "vencer a corrida" às custas da outra.
+      await tx
+        .insert(receivables)
+        .values(novasLinhas)
+        .onConflictDoNothing({
+          target: [receivables.saleId, receivables.venceEm],
+        });
 
-      return criadas as ParcelaResumo[];
+      // A resposta é sempre o estado JÁ PERSISTIDO da venda, não "o que esta chamada
+      // conseguiu inserir" — é isso que torna a função idempotente de verdade sob
+      // concorrência: as duas chamadas simultâneas devolvem o MESMO conjunto de parcelas.
+      const persistidas = await tx
+        .select(COLUNAS_PARCELA)
+        .from(receivables)
+        .where(eq(receivables.saleId, vendaId))
+        .orderBy(receivables.venceEm);
+
+      return persistidas as ParcelaResumo[];
     });
   });
 }

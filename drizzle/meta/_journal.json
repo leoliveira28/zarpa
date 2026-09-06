@@ -57,6 +57,13 @@
       "when": 1757894400000,
       "tag": "0007_vendas_e_recebiveis",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1757980800000,
+      "tag": "0008_receivables_dedupe",
+      "breakpoints": true
     }
   ]
 }
