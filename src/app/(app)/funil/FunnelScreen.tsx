@@ -267,7 +267,7 @@ export function FunnelScreen() {
             />
           </div>
         </div>
-        <Rule className="mt-2" />
+        <Rule loose />
       </div>
 
       {/* celular: um scroller com encaixe por coluna, o polegar manda.

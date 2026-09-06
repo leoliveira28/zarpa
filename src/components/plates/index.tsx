@@ -129,6 +129,51 @@ export function CompassPlate(props: PlateProps) {
 }
 
 /**
+ * Fig. VI — biplano de células (motivo 14-bis).
+ * Uso hoje: capa da proposta pública, como marca d'água quando a proposta
+ * não tem foto de capa (`PublicProposalScreen`). Fica disponível também para
+ * um estado vazio futuro sobre PARTIR (proposta enviada, viagem) — não a
+ * usei ali agora para não abrir mão da `FernPlate` sem um pedido específico.
+ * Traço técnico — a estrutura de célula (dois retângulos abertos ligados por
+ * um chassi que afunila) é a mesma gramática de cota/eixo do `ArchPlate`,
+ * não um desenho de avião "bonitinho": o 14-bis e a Demoiselle eram, na
+ * prática, pipas de caixa empilhadas, e é essa geometria — não uma silhueta
+ * pintada — que faz o traço único funcionar aqui. Original: nenhuma prancha
+ * histórica foi decalcada. Nunca no accent. No máximo uma prancha por tela.
+ */
+export function BiplanePlate(props: PlateProps) {
+  return (
+    <svg {...frame(props)}>
+      {/* célula dianteira — o canard, o profundor que ia na frente */}
+      <path {...ink} d="M10 60 L 40 60 L 40 98 L 10 98 Z" />
+      <path {...hair} d="M10 60 L 40 98 M40 60 L 10 98" />
+
+      {/* chassi — afunila da célula dianteira até a célula principal, onde
+          morava o motor e a cadeira do piloto */}
+      <path {...ink} d="M40 60 L 100 32 M40 98 L 100 100" />
+      <path {...hair} d="M40 98 L 100 32" />
+
+      {/* cesto do piloto, pendurado no chassi */}
+      <path {...ink} d="M58 99 L 60 114 L 82 114 L 84 99" />
+
+      {/* hélice, no meio do chassi */}
+      <circle {...hair} cx="70" cy="76" r="7" />
+      <path {...ink} d="M70 69 L 70 83 M63 76 L 77 76" />
+
+      {/* célula principal — o par de asas em caixa, mais alta que a
+          dianteira: é o que lê como "subindo" sem precisar girar o desenho */}
+      <path {...ink} d="M100 32 L 148 32 L 148 100 L 100 100 Z" />
+      <path {...ink} d="M124 32 L 124 100" />
+      <path {...hair} d="M100 32 L 148 100 M148 32 L 100 100" />
+
+      {/* o ponto de partida, mesma gramática do ponto de eixo das outras
+          pranchas — aqui, o bico do canard */}
+      <circle cx="10" cy="79" r="1.6" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+/**
  * Fio — a cornija. Separa registros; não envolve caixa.
  *
  * -----------------------------------------------------------------------------
@@ -157,14 +202,25 @@ export function CompassPlate(props: PlateProps) {
  * ornamento animado permitido no sistema, e some com prefers-reduced-motion.
  * `inner` é o fio mais fraco, para separar itens do MESMO registro (linhas de
  * uma lista dentro de um card).
+ *
+ * `loose` dá 16px de cima e de baixo (`--space-4`) ao fio. Existe porque todo
+ * "título + fio" que NÃO mora dentro de `CardHeader`/`CardFooter` — onde a
+ * banda ao redor já reserva a distância — vinha inventando seu próprio
+ * `mt-2`/`pt-3` na mão, tela a tela, quase sempre curto demais (8px de um
+ * lado, zero do outro: a cornija ficava colada no título ou no que vinha
+ * OK depois dela). Um lugar só, para não precisar decidir de novo em cada
+ * tela: `SectionHeading`, o total do funil e o rodapé de opção/termos da
+ * proposta pública usam esta variante.
  */
 export function Rule({
   animate = false,
   inner = false,
+  loose = false,
   className = '',
 }: {
   animate?: boolean
   inner?: boolean
+  loose?: boolean
   className?: string
 }) {
   return (
@@ -173,6 +229,7 @@ export function Rule({
       className={[
         'plate-rule',
         inner ? 'plate-rule--inner' : '',
+        loose ? 'plate-rule--loose' : '',
         animate ? 'plate-rule--draw' : '',
         className,
       ]

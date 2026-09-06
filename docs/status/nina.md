@@ -1,5 +1,130 @@
 # Nina — status
 
+## Pedido do PO — Santos Dumont, fio colado, redesenho da proposta pública
+
+### 1. Prancha nova — `BiplanePlate`
+
+`src/components/plates/index.tsx`. Fui atrás da geometria do 14-bis, não de
+uma silhueta "bonitinha" de avião: o 14-bis (e a Demoiselle) eram, na
+prática, pipas de caixa empilhadas com um chassi de treliça afunilando entre
+elas — dois retângulos abertos (célula dianteira menor/mais baixa, célula
+principal maior/mais alta) ligados por duas vigas que convergem, com o cesto
+do piloto pendurado e uma hélice no meio. Essa estrutura celular é a MESMA
+gramática de cota/eixo do `ArchPlate` (retângulos + diagonais de construção
+em `hair`), então o traço novo não destoa do catálogo — não é "um desenho a
+mais", é a mesma família de mão. A célula principal nasce mais alta que a
+dianteira de propósito: isso já lê como "subindo" sem precisar rotacionar o
+SVG ou animar nada. Original, traço único, `currentColor`, nunca no accent —
+mesma constituição das outras três.
+
+Onde ela entra: **só na proposta pública**, e só quando não há foto de capa
+(`!hasCoverPhoto`) — como marca d'água (`plate-wash`, 14%) atrás do título.
+Não usei em estado vazio/entrada porque isso pertenceria a outra tela
+(`EmptyState`, que já tem a `FernPlate` como motivo e não é minha decisão
+trocar sem um pedido específico) — o pedido citava "capa da proposta pública
+**e/ou** entrada", não as duas obrigatoriamente, e a capa é onde ela resolve
+um problema real (photo em branco = "chapado").
+
+Também apareceu no catálogo do kitchen-sink (`PlatesSection`), ao lado das
+outras três, seguindo o padrão existente.
+
+### 2. Fio colado — a origem do bug e o conserto sistêmico
+
+Achei quatro focos do MESMO problema, todos com a mesma causa: cada tela
+inventava sozinha a margem do fio (`mt-2`, `mt-9`, `pt-2`+`pt-3`, ou nenhuma),
+sem doutrina — e na maioria dos casos vinha curta demais de um lado
+(`SectionHeading` dava só 8px entre o rótulo tracked e a cornija; o total
+"Em aberto" do Funil dava só 8px antes do fio; o rodapé de cada opção da
+proposta pública dava só 8px antes do fio que introduz o CTA).
+
+Conserto na ORIGEM, um lugar só: `Rule` (`src/components/plates/index.tsx`)
+ganhou uma variante `loose` — `.plate-rule--loose` em `tokens.css`,
+`margin-block: var(--space-4)` (16px dos dois lados). Não toquei a folga de
+`CardHeader`/`CardFooter`/`Rule inner` — essas já reservam distância pela
+própria banda/padding do Card, e dar margem ao fio ALI quebraria a proporção
+1:4:1 do card (o corpo perderia altura para uma margem redundante). `loose`
+é só para o fio que vive solto na página, sem banda de card ao redor.
+
+Apliquei em:
+- `SectionHeading` (`Card.tsx`) — trocou `pb-2`/`mb-3` ad hoc por `loose`.
+- `FunnelScreen.tsx` — o total "Em aberto" antes do fio que sublinha as
+  cinco colunas.
+- `PublicProposalScreen.tsx` e `ProposalPreview.tsx` — o fio antes dos
+  termos, e (na pública) o fio antes do CTA de cada opção e o novo colofão
+  "Feito com {APP_NAME}".
+- Registrei a variante no kitchen-sink, ao lado das outras variantes de
+  `Rule`.
+
+Não toquei o `Rule` de `LoginScreen.tsx` (`mt-9`, 36px) — já tinha folga de
+sobra de propósito (separa o FORM do rodapé "trocar modo de entrada"); trocar
+para `loose` teria ENCOLHIDO o respiro que já estava certo.
+
+### 3. Redesenho da proposta pública
+
+`src/app/p/[slug]/PublicProposalScreen.tsx`. O diagnóstico do PO — "muito
+sólido, fundo neutro com texto em cima" — batia: a tela usava a mesma
+gramática do miolo silencioso (texto empilhado, sem hierarquia de imagem),
+mesmo sendo a ÚNICA superfície do produto marcada como **editorial pleno**
+na tabela dos dois registros. O que mudou:
+
+- **Capa.** Com foto, ela abre a página em `aspect-[16/10]` cheia (troquei
+  `rounded-md` por `rounded-sm` — o raio maior competia com a régua
+  arquitetônica do resto do sistema). Sem foto — o caso mais comum, nem toda
+  agência de R$ 99/mês tem banco de imagem — a `BiplanePlate` entra como
+  marca d'água atrás do título, dentro de um `header` com
+  `overflow-hidden` (testado a 390px: sem isso o SVG bleeding "-right-10"
+  empurra a página e cria scroll horizontal, o mesmo cuidado que o
+  `EmptyState` já tinha com a `FernPlate`).
+- **Cada opção ganhou identidade de "capítulo".** Rótulo `Opção 01`/`02` em
+  tabular-nums acima do nome (troquei o local do badge "Recomendada" para a
+  mesma linha, não mais competindo com o nome). O preço subiu de `text-20`
+  para `text-32` — numa comparação de 2–3 opções lado a lado, o preço É o
+  conteúdo que decide a venda, e ele estava do mesmo tamanho que o nome da
+  opção. Com `reserveFor` no MAIOR preço do conjunto: as colunas de preço
+  terminam alinhadas na mesma largura entre as opções, não só dentro de uma
+  — é a doutrina do `Money` (número que não pula) esticada para comparação,
+  não só para atualização.
+- **Uma prancha por tela, de verdade.** O `ArchPlate` que dividia "Escolha
+  sua opção" só aparece agora quando a capa NÃO usou a `BiplanePlate`
+  (`hasCoverPhoto`) — as duas juntas na mesma tela violariam a própria regra
+  que o `ArchPlate` cita no comentário de `plates/index.tsx`.
+- **Fio como colofão.** "Feito com {APP_NAME}" ganhou um `<footer>` com
+  `Rule loose` acima — antes era um parágrafo solto com `pt-2`; agora fecha
+  a página como um registro de verdade, não uma linha esquecida.
+- **Margem de livro.** `max-w-[40rem]` → `max-w-[42rem]`, padding de
+  `px-5/pt-8` → `px-6/pt-10` (`sm:px-10/pt-16`), `gap-10` → `gap-12` entre
+  registros — mais generoso que o miolo do app, como o CLAUDE.md pede para
+  este registro especificamente.
+- **`.enter` na página.** Opacidade + 4px, uma vez, ao montar — o único
+  movimento tipográfico que a direção permite fora do rolo de número; nada
+  de scroll, nada de stagger.
+- **`onClick` → `onPointerDown`** no botão de aceite de opção (a única ação
+  de servidor de verdade nesta tela). Já estava reagindo em `onClick`;
+  segui o padrão que o resto do app usa em botões nativos fora do componente
+  `Button` (ex.: "Nova proposta" em `PropostasScreen.tsx`).
+
+**O que eu NÃO toquei de propósito:** nenhum campo de `costCents`/
+`commissionCents` — o tipo `PropostaPublica` que chega aqui nem tem essas
+colunas (o `SECURITY DEFINER` do lado do servidor já as corta antes de
+qualquer coisa chegar ao cliente), então não havia nada para "esconder" — só
+confirmei, lendo o tipo, que continua assim. Também não toquei
+`aceitarOpcaoPublica`/o beacon de visita — funcionam, não são
+responsabilidade de design.
+
+### Verificação
+
+- `npx tsc --noEmit` — limpo.
+- `npm run build` — limpo, mesmas 12 rotas de antes (`/p/[slug]` continua
+  dinâmica).
+- `npx vitest run tests/design/guards.test.ts` — 6/6 verde.
+- Não commitei — o PO pediu para ver a proposta pública no navegador antes.
+  Para testar de verdade: abrir `/p/<publicToken>` de uma proposta seedada
+  SEM `coverImageUrl` (para ver a `BiplanePlate` na capa) e outra COM
+  `coverImageUrl` (para ver a foto + `ArchPlate` no divisor), em 390px e em
+  desktop, nos dois temas.
+
+---
+
 ## S7 — Proposta pública (`/p/[slug]`)
 
 ### Entregue

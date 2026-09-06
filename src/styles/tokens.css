@@ -527,6 +527,13 @@
   background: var(--border-subtle);
 }
 
+/* Fio com folga: ar de verdade acima e abaixo, para todo "título + fio" que
+   não vive dentro de uma banda de Card (que já reserva a distância pelo seu
+   próprio padding). Ver a doutrina em `Rule` (src/components/plates). */
+.plate-rule--loose {
+  margin-block: var(--space-4);
+}
+
 /* Único ornamento animado do sistema: o gesto da régua. */
 .plate-rule--draw {
   transform: scaleX(0);

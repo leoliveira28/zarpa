@@ -4,7 +4,7 @@ import * as React from "react";
 import { registrarVisitaProposta, aceitarOpcaoPublica, type PropostaPublica } from "@/server";
 import { Badge } from "@/components/ui/Badge";
 import { Money } from "@/components/ui/Money";
-import { ArchPlate, Rule } from "@/components/plates";
+import { ArchPlate, BiplanePlate, Rule } from "@/components/plates";
 import { ChatIcon } from "@/components/app/icons";
 import { CONTENT_FIELDS, KIND_LABEL } from "@/lib/ui/blockContent";
 import { cn } from "@/lib/ui/cn";
@@ -30,6 +30,24 @@ import { APP_NAME } from "@/lib/ui/brand";
    docs/handoffs/nina-para-rafa.md). O botão principal de cada opção abre o
    WhatsApp do agente com uma mensagem pronta — é a saída honesta dentro do
    contrato atual, não uma chamada de servidor inventada.
+
+   Redesenho (pedido do PO — "muito sólido, fundo neutro com texto em cima"):
+   esta é a única tela do produto marcada como EDITORIAL PLENO na tabela dos
+   dois registros, e o layout anterior não usava esse orçamento — era o
+   mesmo miolo silencioso do resto do app, só que sem `AppShell`. Agora:
+
+     - CAPA: se o agente subiu uma foto, ela abre a página cheia. Se não
+       subiu (o caso mais comum — nem toda venda de R$ 99/mês tem banco de
+       imagem), a `BiplanePlate` entra como marca d'água atrás do título —
+       o "vazio" da capa vira uma decisão de design, não uma ausência.
+     - Cada opção ganha um número (`Opção 01`, `02`...) e o preço sobe para
+       `text-32`, com `reserveFor` no maior preço do conjunto: numa proposta
+       de duas ou três opções lado a lado, os números terminam na mesma
+       coluna vertical — é a mesma doutrina do `Money` (número que não pula)
+       aplicada à comparação entre opções, não só à leitura de uma sozinha.
+     - `ArchPlate` como divisor de "Escolha sua opção" só aparece quando a
+       capa NÃO tem foto (senão a `BiplanePlate` da capa e o arco disputariam
+       o orçamento de "no máximo uma prancha por tela").
    ========================================================================== */
 
 export function PublicProposalScreen({
@@ -69,8 +87,16 @@ export function PublicProposalScreen({
       )}`
     : null;
 
+  const hasCoverPhoto = Boolean(proposal.coverImageUrl);
+  // Maior preço do conjunto: toda opção reserva a mesma largura numérica, e a
+  // coluna de preços nasce alinhada em vez de dentar conforme o valor muda de
+  // dígito — a mesma doutrina do `Money` (número que não pula), agora
+  // aplicada à COMPARAÇÃO entre opções.
+  const maxOptionPriceCents =
+    options.length > 0 ? Math.max(...options.map((option) => option.priceCents)) : undefined;
+
   return (
-    <main className="mx-auto flex max-w-[40rem] flex-col gap-10 px-5 pt-8 pb-16 sm:px-8 sm:pt-14">
+    <main className="enter mx-auto flex max-w-[42rem] flex-col gap-12 px-6 pt-10 pb-20 sm:px-10 sm:pt-16">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           {brand.logoUrl ? (
@@ -98,20 +124,30 @@ export function PublicProposalScreen({
         ) : null}
       </div>
 
-      {proposal.coverImageUrl ? (
+      {hasCoverPhoto ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={proposal.coverImageUrl}
+          src={proposal.coverImageUrl ?? undefined}
           alt=""
-          className="aspect-[16/10] w-full rounded-md object-cover"
+          className="aspect-[16/10] w-full rounded-sm object-cover"
         />
       ) : null}
 
-      <header className="flex flex-col gap-3">
+      {/* Capa tipográfica. Sem foto, a BiplanePlate faz o trabalho que a foto
+          faria — uma marca d'água que sangra pelo canto, nunca uma caixa
+          vazia com contorno tracejado. `overflow-hidden` é o que evita o
+          desenho empurrar a página para o lado em 390px. */}
+      <header className="relative isolate flex flex-col gap-4 overflow-hidden">
+        {!hasCoverPhoto ? (
+          <BiplanePlate
+            size={224}
+            className="plate-wash pointer-events-none absolute -top-10 -right-10 -z-10 select-none sm:-top-12 sm:-right-6"
+          />
+        ) : null}
         <p className="text-13 tracking-[0.08em] text-muted uppercase">Proposta de viagem</p>
         <h1 className="display text-32 text-ink">{proposal.title}</h1>
         {proposal.summary ? (
-          <p className="text-17 leading-[1.5] text-muted">{proposal.summary}</p>
+          <p className="max-w-[34rem] text-17 leading-[1.5] text-muted">{proposal.summary}</p>
         ) : null}
         <div className="flex flex-wrap items-center gap-2 text-13 text-muted">
           {proposal.validUntil ? (
@@ -131,8 +167,12 @@ export function PublicProposalScreen({
 
       {options.length > 0 ? (
         <section className="flex flex-col gap-8">
-          <div className="flex items-center gap-4">
-            <ArchPlate size={40} className="shrink-0 text-muted" />
+          <div className="flex items-center gap-3">
+            {/* O arco só entra quando a capa NÃO usou a BiplanePlate — o
+                orçamento do sistema é uma prancha por tela. */}
+            {hasCoverPhoto ? (
+              <ArchPlate size={36} className="shrink-0 text-muted" />
+            ) : null}
             <h2 className="display text-20 text-ink">
               {options.length > 1 ? "Escolha sua opção" : "Sua opção"}
             </h2>
@@ -146,9 +186,10 @@ export function PublicProposalScreen({
                 : undefined
             }
           >
-            {options.map((option) => (
+            {options.map((option, index) => (
               <OptionCard
                 key={option.id}
+                index={index + 1}
                 option={option}
                 blocks={blocksByOption.get(option.id) ?? []}
                 brand={brand}
@@ -156,6 +197,7 @@ export function PublicProposalScreen({
                 accepted={proposal.acceptedOptionId === option.id}
                 registerRef={(el) => registerOption(option.id, el)}
                 slug={slug}
+                reserveFor={maxOptionPriceCents}
               />
             ))}
           </div>
@@ -165,15 +207,16 @@ export function PublicProposalScreen({
       )}
 
       {proposal.terms ? (
-        <section className="flex flex-col gap-2">
-          <Rule />
-          <p className="pt-4 text-13 leading-[1.5] whitespace-pre-line text-muted">
-            {proposal.terms}
-          </p>
+        <section className="flex flex-col">
+          <Rule loose />
+          <p className="text-13 leading-[1.5] whitespace-pre-line text-muted">{proposal.terms}</p>
         </section>
       ) : null}
 
-      <p className="pt-2 text-center text-13 text-subtle">Feito com {APP_NAME}</p>
+      <footer className="flex flex-col">
+        <Rule loose />
+        <p className="text-center text-13 text-subtle">Feito com {APP_NAME}</p>
+      </footer>
     </main>
   );
 }
@@ -190,6 +233,7 @@ function StatusNote({ status }: { status: string }) {
    ========================================================================== */
 
 function OptionCard({
+  index,
   option,
   blocks,
   brand,
@@ -197,7 +241,9 @@ function OptionCard({
   accepted,
   registerRef,
   slug,
+  reserveFor,
 }: {
+  index: number;
   option: PropostaPublica["options"][number];
   blocks: PropostaPublica["blocks"];
   brand: PropostaPublica["brand"];
@@ -205,6 +251,7 @@ function OptionCard({
   accepted: boolean;
   registerRef: (el: HTMLDivElement | null) => void;
   slug: string;
+  reserveFor?: number;
 }) {
   const [accepting, setAccepting] = React.useState(false);
   const [acceptedNow, setAcceptedNow] = React.useState(false);
@@ -242,16 +289,21 @@ function OptionCard({
     <div
       ref={registerRef}
       data-option-id={option.id}
-      className="flex flex-col gap-4 rounded-md bg-surface-2 p-5"
+      className="flex flex-col gap-5 rounded-sm bg-surface-2 p-6"
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-13 tabular-nums tracking-[0.06em] text-muted uppercase">
+            Opção {String(index).padStart(2, "0")}
+          </p>
+          {option.isRecommended ? <Badge tone="accent">Recomendada</Badge> : null}
+        </div>
         <h3 className="text-17 font-semibold text-ink">{option.name}</h3>
-        {option.isRecommended ? <Badge tone="accent">Recomendada</Badge> : null}
+        {option.description ? <p className="text-13 text-muted">{option.description}</p> : null}
       </div>
-      {option.description ? <p className="text-13 text-muted">{option.description}</p> : null}
 
       <div className="flex flex-col gap-0.5">
-        <Money cents={option.priceCents} size="20" align="left" />
+        <Money cents={option.priceCents} size="32" align="left" reserveFor={reserveFor} />
         {option.installments && option.installmentCents ? (
           <span className="text-13 tabular-nums text-muted">
             ou {option.installments}x de{" "}
@@ -268,22 +320,22 @@ function OptionCard({
         </div>
       ) : null}
 
-      <div className="mt-auto flex flex-col pt-2">
-        <Rule />
+      <div className="mt-auto flex flex-col">
+        <Rule loose />
         {isAccepted ? (
-          <p className="pt-3 text-13 font-medium text-ok">Você já confirmou esta opção.</p>
+          <p className="text-13 font-medium text-ok">Você já confirmou esta opção.</p>
         ) : whatsappLink ? (
           <button
             type="button"
-            onClick={handleAccept}
+            onPointerDown={handleAccept}
             disabled={accepting}
-            className="mt-3 inline-flex h-11 items-center justify-center gap-2 rounded-md px-4 text-15 font-medium text-white disabled:opacity-60 [transition:transform_120ms_var(--curve-out)] active:scale-[0.98]"
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-sm px-4 text-15 font-medium text-white disabled:opacity-60 [transition:transform_120ms_var(--curve-out)] active:scale-[0.98]"
             style={{ backgroundColor: brand.primaryColor ?? "var(--accent)" }}
           >
             {accepting ? "Confirmando..." : "Aceitar esta opção"}
           </button>
         ) : (
-          <p className="pt-3 text-13 text-muted">
+          <p className="text-13 text-muted">
             Fale com quem te mandou esta proposta para confirmar.
           </p>
         )}

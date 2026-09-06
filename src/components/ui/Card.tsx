@@ -229,16 +229,15 @@ export function SectionHeading({
 }) {
   return (
     <div className={cn("flex flex-col", className)}>
-      <div
-        className="flex items-baseline justify-between gap-4 pb-2"
-        {...props}
-      >
+      <div className="flex items-baseline justify-between gap-4" {...props}>
         <h2 className="text-13 font-semibold tracking-[0.04em] text-muted uppercase">
           {children}
         </h2>
         {action}
       </div>
-      {rule ? <Rule className="mb-3" /> : null}
+      {/* `loose`: 16px dos dois lados — antes o título ficava a 8px do fio
+          (`pb-2`) e o corpo vinha colado nele. Ver a doutrina em `Rule`. */}
+      {rule ? <Rule loose /> : null}
     </div>
   );
 }

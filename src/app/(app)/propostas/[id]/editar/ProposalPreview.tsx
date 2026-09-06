@@ -75,9 +75,9 @@ export function ProposalPreview({ proposta }: { proposta: PropostaEdicao }) {
       )}
 
       {proposta.terms ? (
-        <section className="flex flex-col gap-2">
-          <Rule />
-          <p className="pt-4 text-13 leading-[1.5] whitespace-pre-line text-muted">{proposta.terms}</p>
+        <section className="flex flex-col">
+          <Rule loose />
+          <p className="text-13 leading-[1.5] whitespace-pre-line text-muted">{proposta.terms}</p>
         </section>
       ) : null}
     </article>

@@ -78,7 +78,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { useToast } from "@/components/ui/Toast";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { ArchPlate, CompassPlate, FernPlate, Rule } from "@/components/plates";
+import { ArchPlate, BiplanePlate, CompassPlate, FernPlate, Rule } from "@/components/plates";
 import { OpenedIcon } from "@/components/app/icons";
 import { cn } from "@/lib/ui/cn";
 import { ReducedMotionOverride } from "@/lib/ui/motion";
@@ -1023,11 +1023,14 @@ function PlatesSection() {
           <FernPlate size={96} title="Fronde de samambaia" />
           <ArchPlate size={96} title="Arco de volta plena" />
           <CompassPlate size={96} title="Rosa dos ventos" />
+          <BiplanePlate size={96} title="Biplano de células, motivo 14-bis" />
           <FernPlate size={96} className="plate-wash" />
         </div>
         <div className="flex flex-col gap-4">
           <Rule />
           <Rule inner />
+          <span className="text-13 text-subtle">com folga (título + fio, `loose`):</span>
+          <Rule loose />
           <span className="text-13 text-subtle">animada (desenha da esquerda):</span>
           <Rule animate />
         </div>
