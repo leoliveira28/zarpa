@@ -5,3 +5,4 @@ export {
   type TenantDb,
   type WithTenantOptions,
 } from './withTenant';
+export { withPlatformContext } from './withPlatformContext';

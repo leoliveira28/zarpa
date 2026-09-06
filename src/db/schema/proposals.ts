@@ -29,7 +29,10 @@ import { deals } from './pipeline';
  *
  * ATENÇÃO ao expor qualquer coisa daqui publicamente: `cost_cents` e `commission_cents`
  * de `proposal_options` NUNCA podem sair para o link público. A leitura pública ainda não
- * existe (fica para S2, via função SECURITY DEFINER); ver `docs/status/rafa.md`.
+ * existe (fica para S7, via função SECURITY DEFINER); ver `docs/status/rafa.md`. As Server
+ * Actions do construtor (S5/S6, autenticadas) moram em `src/server/proposals.ts` e DEVOLVEM
+ * `cost_cents`/`commission_cents` de propósito — quem edita a proposta precisa ver a
+ * margem. A separação pública×privada é responsabilidade da função S7, não desta tabela.
  */
 
 export const proposals = pgTable(
@@ -76,6 +79,12 @@ export const proposals = pgTable(
     lastViewedAt: timestamp('last_viewed_at', { withTimezone: true }),
     acceptedAt: timestamp('accepted_at', { withTimezone: true }),
     declinedAt: timestamp('declined_at', { withTimezone: true }),
+    /**
+     * Arquivar oculta da lista sem mexer em `status` (que é o estágio comercial, não
+     * "a agente ainda quer ver isso na lista"). Coluna nova, `0003_construtor_de_proposta`
+     * — mesmo padrão de `contacts.archived_at`.
+     */
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -85,6 +94,11 @@ export const proposals = pgTable(
     index('proposals_tenant_status_idx').on(t.tenantId, t.status),
     index('proposals_deal_id_idx').on(t.dealId),
     index('proposals_accepted_option_id_idx').on(t.acceptedOptionId),
+    // A lista do dia a dia filtra "não arquivada" quase sempre — índice parcial serve
+    // exatamente essa consulta, igual ao `tasks_tenant_open_due_idx`.
+    index('proposals_tenant_active_idx')
+      .on(t.tenantId, t.createdAt.desc())
+      .where(sql`${t.archivedAt} is null`),
     check(
       'proposals_status_check',
       sql`${t.status} in ('draft', 'sent', 'viewed', 'accepted', 'declined', 'expired')`,
@@ -162,6 +176,12 @@ export const proposalBlocks = pgTable(
     position: integer('position').notNull().default(0),
     title: text('title'),
     body: text('body'),
+    /**
+     * Imagens do bloco. Array de URL (do Vercel Blob em produção, ou `data:` URL no
+     * fallback de dev — ver `src/server/storage.ts`), nunca objeto solto: CHECK
+     * `jsonb_typeof(images) = 'array'` na migration `0003_construtor_de_proposta`.
+     */
+    images: jsonb('images').notNull().default(sql`'[]'::jsonb`),
     /** Campos específicos do tipo (nº do voo, diárias, categoria do quarto). */
     content: jsonb('content').notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -175,6 +195,7 @@ export const proposalBlocks = pgTable(
       'proposal_blocks_kind_check',
       sql`${t.kind} in ('text', 'image', 'flight', 'hotel', 'transfer', 'tour', 'cruise', 'insurance', 'price_note')`,
     ),
+    check('proposal_blocks_images_is_array_check', sql`jsonb_typeof(${t.images}) = 'array'`),
   ],
 );
 
