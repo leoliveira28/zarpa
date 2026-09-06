@@ -115,3 +115,42 @@ anterior do arquivo tem a tabela). Derivei **17 tabelas** da descrição do prod
 está em `docs/status/rafa.md`, seção "Decisões que tomei sozinha". Se você tinha uma lista
 fechada em mente, me diga o que sobra e o que falta — mexer agora custa uma migration
 `0001`, e daqui a duas semanas custa um backfill.
+
+## 7. S8 — rota de cron para a régua de follow-up (`src/app/api/**`, sua fronteira)
+
+O runner do dia está pronto e testado: `rodarFilaDeFollowups()`, exportado no barril
+(`import { rodarFilaDeFollowups } from '@/server'`). Falta só a rota HTTP que o
+agendador (Vercel Cron ou equivalente) chama — isso é `src/app/api/**`, não toco.
+
+```ts
+// src/app/api/cron/followups/route.ts (sugestão de caminho)
+import { rodarFilaDeFollowups } from '@/server';
+
+export async function GET(request: Request) {
+  const token = request.headers.get('authorization');
+  if (token !== `Bearer ${process.env.CRON_SECRET}`) {
+    return new Response('unauthorized', { status: 401 });
+  }
+  const resultado = await rodarFilaDeFollowups();
+  return Response.json(resultado);
+}
+```
+
+Pontos que importam para você decidir a proteção:
+
+- `rodarFilaDeFollowups()` roda **sem sessão de usuário** (usa `authDb`, a mesma conexão
+  com `app.auth_context` ligado que já resolve tenant no login) — ela varre TODOS os
+  tenants, então a rota que a expõe precisa de autenticação de máquina (token de cron),
+  nunca de `requireAuthContext()`. Um `CRON_SECRET` em `.env.example` (que também não
+  edito) resolve.
+- É **idempotente sob chamada repetida** — se o agendador disparar duas vezes (retry,
+  timeout do lado dele, o que for), não duplica nada. Não precisa de trava de
+  "já rodei hoje" na camada HTTP.
+- Ela também substitui o cron antigo de `gerarAlertas()` (`alerts.ts`) — não são mais
+  duas rotas de cron, é uma só. Se já existir uma rota `/api/cron/alerts` chamando
+  `gerarAlertas()` direto, sugiro trocar para chamar `rodarFilaDeFollowups()` no lugar
+  (ela chama os dois `gerarAlertasDe*` internamente, então nada se perde) — `gerarAlertas()`
+  continua exportado para quem só quiser os alertas isolados (ex.: um botão manual).
+- Resposta da função: `{ ok, data: { tenantsProcessados, followupsCriados,
+  passaporteCriadas, aniversarioCriadas } }` (ou `{ ok: false, error }`) — dá para logar
+  isso e não precisa de mais nada no corpo da resposta HTTP.

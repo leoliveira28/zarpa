@@ -276,3 +276,68 @@ pública). Sugestão: excluir o subtree `brand.*` (ou especificamente a chave
 `whatsappLink`) da checagem de `VALUE_PATTERNS` de telefone em `scanPayload`, mantendo
 todo o resto do scanner (canários, outros campos, outras chaves) intacto. Decisão é sua;
 registrei para não virar descoberta de susto quando a fixture do item 2 nascer.
+
+---
+
+## S8 — régua de follow-up automático: o pedido de teste do aceite
+
+Critério de aceite do sprint, ao pé da letra: **"proposta enviada numa sexta gera três
+tarefas (D+2, D+5, D+10) nas datas certas, com mensagem sugerida pronta, sem duplicar
+quando o cron roda duas vezes."** Três peças novas, todas em `src/server/followups.ts`
+(nenhuma em `src/server/proposals.ts` — decidi não mexer em `enviarProposta` nesta
+rodada, ver `docs/handoffs/rafa-para-po.md`):
+
+- `rodarFilaDeFollowups()` — o runner do cron. Sem sessão de usuário (`authDb`, mesma
+  policy `tenants_auth_service` que `gerarAlertas()` já usa). Materializa, por tenant,
+  1) a régua de follow-up de proposta e 2) os alertas de passaporte/aniversário — na
+  MESMA fila, mesma chamada.
+- `gerarFollowupsDaProposta(tx, tenantId, propostaId)` — gera a régua para UMA proposta,
+  reaproveitável de dentro de outra transação (ex.: se o PO/eu decidir um dia chamar isto
+  direto de `enviarProposta`).
+- `listarTarefasDeHoje()` — leitura para a tela Hoje (contrato completo no handoff da
+  Nina).
+
+### O que eu verifiquei manualmente (fora do vitest, script deletado depois)
+
+Rodei contra `zarpa_test` de verdade: criei tenant + contato + negócio + proposta com
+`sentAt = agora - 3 dias` (a "sexta"), chamei `rodarFilaDeFollowups()` duas vezes
+seguidas.
+
+- 1ª rodada: 3 tarefas criadas para aquela proposta (`followupsCriados: 3` no total
+  agregado, junto de outros tenants que já tinham dado do seed).
+- 2ª rodada: **0** tarefas novas — confirmado por `dedupeKey` (`followup:proposta:<id>:d2`
+  etc.) batendo no índice único parcial `tasks_tenant_dedupe_key` (mesmo mecanismo que já
+  protege os alertas, migration `0001`).
+- `dueAt` das três bateu exatamente com `sentAt + {2,5,10} dias` (comparei em UTC).
+- `suggestedMessage` veio preenchido com nome do cliente e destino, um texto diferente
+  por marco (não é a mesma mensagem repetida 3x).
+- Confirmei RLS fail-closed no caminho: uma consulta com `unsafeSqlWithoutTenant` (sem
+  GUC) contra as tarefas recém-criadas devolveu **zero linhas**, mesmo eu sendo quem
+  acabou de inserir — só enxerguei de novo entrando por `withTenant` com o `tenantId`
+  certo.
+
+### O que pediria para você automatizar
+
+1. **O teste do aceite ao pé da letra**: seed de proposta com `sentAt` fixo (não
+   `Date.now()` — congele a data para o teste não ficar sensível ao dia em que roda),
+   chame `rodarFilaDeFollowups()`, confira as 3 `dueAt` exatas e o `dedupeKey` de cada
+   uma. Chame de novo e confira `followupsCriados: 0` (ou, melhor ainda, confira
+   `count(*) from tasks where dedupe_key like 'followup:proposta:<id>:%'` continua em 3
+   depois da segunda chamada — não depende do valor de retorno da função).
+2. **Duplo cron em paralelo** (mais rigoroso que rodar em sequência): duas chamadas
+   `Promise.all([rodarFilaDeFollowups(), rodarFilaDeFollowups()])`. O índice único
+   parcial deveria proteger mesmo sob corrida — mas eu só testei sequencial, vale a pena
+   confirmar concorrência de verdade.
+3. **Isolamento entre tenants**: proposta enviada no tenant A não gera tarefa nenhuma
+   pendurada no tenant B, mesmo que os dois tenham propostas "sexta passada" no mesmo
+   dia. Mesmo padrão de `tenant-isolation.test.ts`, aplicado a `tasks` com
+   `source = 'followup_proposta'`.
+4. **`listarTarefasDeHoje` isolado por tenant** e respeitando `doneAt`/janela de data —
+   mesma doutrina de mock de `requireAuthContext` que `import-planilha.test.ts` já usa
+   (`vi.mock('@/lib/auth/session', ...)`).
+5. **Migration nova, `drizzle/0006_regua_de_followup.sql`**: registrada no
+   `drizzle/meta/_journal.json` (idx 6). Apliquei do zero em `zarpa_dev` e confirmei que
+   `npx tsx scripts/check/known-failures.ts` recria `zarpa_test` do zero e aplica as 7
+   migrations sem erro (327 testes, allowlist vazia, verde). Não criei tabela nova —
+   só coluna (`tasks.suggested_message`) e um valor a mais no `CHECK` de
+   `tasks.source` —, então não há policy de RLS nova para revisar aqui.

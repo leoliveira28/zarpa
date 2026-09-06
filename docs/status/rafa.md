@@ -1,6 +1,141 @@
 # Status — Rafa (backend / plataforma)
 
-## Tarefa desta rodada: S7 — leitura pública da proposta
+## Tarefa desta rodada: S8 — tarefas e follow-up automático (motor de retenção)
+
+Critério de aceite ao pé da letra: proposta enviada numa sexta gera três tarefas
+(D+2, D+5, D+10) nas datas certas, com mensagem sugerida pronta, sem duplicar quando o
+cron roda duas vezes.
+
+### Pronto
+
+1. **Migration `drizzle/0006_regua_de_followup.sql`** (registrada em
+   `drizzle/meta/_journal.json`, idx 6) — duas mudanças em `tasks`, tabela que já existe
+   com RLS desde `0000_fundacao.sql`; nenhuma tabela nova, então nenhuma policy nova
+   entra aqui:
+   - `suggested_message text` (nullable — só tarefa gerada preenche, manual fica `null`).
+   - `source` ganha o valor `'followup_proposta'` (`ALTER ... DROP CONSTRAINT` +
+     `ADD CONSTRAINT` no `tasks_source_check`, porque Postgres não tem `ALTER CHECK`).
+   - Nenhum índice novo: o índice único parcial `tasks_tenant_dedupe_key`
+     (`(tenant_id, dedupe_key) WHERE dedupe_key IS NOT NULL`, já existe desde
+     `0001_pessoas_e_importacao.sql`) já cobre qualquer `source` não-manual — a régua de
+     follow-up usa exatamente o mesmo mecanismo de idempotência que os alertas de
+     passaporte/aniversário já usam, só com uma chave de formato diferente
+     (`followup:proposta:<propostaId>:d2` / `:d5` / `:d10`).
+   - **Achei o banco de teste num estado inconsistente antes de começar**: `zarpa_test`
+     tinha o SQL de `0004`/`0005` aplicado de verdade (coluna `instagram`, função
+     `aceitar_opcao_proposta`, policy `proposals_public_accept_update` — tudo lá), mas a
+     tabela de controle `drizzle.__drizzle_migrations` só registrava até `0003`. Rodar
+     `db:migrate` contra `zarpa_test` explodia em "column instagram already exists".
+     Resolvi calculando o hash sha256 de cada arquivo (mesmo algoritmo do migrator,
+     `drizzle-orm/migrator.cjs`) e inserindo as duas linhas que faltavam na tabela de
+     controle — sem tocar em nenhum dado, sem re-rodar SQL que já tinha rodado. Depois
+     disso `db:migrate` com `USE_TEST_DATABASE=1` aplicou `0006` limpo. Não sei a causa
+     raiz (rodada anterior deve ter aplicado o SQL na mão e esquecido de rodar o
+     migrator por cima) — registrando aqui para não repetir a mesma surpresa. O
+     `globalSetup` do vitest não sofre com isso: ele recria o schema do zero a cada
+     rodada e aplica os `.sql` direto, sem depender da tabela de controle — só
+     `db:migrate` (script de operação, fora do CI) usa aquela tabela.
+
+2. **`src/server/followups.ts` (novo)** — três entregas:
+   - `rodarFilaDeFollowups()`: o runner diário do cron. Mesmo desenho de `gerarAlertas()`
+     (`alerts.ts`): `authDb` para listar todos os tenants sem sessão (a MESMA policy
+     `tenants_auth_service` que o login já usa — nenhuma superfície nova), um
+     `withTenant` por tenant, idempotente por construção (cada peça já é idempotente
+     sozinha). Materializa, na MESMA fila, a régua de follow-up de proposta E os alertas
+     de passaporte/aniversário — por isso `gerarAlertasDePassaporte`/
+     `gerarAlertasDeAniversario` (antes privadas de `alerts.ts`) agora são exportadas
+     (só para uso interno de `src/server`, ninguém fora importa `alerts.ts` direto).
+   - `gerarFollowupsDaProposta(tx, tenantId, propostaId)`: a mesma régua, para UMA
+     proposta, reaproveitável de dentro de outra transação. Não chamei isto de dentro de
+     `enviarProposta` (`proposals.ts`) nesta rodada — decisão registrada abaixo.
+   - `listarTarefasDeHoje()`: leitura tenant-scoped para a tela Hoje, com JOIN em
+     `contacts`/`deals` (nome do cliente e destino já vêm prontos, sem chamada extra) e
+     `suggestedMessage` pronta para copiar. Contrato completo, com o shape exato, em
+     `docs/handoffs/rafa-para-nina.md`.
+
+3. **Mensagem sugerida — three tons, não a mesma frase repetida**: D+2 é checagem gentil
+   ("ficou alguma dúvida?"), D+5 introduz urgência de preço sem ser agressivo ("os
+   valores podem mudar"), D+10 é a última checagem antes de esfriar ("ainda está nos seus
+   planos? se não for, me avisa"). Cada uma usa o nome do cliente e o destino quando
+   disponíveis (JOIN `deals`→`contacts`, `deals.destination`), com fallback genérico
+   ("Oi!" / "a proposta que te mandei") se algum dado faltar — nunca um placeholder cru
+   tipo `[nome]` vazando para o texto que a agente vai colar no WhatsApp de verdade.
+
+4. **Decisão: não editei `enviarProposta` (`src/server/proposals.ts`) nesta rodada.** A
+   tarefa permitia gerar a régua "ao enviar uma proposta (ou via o runner do item 2)".
+   Escolhi só o runner, por três motivos: (a) o aceite descrito é sobre o CRON detectar e
+   materializar a régua, não sobre latência entre o clique de "enviar" e a tarefa
+   aparecer — mesmo dia é suficiente; (b) menos superfície tocada nesta rodada
+   (`proposals.ts` é um arquivo grande e já bem coberto de comentário sobre o que não
+   pode mudar; toquei nele zero); (c) `gerarFollowupsDaProposta` já existe pronta e
+   exportada para o dia em que alguém (eu, numa rodada futura, ou o PO decidindo que quer
+   a tarefa aparecendo no ato do envio) quiser chamar isso de dentro de `enviarProposta`
+   — é literalmente uma chamada a mais dentro do mesmo `withTenant` que já está lá.
+   Registrado também em `docs/handoffs/rafa-para-po.md`, item 7.
+
+5. **Janela de 15 dias na varredura de propostas enviadas** (`sentAt >= hoje - 15 dias`):
+   o marco mais distante da régua é D+10, então uma proposta mais velha que isso já teve
+   (ou nunca vai ter, se foi enviada antes desta feature existir) as três tarefas
+   geradas — sem essa janela a consulta cresceria sem limite conforme o tenant acumula
+   histórico. Mesmo raciocínio de `MARCOS_PASSAPORTE` em `alerts.ts`, só que em dias
+   corridos desde o envio em vez de dias até o vencimento.
+
+### Verificado manualmente contra Postgres de verdade (não só lido)
+
+Rodei um script descartável (deletado depois, não ficou no repositório) contra
+`zarpa_test`: tenant + contato + negócio + proposta com `sentAt = agora − 3 dias` (a
+"sexta"), chamei `rodarFilaDeFollowups()` duas vezes seguidas.
+
+- 1ª chamada: 3 tarefas novas para aquela proposta, `dueAt` exatamente `sentAt + {2,5,10}`
+  dias, `suggestedMessage` preenchida e diferente em cada uma, `dedupeKey` no formato
+  `followup:proposta:<id>:{d2,d5,d10}`.
+- 2ª chamada: **zero** tarefas novas — confirmado tanto pelo contador de retorno quanto
+  consultando `tasks` de novo (continuou em 3 linhas).
+- Simulei a query de `listarTarefasDeHoje` (JOIN completo) contra os mesmos dados: só a
+  tarefa D+2 (já vencida) apareceu, D+5/D+10 (no futuro) ficaram de fora — confirma que
+  "hoje + vencidas" está certo e que o JOIN com `contacts`/`deals` resolve nome/destino.
+- Confirmei RLS fail-closed no caminho todo: consultar as tarefas recém-inseridas via
+  `unsafeSqlWithoutTenant` (sem GUC) devolveu zero linhas — só voltaram a aparecer
+  entrando de novo por `withTenant` com o `tenantId` certo. `tasks` continua sob FORCE
+  ROW LEVEL SECURITY normal, nenhuma policy nova precisou nascer para esta feature.
+
+### Verificação
+
+- `npx tsc --noEmit`: limpo.
+- `npx tsx scripts/check/known-failures.ts`: 327 testes, allowlist vazia (0), **verde,
+  sem regressão**. `globalSetup` recriou `zarpa_test` do zero e aplicou as 7 migrations
+  (`0000` a `0006`) sem erro — confirma que a migration nova aplica limpa do zero, não só
+  no banco que eu remendei manualmente (ver item 1 de "Pronto").
+- `npm run db:migrate` aplicado com sucesso em `zarpa_dev` e (depois do remendo na tabela
+  de controle) em `zarpa_test` via `USE_TEST_DATABASE=1`.
+- Não toquei em `src/components`, `src/styles`, `tests/`, `package.json`, nem em
+  `src/app/**` — o pedido de rota de cron foi para
+  `docs/handoffs/rafa-para-po.md`.
+
+### O que precisa dos outros
+
+- **PO**: rota `/api/cron/...` chamando `rodarFilaDeFollowups()`, protegida por token —
+  detalhe completo em `docs/handoffs/rafa-para-po.md`, item 7.
+- **Nina**: consumir `listarTarefasDeHoje()` na tela Hoje — contrato completo em
+  `docs/handoffs/rafa-para-nina.md`.
+- **Téo**: cobrir o aceite D+2/D+5/D+10 sem duplicar sob cron duplo (inclusive
+  concorrente, não só sequencial) e isolamento por tenant — pedido detalhado em
+  `docs/handoffs/rafa-para-teo.md`.
+
+### Riscos
+
+- O runner varre TODOS os tenants a cada chamada (`authDb.select from tenants`, sem
+  paginação). Para o volume esperado do produto (agentes independentes, não milhares de
+  tenants) isso é não-problema; se o produto crescer muito antes de eu voltar aqui, vale
+  paginar ou paralelizar por lote.
+- Mesmo risco estrutural já registrado nas rodadas anteriores: GUCs
+  (`app.auth_context`, `app.platform_context`, `app.proposal_public_context`) são
+  forjáveis por SQL arbitrário — mitigação pedida ao PO em
+  `docs/handoffs/rafa-para-po.md`, item 5. Esta rodada não usa nenhum GUC novo.
+
+---
+
+## Rodada anterior: S7 — leitura pública da proposta
 
 Contrato desta rodada: `tests/security/public-proposal.test.ts`, que chegou vermelho de
 propósito em 3 asserções (nenhuma função `SECURITY DEFINER` de proposta pública existia).

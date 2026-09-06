@@ -451,3 +451,47 @@ faz `select *`, a policy de RLS só abre linha em status publicável, e há um t
 banco e varre a resposta inteira — se você um dia precisar de um campo novo aqui, peça a
 mim, não tente puxar de `obterPropostaParaEdicao`/`OpcaoEdicao` (autenticado, tem
 cost/commission de propósito).
+
+---
+
+## S8 — tela Hoje: `listarTarefasDeHoje()`, novo, em `src/server/followups.ts`
+
+Contrato para a tela Hoje ler tarefa (manual, alerta de passaporte/aniversário, ou
+follow-up de proposta) num lugar só, já com o texto pronto para colar no WhatsApp.
+
+```ts
+type TarefaDeHoje = {
+  id: string;
+  title: string;
+  notes: string | null;
+  suggestedMessage: string | null; // pronto para "copiar mensagem" — só em tarefa gerada, null em manual
+  kind: string;      // 'followup' | 'ligar' | 'whatsapp' | 'email' | 'outro'
+  source: string;    // 'manual' | 'alerta_passaporte' | 'alerta_aniversario' | 'importacao' | 'followup_proposta'
+  contactId: string | null;
+  contactName: string | null;   // já vem do JOIN — não precisa buscar o contato à parte
+  dealId: string | null;
+  dealTitle: string | null;
+  destination: string | null;
+  dueAt: Date;
+  vencida: boolean;   // dueAt já passou (comparado a "agora", não à meia-noite)
+  doneAt: Date | null; // sempre null aqui — a lista já vem fechada às concluídas
+  createdAt: Date;
+};
+
+async function listarTarefasDeHoje(opcoes?: { limite?: number }): Promise<ServiceResult<TarefaDeHoje[]>>
+```
+
+- Devolve tarefa em aberto (`doneAt is null`) com `dueAt` até o fim do dia de hoje (23:59:59
+  UTC) — ou seja, **hoje + tudo que já venceu antes**, ordenado por `dueAt` crescente (a mais
+  atrasada primeiro). Não filtra por `source`: manual, alerta e follow-up de proposta
+  aparecem juntos, é a mesma fila.
+- `limite` (padrão 100, teto 300) — mesmo padrão de `limitarTarefas` de `alerts.ts`.
+- Para concluir a tarefa, chame `concluirTarefa(tarefaId)` (já existe, já exportado no
+  barril, veio do S7/`alerts.ts`) — não criei uma segunda action para isso, é a mesma.
+- `suggestedMessage` é texto pronto (tom de agente de viagem, já com nome do cliente e
+  destino quando disponíveis) — um botão "copiar" que joga isso na área de transferência
+  resolve o produto sem precisar de nenhum editor de texto na tela Hoje.
+- `source: 'followup_proposta'` é a régua D+2/D+5/D+10 depois do envio da proposta (S8,
+  ver `docs/status/rafa.md`). Se quiser diferenciar visualmente ("follow-up de proposta"
+  vs. "alerta de passaporte" vs. "tarefa manual"), o campo `source` já traz a distinção —
+  não precisei inventar um segundo enum para isso.
