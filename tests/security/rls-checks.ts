@@ -45,6 +45,7 @@ export const KNOWN_ESCAPE_HATCHES: { table: string; policy: string }[] = [
   // docs/handoffs/rafa-para-teo.md, seção S7.
   { table: 'public.proposals', policy: 'proposals_public_read' },
   { table: 'public.proposals', policy: 'proposals_public_view_update' },
+  { table: 'public.proposals', policy: 'proposals_public_accept_update' },
   { table: 'public.proposal_options', policy: 'proposal_options_public_read' },
   { table: 'public.proposal_blocks', policy: 'proposal_blocks_public_read' },
   { table: 'public.proposal_views', policy: 'proposal_views_public_insert' },

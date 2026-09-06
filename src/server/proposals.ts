@@ -243,6 +243,65 @@ export type FiltroPropostas = {
   limite?: number;
 };
 
+/**
+ * Lista negócios disponíveis para criar uma proposta.
+ *
+ * Devolve resumo com id, título, destino, contato, moeda — informação suficiente
+ * para um seletor (Combobox) mostrar opções por nome/destino/contato.
+ *
+ * Não inclui negócios que já têm uma proposta enviada (status !== 'draft'), porque
+ * o "padrão" é um negócio → uma proposta. Se a agente quer segunda proposta sobre o
+ * mesmo negócio, vai passar o ID diretamente (hoje é "Cole o ID"; amanhã pode virar
+ * um visual no editor).
+ */
+export type NegocioResumo = {
+  id: string;
+  title: string;
+  destination: string | null;
+  contactName: string;
+  currency: string;
+};
+
+export async function listarNegocios(
+  filtro?: { busca?: string; limite?: number },
+): Promise<ServiceResult<NegocioResumo[]>> {
+  return comoResultado(async () => {
+    const { tenantId } = await requireAuthContext();
+    const limite = Math.min(Math.max(filtro?.limite ?? 100, 1), 200);
+    const busca = filtro?.busca?.trim();
+
+    return withTenant(tenantId, async (tx) => {
+      const condicoes = [];
+
+      if (busca && busca.length > 0) {
+        condicoes.push(
+          or(
+            sql`${deals.title} ilike ${'%' + busca + '%'}`,
+            sql`${deals.destination} ilike ${'%' + busca + '%'}`,
+            sql`${contacts.name} ilike ${'%' + busca + '%'}`,
+          ),
+        );
+      }
+
+      const linhas = await tx
+        .select({
+          id: deals.id,
+          title: deals.title,
+          destination: deals.destination,
+          contactName: contacts.name,
+          currency: deals.currency,
+        })
+        .from(deals)
+        .innerJoin(contacts, eq(contacts.id, deals.contactId))
+        .where(condicoes.length > 0 ? and(...condicoes) : undefined)
+        .orderBy(desc(deals.createdAt))
+        .limit(limite);
+
+      return linhas as NegocioResumo[];
+    });
+  });
+}
+
 export async function listarPropostas(
   filtro?: FiltroPropostas,
 ): Promise<ServiceResult<PropostaResumo[]>> {

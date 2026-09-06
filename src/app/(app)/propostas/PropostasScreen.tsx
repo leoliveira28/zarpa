@@ -5,12 +5,15 @@ import { useRouter } from "next/navigation";
 import {
   criarPropostaAPartirDoNegocio,
   listarPropostas,
+  listarNegocios,
   restaurarProposta,
   type PropostaResumo,
+  type NegocioResumo,
 } from "@/server";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { Combobox } from "@/components/ui/Combobox";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Field, FieldError, FieldHint, Label } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
@@ -290,12 +293,24 @@ function NovaPropostaSheet({
   const [title, setTitle] = React.useState("");
   const [creating, setCreating] = React.useState(false);
   const [fieldError, setFieldError] = React.useState<{ campo?: string; mensagem: string } | null>(null);
+  const [negocios, setNegocios] = React.useState<NegocioResumo[]>([]);
+  const [loadingNegocios, setLoadingNegocios] = React.useState(false);
 
+  // Carrega negócios quando a Sheet abre
   React.useEffect(() => {
-    if (!open) {
+    if (open) {
+      setLoadingNegocios(true);
+      listarNegocios({ limite: 100 }).then((result) => {
+        setLoadingNegocios(false);
+        if (result.ok) {
+          setNegocios(result.data);
+        }
+      });
+    } else {
       setDealId("");
       setTitle("");
       setFieldError(null);
+      setNegocios([]);
     }
   }, [open]);
 
@@ -315,6 +330,8 @@ function NovaPropostaSheet({
     onCreated(result.data.id);
   }
 
+  const selectedNegocio = negocios.find((n) => n.id === dealId);
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -329,7 +346,7 @@ function NovaPropostaSheet({
             type="submit"
             form="nova-proposta-form"
             loading={creating}
-            disabled={dealId.trim().length < 10}
+            disabled={!selectedNegocio}
           >
             Criar e montar
           </Button>
@@ -337,22 +354,29 @@ function NovaPropostaSheet({
       >
         <form id="nova-proposta-form" onSubmit={handleSubmit} className="flex flex-col gap-4 py-2">
           <Field invalid={fieldError?.campo === "dealId"}>
-            <Label>ID do negócio</Label>
-            <Input
-              autoFocus
+            <Label>Negócio</Label>
+            <Combobox
               value={dealId}
-              onChange={(event) => setDealId(event.target.value)}
-              placeholder="Cole o ID do negócio"
-              aria-invalid={fieldError?.campo === "dealId" || undefined}
+              onValueChange={(value) => setDealId(value ?? "")}
+              options={negocios.map((n) => ({
+                value: n.id,
+                label: n.title,
+                hint: n.contactName + (n.destination ? ` · ${n.destination}` : ""),
+              }))}
+              placeholder="Selecione um negócio"
+              searchPlaceholder="Buscar por título, destino ou contato"
+              loading={loadingNegocios}
+              emptyMessage="Nenhum negócio encontrado"
+              invalid={fieldError?.campo === "dealId"}
             />
             {fieldError?.campo === "dealId" ? (
               <FieldError>{fieldError.mensagem}</FieldError>
-            ) : (
+            ) : selectedNegocio ? (
               <FieldHint>
-                O seletor por nome do negócio chega com o serviço de listagem (handoff aberto
-                com o backend). Por ora, cole o ID.
+                {selectedNegocio.contactName}
+                {selectedNegocio.destination && ` · ${selectedNegocio.destination}`}
               </FieldHint>
-            )}
+            ) : null}
           </Field>
 
           <Field>

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { registrarVisitaProposta, type PropostaPublica } from "@/server";
+import { registrarVisitaProposta, aceitarOpcaoPublica, type PropostaPublica } from "@/server";
 import { Badge } from "@/components/ui/Badge";
 import { Money } from "@/components/ui/Money";
 import { ArchPlate, Rule } from "@/components/plates";
@@ -155,6 +155,7 @@ export function PublicProposalScreen({
                 proposalTitle={proposal.title}
                 accepted={proposal.acceptedOptionId === option.id}
                 registerRef={(el) => registerOption(option.id, el)}
+                slug={slug}
               />
             ))}
           </div>
@@ -195,6 +196,7 @@ function OptionCard({
   proposalTitle,
   accepted,
   registerRef,
+  slug,
 }: {
   option: PropostaPublica["options"][number];
   blocks: PropostaPublica["blocks"];
@@ -202,14 +204,39 @@ function OptionCard({
   proposalTitle: string;
   accepted: boolean;
   registerRef: (el: HTMLDivElement | null) => void;
+  slug: string;
 }) {
-  const acceptHref = brand.whatsappLink
+  const [accepting, setAccepting] = React.useState(false);
+  const [acceptedNow, setAcceptedNow] = React.useState(false);
+
+  const whatsappLink = brand.whatsappLink
     ? `${brand.whatsappLink}?text=${encodeURIComponent(
         `Olá! Quero confirmar a opção "${option.name}" da proposta "${proposalTitle}" — ${formatBRL(
           option.priceCents,
         )}.`,
       )}`
     : null;
+
+  async function handleAccept() {
+    setAccepting(true);
+    const result = await aceitarOpcaoPublica({
+      slug,
+      optionId: option.id,
+    });
+    setAccepting(false);
+
+    if (result.ok) {
+      setAcceptedNow(true);
+      // Abre WhatsApp como confirmação secundária após aceitar
+      if (whatsappLink) {
+        // Pequeno delay para o feedback visual do aceite
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        window.open(whatsappLink, "_blank", "noopener,noreferrer");
+      }
+    }
+  }
+
+  const isAccepted = accepted || acceptedNow;
 
   return (
     <div
@@ -243,18 +270,18 @@ function OptionCard({
 
       <div className="mt-auto flex flex-col pt-2">
         <Rule />
-        {accepted ? (
+        {isAccepted ? (
           <p className="pt-3 text-13 font-medium text-ok">Você já confirmou esta opção.</p>
-        ) : acceptHref ? (
-          <a
-            href={acceptHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-3 inline-flex h-11 items-center justify-center gap-2 rounded-md px-4 text-15 font-medium text-white [transition:transform_120ms_var(--curve-out)] active:scale-[0.98]"
+        ) : whatsappLink ? (
+          <button
+            type="button"
+            onClick={handleAccept}
+            disabled={accepting}
+            className="mt-3 inline-flex h-11 items-center justify-center gap-2 rounded-md px-4 text-15 font-medium text-white disabled:opacity-60 [transition:transform_120ms_var(--curve-out)] active:scale-[0.98]"
             style={{ backgroundColor: brand.primaryColor ?? "var(--accent)" }}
           >
-            Aceitar esta opção
-          </a>
+            {accepting ? "Confirmando..." : "Aceitar esta opção"}
+          </button>
         ) : (
           <p className="pt-3 text-13 text-muted">
             Fale com quem te mandou esta proposta para confirmar.

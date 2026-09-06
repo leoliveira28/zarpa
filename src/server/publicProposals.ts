@@ -279,3 +279,49 @@ async function obterContextoDeNotificacao(
     contactName: linha.contactName,
   };
 }
+
+/**
+ * Cliente final aceita uma opção SEM login, via link público.
+ *
+ * Segue o padrão de `registrarVisitaProposta`: usa a função `SECURITY DEFINER`
+ * `public.aceitar_opcao_proposta` (drizzle/0005_aceitar_opcao.sql) para validar
+ * e registrar o aceite. A função confere que a proposta está publicável
+ * (status 'sent'/'viewed') e que a opção pertence mesmo a ela, antes de
+ * gravar. Nunca confia em IDs vindo do navegador.
+ *
+ * Devolve `{ ok: true, data: null }` tanto para slug errado quanto para
+ * tentativa de aceitar opção que não pertence à proposta (mesma estratégia
+ * de `registrarVisitaProposta` — não da pistas sobre qual falha aconteceu).
+ */
+const aceitarOpcaoInput = z.object({
+  slug: slugSchema,
+  optionId: z.uuid('ID da opção inválido'),
+});
+
+export type AceitarOpcaoInput = z.infer<typeof aceitarOpcaoInput>;
+
+export async function aceitarOpcaoPublica(
+  input: AceitarOpcaoInput,
+): Promise<ServiceResult<null>> {
+  return comoResultado(async () => {
+    const parsed = aceitarOpcaoInput.safeParse(input);
+    if (!parsed.success) {
+      throw new ServiceError('DADOS_INVALIDOS', 'Dados de aceite inválidos.', {
+        correcao: 'Recarregar a página',
+      });
+    }
+    const dados = parsed.data;
+
+    const linhas = await unsafeSqlWithoutTenant<{ success: boolean }[]>`
+      select success
+      from public.aceitar_opcao_proposta(${dados.slug}, ${dados.optionId})
+    `;
+    const linha = linhas[0];
+
+    // Slug não bateu, proposta não publicável, ou opção não pertence à proposta:
+    // nada a registrar, nada a notificar.
+    if (!linha?.success) return null;
+
+    return null;
+  });
+}

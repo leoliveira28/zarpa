@@ -70,6 +70,7 @@ export {
 } from './alerts';
 export {
   listarPropostas,
+  listarNegocios,
   criarPropostaAPartirDoNegocio,
   obterPropostaParaEdicao,
   atualizarProposta,
@@ -91,6 +92,7 @@ export {
   type BlocoEdicao,
   type PropostaEdicao,
   type PropostaResumo,
+  type NegocioResumo,
   type FiltroPropostas,
   type PropostaMetaPatch,
   type OpcaoInput,
@@ -115,10 +117,17 @@ export {
 export {
   obterPropostaPublica,
   registrarVisitaProposta,
+  aceitarOpcaoPublica,
   type PropostaPublica,
   type PropostaPublicaBrand,
   type PropostaPublicaMeta,
   type PropostaPublicaOpcao,
   type PropostaPublicaBloco,
   type RegistrarVisitaInput,
+  type AceitarOpcaoInput,
 } from './publicProposals';
+export {
+  listarAberturasRecentes,
+  type AberturaProposta,
+  type FiltroAberturas,
+} from './aberturas';
