@@ -21,6 +21,7 @@ import { unsafeDbWithoutTenant, unsafeSqlWithoutTenant } from './client';
 import { withTenant } from '../lib/tenant/withTenant';
 import { uuidv7 } from './uuid';
 import { blindIndex } from '../lib/crypto/keyring';
+import { camposCpfDoViajante, camposDocumentoDoContato, camposNascimento } from '../server/piiFields';
 import {
   activities,
   auditLog,
@@ -289,6 +290,13 @@ async function criarTenant(spec: TenantSpec): Promise<string> {
     });
 
     for (const c of spec.contacts) {
+      // As três colunas de documento (cifra/hash/key_id) e as duas de nascimento
+      // (cifra/mês-dia) andam sempre juntas — mesmas funções que `contacts.ts` usa, para
+      // o seed não desalinhar do CHECK do banco nem ficar invisível ao alerta de
+      // aniversário (que lê `birth_month_day` em claro).
+      const documento = camposDocumentoDoContato(tenantId, c.document);
+      const nascimento = camposNascimento(c.birthDate);
+
       const [contato] = await tx
         .insert(contacts)
         .values({
@@ -297,8 +305,8 @@ async function criarTenant(spec: TenantSpec): Promise<string> {
           email: c.email,
           phone: c.phone,
           whatsapp: c.phone,
-          document: c.document,
-          birthDate: c.birthDate,
+          ...documento,
+          ...nascimento,
           source: c.source,
           tags: [spec.brandName.toLowerCase().replace(/\s+/g, '-')],
           notes: `Cliente de ${spec.brandName}.`,
@@ -307,15 +315,18 @@ async function criarTenant(spec: TenantSpec): Promise<string> {
 
       const contatoId = contato!.id;
 
+      const cpfViajante = camposCpfDoViajante(tenantId, c.traveler.cpf);
+      const nascimentoViajante = camposNascimento(c.traveler.birthDate);
+
       await tx.insert(travelers).values({
         tenantId,
         contactId: contatoId,
         fullName: c.traveler.fullName,
         kind: 'adult',
-        cpf: c.traveler.cpf,
+        ...cpfViajante,
         passportNumber: c.traveler.passport,
         passportExpiresOn: isoDate(900),
-        birthDate: c.traveler.birthDate,
+        ...nascimentoViajante,
         nationality: 'BR',
       });
 

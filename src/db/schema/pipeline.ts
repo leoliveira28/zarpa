@@ -9,6 +9,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { uuidv7 } from '../uuid';
@@ -91,6 +92,21 @@ export const tasks = pgTable(
     kind: text('kind', { enum: ['followup', 'ligar', 'whatsapp', 'email', 'outro'] })
       .notNull()
       .default('followup'),
+    /**
+     * Quem criou: 'manual' (a agente), ou o alerta que gerou a tarefa. Junto de
+     * `dedupeKey` é o que faz o cron ser idempotente — ver a migration 0001.
+     */
+    source: text('source', {
+      enum: ['manual', 'alerta_passaporte', 'alerta_aniversario', 'importacao'],
+    })
+      .notNull()
+      .default('manual'),
+    /**
+     * Chave determinística da tarefa gerada (ex.: `passaporte:<travelerId>:90`). NULL para
+     * tarefa manual. Índice único parcial em (tenant_id, dedupe_key): rodar o cron duas
+     * vezes é no-op no BANCO, não por sorte da aplicação.
+     */
+    dedupeKey: text('dedupe_key'),
     dueAt: timestamp('due_at', { withTimezone: true }).notNull(),
     doneAt: timestamp('done_at', { withTimezone: true }),
     createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
@@ -107,10 +123,18 @@ export const tasks = pgTable(
     index('tasks_deal_id_idx').on(t.dealId),
     index('tasks_contact_id_idx').on(t.contactId),
     index('tasks_created_by_idx').on(t.createdBy),
+    uniqueIndex('tasks_tenant_dedupe_key')
+      .on(t.tenantId, t.dedupeKey)
+      .where(sql`${t.dedupeKey} is not null`),
     check(
       'tasks_kind_check',
       sql`${t.kind} in ('followup', 'ligar', 'whatsapp', 'email', 'outro')`,
     ),
+    check(
+      'tasks_source_check',
+      sql`${t.source} in ('manual', 'alerta_passaporte', 'alerta_aniversario', 'importacao')`,
+    ),
+    check('tasks_dedupe_key_check', sql`(${t.source} = 'manual') = (${t.dedupeKey} is null)`),
   ],
 );
 

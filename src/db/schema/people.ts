@@ -40,6 +40,18 @@ export const contacts = pgTable(
     /** Data de nascimento, cifrada — por isso `text` e não `date`. */
     birthDate: encryptedText('birth_date_encrypted'),
 
+    /**
+     * Índice cego do CPF: HMAC determinístico com chave derivada por tenant. É o que
+     * permite `WHERE document_hash = ?` num campo cifrado com IV aleatório. Escrito
+     * SEMPRE junto de `document` — há CHECK no banco garantindo isso. Ver
+     * `src/lib/crypto/blindIndex.ts` para a implicação de segurança.
+     */
+    documentHash: text('document_hash'),
+    /** Qual chave gerou o hash acima. Sem isto, rotação de chave cega a busca. */
+    documentHashKeyId: text('document_hash_key_id'),
+    /** `MM-DD` em claro, para o alerta de aniversário. O ANO fica só em `birthDate`. */
+    birthMonthDay: text('birth_month_day'),
+
     source: text('source', {
       enum: ['whatsapp', 'instagram', 'indicacao', 'site', 'evento', 'outro'],
     }),
@@ -57,9 +69,23 @@ export const contacts = pgTable(
     uniqueIndex('contacts_tenant_email_key')
       .on(t.tenantId, sql`lower(${t.email})`)
       .where(sql`${t.email} is not null`),
+    uniqueIndex('contacts_tenant_document_hash_key')
+      .on(t.tenantId, t.documentHash)
+      .where(sql`${t.documentHash} is not null`),
+    index('contacts_tenant_birthday_idx')
+      .on(t.tenantId, t.birthMonthDay)
+      .where(sql`${t.birthMonthDay} is not null`),
     check(
       'contacts_source_check',
       sql`${t.source} is null or ${t.source} in ('whatsapp', 'instagram', 'indicacao', 'site', 'evento', 'outro')`,
+    ),
+    check(
+      'contacts_birth_month_day_check',
+      sql`${t.birthMonthDay} is null or ${t.birthMonthDay} ~ '^[0-1][0-9]-[0-3][0-9]$'`,
+    ),
+    check(
+      'contacts_document_hash_check',
+      sql`(${t.document} is null) = (${t.documentHash} is null) and (${t.documentHash} is null) = (${t.documentHashKeyId} is null)`,
     ),
   ],
 );
@@ -85,6 +111,12 @@ export const travelers = pgTable(
     passportExpiresOn: date('passport_expires_on'),
     birthDate: encryptedText('birth_date_encrypted'),
 
+    /** Índice cego do CPF do passageiro. Mesmas regras de `contacts.documentHash`. */
+    cpfHash: text('cpf_hash'),
+    cpfHashKeyId: text('cpf_hash_key_id'),
+    /** `MM-DD` em claro, para o alerta de aniversário. */
+    birthMonthDay: text('birth_month_day'),
+
     nationality: text('nationality').notNull().default('BR'),
     notes: text('notes'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -93,7 +125,24 @@ export const travelers = pgTable(
   (t) => [
     index('travelers_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
     index('travelers_contact_id_idx').on(t.contactId),
+    uniqueIndex('travelers_tenant_cpf_hash_key')
+      .on(t.tenantId, t.cpfHash)
+      .where(sql`${t.cpfHash} is not null`),
+    index('travelers_tenant_passport_expires_idx')
+      .on(t.tenantId, t.passportExpiresOn)
+      .where(sql`${t.passportExpiresOn} is not null`),
+    index('travelers_tenant_birthday_idx')
+      .on(t.tenantId, t.birthMonthDay)
+      .where(sql`${t.birthMonthDay} is not null`),
     check('travelers_kind_check', sql`${t.kind} in ('adult', 'child', 'infant')`),
+    check(
+      'travelers_birth_month_day_check',
+      sql`${t.birthMonthDay} is null or ${t.birthMonthDay} ~ '^[0-1][0-9]-[0-3][0-9]$'`,
+    ),
+    check(
+      'travelers_cpf_hash_check',
+      sql`(${t.cpf} is null) = (${t.cpfHash} is null) and (${t.cpfHash} is null) = (${t.cpfHashKeyId} is null)`,
+    ),
   ],
 );
 

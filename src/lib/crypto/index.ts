@@ -18,4 +18,13 @@ export {
   type KeyId,
 } from './keyring';
 
+export {
+  blindIndexFor,
+  blindIndexCandidates,
+  blindIndexEquals,
+  normalizeDocumentForIndex,
+  type BlindIndexField,
+  type BlindIndexValue,
+} from './blindIndex';
+
 export { encryptedText } from './encryptedColumn';

@@ -11,12 +11,34 @@
 export { ServiceError, comoResultado, type ServiceResult, type ServiceErrorCode } from './errors';
 export {
   listarContatos,
+  buscarContatoPorCpf,
+  obterContato,
   criarContato,
+  atualizarContato,
   arquivarContato,
-  obterDocumentoDoViajante,
+  restaurarContato,
+  excluirContato,
+  obterDocumentoDoContato,
   type ContatoInput,
+  type ContatoPatch,
   type ContatoResumo,
+  type ContatoDetalhe,
+  type FiltroContatos,
 } from './contacts';
+export {
+  listarViajantes,
+  obterViajante,
+  buscarViajantePorCpf,
+  criarViajante,
+  atualizarViajante,
+  excluirViajante,
+  obterDocumentoDoViajante,
+  listarPassaportesVencendo,
+  type ViajanteInput,
+  type ViajantePatch,
+  type ViajanteResumo,
+  type FiltroViajantes,
+} from './travelers';
 export {
   obterTenantAtual,
   atualizarMarca,
@@ -24,3 +46,25 @@ export {
   type MarcaInput,
   type TenantAtual,
 } from './tenants';
+export {
+  pravisualizarImportacao,
+  confirmarImportacao,
+  listarImportacoes,
+  obterRelatorioDeImportacao,
+  type Mapeamento,
+  type MapeamentoColuna,
+  type CampoContatoImportavel,
+  type PreviaImportacao,
+  type RelatorioImportacao,
+  type ItemRelatorio,
+  type ImportacaoResumo,
+} from './imports';
+export {
+  gerarAlertas,
+  gerarAlertasDoTenantAtual,
+  listarTarefas,
+  concluirTarefa,
+  type TarefaResumo,
+  type ResultadoAlertasTenant,
+  type ResultadoAlertasGeral,
+} from './alerts';
