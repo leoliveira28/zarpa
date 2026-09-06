@@ -14,6 +14,12 @@ export const TENANT_COLUMN = 'tenant_id'
 /** Schemas que são nossos. `public` por padrão; extensões e catálogo ficam de fora. */
 const APP_SCHEMAS = ['public']
 
+// `{}` é o genérico que a própria assinatura de `postgres.Options<T>` usa como
+// default (dicionário de tipos de coluna customizados). Trocar por
+// `Record<string, never>` ou `object` quebra a inferência de retorno de
+// `postgres()` (tsc acusa incompatibilidade em `options.types` contra `Sql`
+// acima) — não é o "{} aceita qualquer valor" que a regra normalmente pega.
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export function connect(options: Partial<postgres.Options<{}>> = {}): Sql {
   return postgres(testDatabaseUrl(), {
     max: 4,
