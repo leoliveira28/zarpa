@@ -5,6 +5,7 @@ import { account, session, user, verification } from '@/db/schema';
 import { requiredEnv } from '@/db/env';
 import { authDb } from './db';
 import { deliverMagicLink } from './delivery';
+import { pendingTenantId } from './signupContext';
 
 /**
  * Better Auth, auto-hospedado no mesmo Postgres (decisão travada no CLAUDE.md).
@@ -15,11 +16,14 @@ import { deliverMagicLink } from './delivery';
  *   - e-mail + senha, para quem prefere.
  *
  * Todo usuário nasce amarrado a um `tenant_id`. Isso NÃO é opcional: `user.tenant_id` é
- * `NOT NULL` no banco, e `input: false` no campo adicional impede que o valor chegue pelo
- * corpo da requisição. Quem cria tenant é `src/server/signup.ts`, que gera o tenant antes
- * e passa o id por dentro. Se alguém conseguisse mandar `tenantId` no JSON de cadastro,
- * criaria usuário dentro do tenant dos outros — e o RLS não salvaria, porque a linha
- * teria nascido com o `tenant_id` da vítima.
+ * `NOT NULL` no banco, `input: false` no campo adicional impede que o valor chegue pelo
+ * corpo da requisição, e o `defaultValue` do campo (ver abaixo) é quem de fato o
+ * preenche, lendo de `signupContext.ts` — nunca da requisição. Quem cria tenant é
+ * `src/server/signup.ts` (a via de produção) ou `src/db/seed.ts` (dev), que geram o
+ * tenant antes e chamam `withPendingTenant` ao redor de `signUpEmail`. Se alguém
+ * conseguisse mandar `tenantId` no JSON de cadastro, criaria usuário dentro do tenant dos
+ * outros — e o RLS não salvaria, porque a linha teria nascido com o `tenant_id` da
+ * vítima.
  *
  * O adapter usa `authDb` (ver `db.ts`), a conexão com `app.auth_context=on`. É a única
  * que enxerga as tabelas de credencial.
@@ -54,7 +58,28 @@ export const auth = betterAuth({
       tenantId: {
         type: 'string',
         required: true,
-        // NUNCA aceitar este campo vindo da requisição. Ver comentário acima.
+        // NUNCA aceitar este campo vindo da requisição: com `input: false`, se o corpo
+        // da requisição trouxer `tenantId` o parser do Better Auth rejeita com
+        // "tenantId is not allowed to be set" antes de chegar perto do INSERT.
+        //
+        // Mas `required: true` sem um jeito de preencher o campo também rejeitaria toda
+        // criação de usuário com "tenantId is required" — pego em teste ao rodar o seed.
+        // `defaultValue` é o mecanismo do próprio Better Auth para isso: só é consultado
+        // quando o campo NÃO veio no corpo (exatamente o caso normal, já que é
+        // `input: false`), e pode ser uma função. Aqui ela lê de `signupContext.ts`, um
+        // `AsyncLocalStorage` que só código de servidor consegue preencher
+        // (`withPendingTenant`) — nunca um header, cookie ou campo de JSON.
+        defaultValue: () => {
+          const tenantId = pendingTenantId();
+          if (!tenantId) {
+            throw new Error(
+              'Criação de usuário sem withPendingTenant() no contexto. Todo cadastro ' +
+                'precisa de um tenant decidido pelo servidor ANTES de chamar signUpEmail ' +
+                '— nunca a partir de um campo da requisição.',
+            );
+          }
+          return tenantId;
+        },
         input: false,
       },
       role: {
@@ -70,6 +95,27 @@ export const auth = betterAuth({
     expiresIn: 60 * 60 * 24 * 30, // 30 dias — o agente vende do celular, não quer relogar
     updateAge: 60 * 60 * 24, // renova no máximo uma vez por dia
     cookieCache: { enabled: true, maxAge: 5 * 60 },
+  },
+
+  databaseHooks: {
+    user: {
+      create: {
+        // Defesa em profundidade: o `defaultValue` de `tenantId` acima é quem
+        // efetivamente preenche o campo, mas se algum caminho de criação de usuário no
+        // futuro (OAuth, plugin de admin, ...) não passar pelo parser de campo do Better
+        // Auth, este hook garante que a linha nunca é gravada sem tenant. `user_tenant_id
+        // NOT NULL` no banco pegaria de qualquer forma, mas um erro claro aqui é melhor
+        // que estourar constraint no Postgres.
+        before: async (userData) => {
+          if (!userData.tenantId) {
+            throw new Error(
+              'Tentativa de criar usuário sem tenant_id. Recusando — ver withPendingTenant ' +
+                'em signupContext.ts.',
+            );
+          }
+        },
+      },
+    },
   },
 
   advanced: {

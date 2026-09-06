@@ -17,11 +17,17 @@
  */
 
 import { eq, inArray } from 'drizzle-orm';
-import { unsafeDbWithoutTenant, unsafeSqlWithoutTenant } from './client';
+import { unsafeSqlWithoutTenant } from './client';
 import { withTenant } from '../lib/tenant/withTenant';
 import { uuidv7 } from './uuid';
 import { blindIndex } from '../lib/crypto/keyring';
 import { camposCpfDoViajante, camposDocumentoDoContato, camposNascimento } from '../server/piiFields';
+// Import direto dos módulos, não do barril `../lib/auth`: o barril reexporta `session.ts`,
+// que importa `next/headers` — inexistente fora do runtime do Next.js, e este seed roda
+// como script Node puro.
+import { auth } from '../lib/auth/auth';
+import { authDb, authSql } from '../lib/auth/db';
+import { withPendingTenant } from '../lib/auth/signupContext';
 import {
   activities,
   auditLog,
@@ -40,6 +46,19 @@ import {
 } from './schema';
 
 const DEMO_SLUGS = ['volta-ao-mundo', 'mare-alta'];
+
+/**
+ * Usuário de desenvolvimento, com senha de verdade, criado pela API do Better Auth (nunca
+ * inserido à mão nas tabelas dele — é a própria API que gera o hash scrypt e grava
+ * `account.password`). Vive no tenant A ("Volta ao Mundo"). Credenciais fixas e óbvias:
+ * isto só existe porque `requireEmailVerification: false` e o banco é local — nunca faça
+ * isto apontando para produção.
+ */
+const DEV_USER = {
+  name: 'Dev Zarpa',
+  email: 'dev@zarpa.local',
+  password: 'dev12345',
+} as const;
 
 /** Token de link público. 22 chars base64url ~= 128 bits. Não é sequencial de propósito. */
 function publicToken(): string {
@@ -220,9 +239,18 @@ const PLAN_PRICE_CENTS = { solo: 4_900, pro: 9_900, studio: 19_900 } as const;
 async function limparDemo(): Promise<void> {
   // O DELETE em `tenants` é a única operação do seed que NÃO cabe em `withTenant`:
   // são dois tenants diferentes numa tacada, e a policy (corretamente) só deixa apagar
-  // o tenant do contexto. Fica explícito no cliente cru — e é por isso que ele tem
-  // esse nome. CASCADE das FKs leva contacts, deals, proposals e o resto junto.
-  const alvos = await unsafeDbWithoutTenant
+  // o tenant do contexto.
+  //
+  // O SELECT que acha os alvos NÃO pode ser em `unsafeDbWithoutTenant`: `tenants` nasce
+  // com FORCE ROW LEVEL SECURITY e só tem duas policies — `tenants_isolation` (exige
+  // `app.tenant_id` == id, que ainda não sabemos) e `tenants_auth_service` (exige
+  // `app.auth_context = 'on'`). Sem nenhum dos dois GUCs setados, `unsafeDbWithoutTenant`
+  // vê ZERO linhas em `tenants`, sempre — silencioso, sem erro. Rodar o seed uma segunda
+  // vez faria `limparDemo` "não achar nada para apagar" e o INSERT seguinte estourar
+  // `tenants_slug_key`. É por isso que aqui usamos `authDb`: é o único cliente que liga
+  // `app.auth_context=on` (ver `src/lib/auth/db.ts`), e é exatamente o cenário que essa
+  // policy existe para atender — resolver/gerenciar tenant antes de haver um contexto.
+  const alvos = await authDb
     .select({ id: tenants.id, slug: tenants.slug })
     .from(tenants)
     .where(inArray(tenants.slug, DEMO_SLUGS));
@@ -509,11 +537,33 @@ async function criarTenant(spec: TenantSpec): Promise<string> {
   return tenantId;
 }
 
+/**
+ * Cria o usuário dev pela API do Better Auth — nunca por INSERT direto — para que a senha
+ * nasça com o hash de verdade e o login funcione ponta a ponta. `withPendingTenant` é o
+ * único jeito de `tenantId` chegar em `user`: ver `src/lib/auth/signupContext.ts`.
+ */
+async function criarUsuarioDev(tenantId: string): Promise<void> {
+  await withPendingTenant(tenantId, async () => {
+    await auth.api.signUpEmail({
+      body: {
+        name: DEV_USER.name,
+        email: DEV_USER.email,
+        password: DEV_USER.password,
+      },
+    });
+  });
+  console.log(
+    `[seed] usuário dev pronto: ${DEV_USER.email} / ${DEV_USER.password} (tenant ${tenantId})`,
+  );
+}
+
 async function main(): Promise<void> {
   await limparDemo();
 
   const tenantAId = await criarTenant(TENANT_A);
   const tenantBId = await criarTenant(TENANT_B);
+
+  await criarUsuarioDev(tenantAId);
 
   // Conferência de sanidade: cada tenant só enxerga o que é dele. Não substitui o teste
   // do Téo, mas se isto falhar não vale a pena nem abrir o psql.
@@ -537,4 +587,4 @@ main()
     console.error('[seed] erro:', error);
     process.exitCode = 1;
   })
-  .finally(() => unsafeSqlWithoutTenant.end());
+  .finally(() => Promise.all([unsafeSqlWithoutTenant.end(), authSql.end()]));

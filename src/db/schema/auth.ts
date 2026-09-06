@@ -73,6 +73,12 @@ export const account = pgTable(
     id: text('id').primaryKey(),
     accountId: text('account_id').notNull(),
     providerId: text('provider_id').notNull(),
+    /**
+     * Better Auth 1.7: a identidade de uma conta passa a ser escopada por `issuer`, não
+     * só por `providerId` — ver migration `0002_account_issuer`. Sem esta coluna o
+     * adapter recusa QUALQUER escrita em `account` (cadastro por e-mail/senha incluso).
+     */
+    issuer: text('issuer').notNull(),
     userId: text('user_id')
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
@@ -89,7 +95,7 @@ export const account = pgTable(
   },
   (t) => [
     index('account_user_id_idx').on(t.userId),
-    uniqueIndex('account_provider_account_key').on(t.providerId, t.accountId),
+    uniqueIndex('account_issuer_account_key').on(t.issuer, t.accountId),
   ],
 );
 
