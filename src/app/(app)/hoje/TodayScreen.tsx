@@ -2,25 +2,36 @@
 
 import * as React from "react";
 import { AnimatePresence, motion } from "motion/react";
+import {
+  concluirTarefa,
+  listarAberturasRecentes,
+  listarTarefasDeHoje,
+  type AberturaProposta,
+  type TarefaDeHoje,
+} from "@/server";
 import { cn } from "@/lib/ui/cn";
 import { useTransitionPreset } from "@/lib/ui/motion";
-import {
-  PROPOSALS,
-  TASKS,
-  recentlyOpened,
-  stalled,
-  sumCents,
-  type Task,
-} from "@/lib/ui/sample-data";
+import { useDeferredDelete } from "@/lib/ui/useDeferredDelete";
+import { formatRelativeShort, formatTime } from "@/lib/ui/format";
+import { PROPOSALS, stalled, sumCents } from "@/lib/ui/sample-data";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, SectionHeading } from "@/components/ui/Card";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { FieldError } from "@/components/ui/Field";
 import { Money } from "@/components/ui/Money";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import { ClockIcon, OpenedIcon, ChevronRightIcon } from "@/components/app/icons";
+import {
+  CakeIcon,
+  ChatIcon,
+  ChevronRightIcon,
+  ClockIcon,
+  CopyIcon,
+  OpenedIcon,
+  PassportIcon,
+} from "@/components/app/icons";
 
 /* =============================================================================
    Hoje
@@ -34,21 +45,79 @@ import { ClockIcon, OpenedIcon, ChevronRightIcon } from "@/components/app/icons"
    Desenhada para 390px primeiro. No desktop ela vira duas colunas, mas o
    conteúdo e a ordem são os mesmos: quem trabalha no celular não recebe uma
    versão pior.
+
+   "Tarefas de hoje" e "Abriram sua proposta" já são dado real
+   (`listarTarefasDeHoje` / `listarAberturasRecentes`, S8). "Paradas há mais
+   de 7 dias" e os dois números do topo continuam com o exemplo em memória —
+   o serviço de pipeline/deals ainda não existe do lado do servidor.
    ========================================================================== */
+
+type Status = "loading" | "ready" | "error";
 
 export function TodayScreen() {
   const toast = useToast();
   const transition = useTransitionPreset();
 
-  // simulação do primeiro carregamento — o backend não existe ainda.
-  const [loading, setLoading] = React.useState(true);
-  React.useEffect(() => {
-    const timer = window.setTimeout(() => setLoading(false), 700);
-    return () => window.clearTimeout(timer);
-  }, []);
+  const [tasksStatus, setTasksStatus] = React.useState<Status>("loading");
+  const [tasks, setTasks] = React.useState<TarefaDeHoje[]>([]);
+  const [tasksError, setTasksError] = React.useState<{
+    mensagem: string;
+    correcao?: string;
+  } | null>(null);
+  const [tasksReload, setTasksReload] = React.useState(0);
+  const retryTasks = React.useCallback(
+    () => setTasksReload((n) => n + 1),
+    [],
+  );
 
-  const [tasks, setTasks] = React.useState<Task[]>(TASKS);
-  const opened = React.useMemo(() => recentlyOpened(), []);
+  const [openedStatus, setOpenedStatus] = React.useState<Status>("loading");
+  const [opened, setOpened] = React.useState<AberturaProposta[]>([]);
+  const [openedError, setOpenedError] = React.useState<{
+    mensagem: string;
+    correcao?: string;
+  } | null>(null);
+  const [openedReload, setOpenedReload] = React.useState(0);
+  const retryOpened = React.useCallback(
+    () => setOpenedReload((n) => n + 1),
+    [],
+  );
+
+  React.useEffect(() => {
+    let active = true;
+    setTasksStatus((current) => (current === "ready" ? current : "loading"));
+    void listarTarefasDeHoje().then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setTasksStatus("error");
+        setTasksError({ mensagem: result.mensagem, correcao: result.correcao });
+        return;
+      }
+      setTasks(result.data);
+      setTasksStatus("ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, [tasksReload]);
+
+  React.useEffect(() => {
+    let active = true;
+    setOpenedStatus((current) => (current === "ready" ? current : "loading"));
+    void listarAberturasRecentes().then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setOpenedStatus("error");
+        setOpenedError({ mensagem: result.mensagem, correcao: result.correcao });
+        return;
+      }
+      setOpened(result.data);
+      setOpenedStatus("ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, [openedReload]);
+
   const parked = React.useMemo(() => stalled(), []);
   const pipelineCents = React.useMemo(
     () => sumCents(PROPOSALS.filter((p) => p.stage !== "fechada")),
@@ -58,25 +127,51 @@ export function TodayScreen() {
     () => sumCents(PROPOSALS.filter((p) => p.stage === "fechada")),
     [],
   );
+  const loading = tasksStatus === "loading" && openedStatus === "loading";
 
-  const pending = tasks.filter((task) => !task.done);
+  // `concluirTarefa` não tem par de reabertura no servidor — a tarefa some da
+  // tela na hora (parece instantâneo) e só é marcada concluída de verdade se
+  // os 8s do toast passarem sem ninguém tocar em "Desfazer". Mesmo desenho de
+  // `useDeferredDelete` (arquivamento de cliente), reaproveitado aqui porque
+  // "concluir" também é, no fim, uma remoção sem volta garantida no servidor.
+  const scheduleConclude = useDeferredDelete<TarefaDeHoje>({
+    label: (task) => `Concluída: ${task.title}`,
+    commit: (task) => concluirTarefa(task.id),
+    onFailure: (task, mensagem) => {
+      // a chamada tardia falhou (ex.: tarefa já concluída por outra aba) —
+      // devolve a tarefa para a lista em vez de fingir que deu certo.
+      setTasks((current) =>
+        current.some((item) => item.id === task.id)
+          ? current
+          : [...current, task].sort(
+              (a, b) => a.dueAt.valueOf() - b.dueAt.valueOf(),
+            ),
+      );
+      toast.show({
+        title: "Não consegui concluir",
+        description: mensagem,
+        tone: "danger",
+      });
+    },
+  });
 
-  function toggleTask(id: string, done: boolean) {
-    setTasks((current) =>
-      current.map((task) => (task.id === id ? { ...task, done } : task)),
-    );
-    if (!done) return;
-    const task = tasks.find((item) => item.id === id);
-    toast.undo(
-      "Tarefa concluída",
-      () =>
-        setTasks((current) =>
-          current.map((item) =>
-            item.id === id ? { ...item, done: false } : item,
-          ),
-        ),
-      { description: task?.title, tone: "ok" },
-    );
+  function concludeTask(task: TarefaDeHoje) {
+    setTasks((current) => current.filter((item) => item.id !== task.id));
+    scheduleConclude(task);
+  }
+
+  async function copyMessage(task: TarefaDeHoje) {
+    if (!task.suggestedMessage) return;
+    try {
+      await navigator.clipboard.writeText(task.suggestedMessage);
+      toast.show({ title: "Mensagem copiada", tone: "ok" });
+    } catch {
+      toast.show({
+        title: "Não consegui copiar",
+        description: "Selecione e copie o texto manualmente.",
+        tone: "danger",
+      });
+    }
   }
 
   return (
@@ -90,24 +185,33 @@ export function TodayScreen() {
       <section aria-labelledby="hoje-tarefas">
         <SectionHeading
           action={
-            <span className="text-13 tabular-nums text-muted" data-numeric>
-              {pending.length} de {tasks.length}
-            </span>
+            tasksStatus === "ready" ? (
+              <span className="text-13 tabular-nums text-muted" data-numeric>
+                {tasks.length} {tasks.length === 1 ? "pendente" : "pendentes"}
+              </span>
+            ) : null
           }
         >
           <span id="hoje-tarefas">Tarefas de hoje</span>
         </SectionHeading>
 
-        {loading ? (
+        {tasksStatus === "loading" ? (
           <Card className="flex flex-col gap-4 p-4">
             {[0, 1, 2].map((row) => (
               <SkeletonRow key={row} />
             ))}
           </Card>
+        ) : tasksStatus === "error" ? (
+          <Card className="flex flex-col items-start gap-3 p-4">
+            <FieldError>{tasksError?.mensagem}</FieldError>
+            <Button variant="secondary" size="sm" onClick={retryTasks}>
+              {tasksError?.correcao ?? "Tentar de novo"}
+            </Button>
+          </Card>
         ) : tasks.length === 0 ? (
           <EmptyState
             title="Nada marcado para hoje"
-            description="Toda proposta enviada vira um lembrete de follow-up automático em 3 dias. Você não precisa lembrar sozinho."
+            description="Toda proposta enviada vira um lembrete de follow-up automático — passaporte perto de vencer e aniversário de cliente também aparecem aqui sozinhos."
             action={<Button variant="primary">Criar lembrete</Button>}
           />
         ) : (
@@ -119,35 +223,58 @@ export function TodayScreen() {
                     key={task.id}
                     layout
                     transition={transition}
-                    className="flex items-start gap-3 px-4 py-3"
+                    initial={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="flex flex-col gap-2 px-4 py-3"
                   >
-                    <Checkbox
-                      className="mt-0.5"
-                      checked={task.done}
-                      onCheckedChange={(checked) =>
-                        toggleTask(task.id, checked === true)
-                      }
-                      aria-label={`Concluir: ${task.title}`}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p
+                    <div className="flex items-start gap-3">
+                      <Checkbox
+                        className="mt-0.5"
+                        checked={false}
+                        onCheckedChange={(checked) => {
+                          if (checked === true) concludeTask(task);
+                        }}
+                        aria-label={`Concluir: ${task.title}`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="flex items-center gap-1.5 text-15 font-medium text-ink">
+                          <TaskSourceIcon
+                            source={task.source}
+                            className="size-3.5 shrink-0 text-muted"
+                          />
+                          <span className="min-w-0 truncate">{task.title}</span>
+                        </p>
+                        {taskDetail(task) ? (
+                          <p className="mt-0.5 truncate text-13 text-muted">
+                            {taskDetail(task)}
+                          </p>
+                        ) : null}
+                      </div>
+                      <span
+                        data-numeric
                         className={cn(
-                          "text-15 font-medium",
-                          task.done
-                            ? "text-muted line-through decoration-line-strong"
-                            : "text-ink",
+                          "shrink-0 pt-0.5 text-13 tabular-nums",
+                          task.vencida ? "text-danger" : "text-muted",
                         )}
                       >
-                        {task.title}
-                      </p>
-                      <p className="mt-0.5 text-13 text-muted">{task.detail}</p>
+                        {task.vencida
+                          ? formatRelativeShort(new Date(task.dueAt))
+                          : formatTime(new Date(task.dueAt))}
+                      </span>
                     </div>
-                    <span
-                      data-numeric
-                      className="shrink-0 pt-0.5 text-13 tabular-nums text-muted"
-                    >
-                      {task.at}
-                    </span>
+
+                    {task.suggestedMessage ? (
+                      <div className="ml-8">
+                        <Button
+                          size="sm"
+                          variant="quiet"
+                          onClick={() => copyMessage(task)}
+                        >
+                          <CopyIcon className="size-3.5" />
+                          Copiar mensagem
+                        </Button>
+                      </div>
+                    ) : null}
                   </motion.li>
                 ))}
               </AnimatePresence>
@@ -161,11 +288,18 @@ export function TodayScreen() {
           <span id="hoje-abriram">Abriram sua proposta</span>
         </SectionHeading>
 
-        {loading ? (
+        {openedStatus === "loading" ? (
           <div className="grid gap-3 sm:grid-cols-2">
             <Skeleton className="h-[6.5rem] rounded-lg" />
             <Skeleton className="h-[6.5rem] rounded-lg" />
           </div>
+        ) : openedStatus === "error" ? (
+          <Card className="flex flex-col items-start gap-3 p-4">
+            <FieldError>{openedError?.mensagem}</FieldError>
+            <Button variant="secondary" size="sm" onClick={retryOpened}>
+              {openedError?.correcao ?? "Tentar de novo"}
+            </Button>
+          </Card>
         ) : opened.length === 0 ? (
           <EmptyState
             title="Ninguém abriu ainda"
@@ -175,33 +309,26 @@ export function TodayScreen() {
           />
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">
-            {opened.map((proposal) => (
-              <Card key={proposal.id} interactive className="p-4">
+            {opened.map((abertura) => (
+              <Card key={abertura.proposalId} interactive className="p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-15 font-semibold text-ink">
-                      {proposal.client}
+                      {abertura.contactName}
                     </p>
                     <p className="mt-0.5 truncate text-13 text-muted">
-                      {proposal.destination}
+                      {abertura.destination ?? abertura.proposalTitle}
                     </p>
                   </div>
                   <Badge tone="accent" dot>
-                    {proposal.opens}
-                    {proposal.opens === 1 ? " abertura" : " aberturas"}
+                    {abertura.openCount}
+                    {abertura.openCount === 1 ? " abertura" : " aberturas"}
                   </Badge>
                 </div>
 
-                <div className="mt-3 flex items-end justify-between gap-3">
-                  <Money
-                    cents={proposal.cents}
-                    size="20"
-                    reserveFor={5_940_000}
-                  />
-                  <span className="flex items-center gap-1.5 pb-0.5 text-13 text-muted">
-                    <OpenedIcon className="size-3.5" />
-                    há {proposal.lastOpenHours}h
-                  </span>
+                <div className="mt-3 flex items-center gap-1.5 text-13 text-muted">
+                  <OpenedIcon className="size-3.5" />
+                  {formatRelativeShort(new Date(abertura.firstViewedAt))}
                 </div>
               </Card>
             ))}
@@ -285,6 +412,38 @@ export function TodayScreen() {
       </section>
     </div>
   );
+}
+
+/** Segunda linha do item: a anotação manual, ou — quando não há uma — o
+ * contato e o destino que já vieram no JOIN, então nunca fica em branco à
+ * toa quando a tarefa nasceu de um alerta em vez de texto digitado. */
+function taskDetail(task: TarefaDeHoje): string | null {
+  if (task.notes) return task.notes;
+  const parts = [task.contactName, task.destination].filter(
+    (part): part is string => Boolean(part),
+  );
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/** Um glifo por origem da tarefa — a mesma distinção que `source` já carrega,
+ * só que legível num relance, sem precisar de um segundo rótulo de texto. */
+function TaskSourceIcon({
+  source,
+  className,
+}: {
+  source: string;
+  className?: string;
+}) {
+  switch (source) {
+    case "alerta_passaporte":
+      return <PassportIcon className={className} />;
+    case "alerta_aniversario":
+      return <CakeIcon className={className} />;
+    case "followup_proposta":
+      return <ChatIcon className={className} />;
+    default:
+      return <ClockIcon className={className} />;
+  }
 }
 
 function Greeting({

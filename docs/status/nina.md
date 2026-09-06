@@ -1,5 +1,73 @@
 # Nina — status
 
+## S8 — religar a tela Hoje (tarefas reais + aberturas reais)
+
+O S8 chegou pronto do lado do Rafa (`listarTarefasDeHoje`, `listarAberturasRecentes`,
+`concluirTarefa` já exportados de `@/server`) mas a tela ficou com o religamento pendente
+depois que um agente anterior caiu no limite de sessão. Fechei os dois pontos em
+`src/app/(app)/hoje/TodayScreen.tsx`.
+
+### O que liguei
+
+1. **"Tarefas de hoje"** — troquei o array `TASKS` (sample-data) por
+   `listarTarefasDeHoje()`, com o mesmo padrão de `status: loading | ready | error` que
+   `ClientesScreen.tsx` já usa (skeleton no primeiro carregamento, `FieldError` +
+   "Tentar de novo" no erro, nunca a tela genérica do Next). Cada linha ganhou:
+   - um glifo por `source` (`PassportIcon`/`CakeIcon`/`ChatIcon`/`ClockIcon`) antes do
+     título — a distinção que o campo já carrega, sem inventar um segundo rótulo de
+     texto;
+   - segunda linha = `notes` quando existe, senão `contactName · destination` (nunca em
+     branco à toa quando a tarefa nasceu de um alerta, não de texto digitado);
+   - hora à direita em `tabular-nums`: `formatTime` para tarefa do dia, `formatRelativeShort`
+     (o helper committado, "há 3h") em `text-danger` para vencida — a régua "número que
+     não pula" também vale para relógio, não só para dinheiro;
+   - botão "Copiar mensagem" (`CopyIcon`) só quando `suggestedMessage` existe, escreve
+     na área de transferência com `navigator.clipboard.writeText` e confirma com toast.
+2. **Concluir tarefa, com desfazer de verdade.** `concluirTarefa` não tem par de
+   reabertura no servidor (é `doneAt = now`, sem `reabrirTarefa`). Em vez de inventar uma
+   chamada que não existe ou abrir modal "tem certeza?", reaproveitei
+   `useDeferredDelete` (já em `src/lib/ui/`, criado para o mesmo problema em
+   `arquivarContato`/exclusões sem endpoint de volta): a tarefa some da lista NA HORA
+   (marcar via checkbox parece instantâneo) e só é mandada ao servidor de verdade se os
+   8s do toast passarem sem ninguém tocar em "Desfazer". Se o commit tardio falhar (ex.:
+   outra aba já concluiu), a tarefa volta para a lista, reordenada por `dueAt`, com um
+   toast de erro — não finge que deu certo.
+3. **"Abriram sua proposta"** — troquei o hardcode `"abriu 6 vezes · há 3h"` por
+   `listarAberturasRecentes()`, mesmo padrão de status/erro/skeleton do item 1.
+   `AberturaProposta` não traz `cents` (só `openCount`/`firstViewedAt`/`destination`/
+   `proposalTitle`) — tirei a linha de `Money` do card em vez de inventar um valor que o
+   contrato não devolve; o card agora mostra contato, destino (ou título da proposta
+   quando não há destino), contagem de aberturas em `Badge` e `formatRelativeShort` do
+   `firstViewedAt`. O estado vazio ("Ninguém abriu ainda") e o `preview` de exemplo
+   (`OpenedPreview`, decorativo, `aria-hidden`) continuam hardcoded de propósito — é
+   conteúdo de amostra, não dado real.
+
+### O que não toquei (fora do pedido)
+
+- **"Paradas há mais de 7 dias"** e os dois números do topo (pipeline/fechado) continuam
+  em `sample-data.ts` — não existe serviço de pipeline/deals do lado do servidor ainda
+  (o próprio handoff do Rafa registra isso como pendente). Não inventei dado para não
+  trocar um hardcode visível por um hardcode disfarçado de real.
+- Não toquei `src/server/**` nem os contratos — só consumi o que já estava exportado.
+
+### Verificação
+
+- `npx tsc --noEmit` — limpo.
+- `npm run build` — limpo, mesmas rotas de antes.
+- `npx vitest run tests/design/guards.test.ts` — **não consegui rodar neste ambiente**:
+  o `globalSetup` do Vitest exige Postgres (`zarpa_test`) e nem o Postgres local nem o
+  daemon do Docker (`docker-compose.yml` do repo) estão de pé nesta sandbox
+  (`ECONNREFUSED :5432`, `docker ps` falha por falta do socket). Não é algo que eu deva
+  contornar editando `vitest.config.ts` (fronteira do Téo). Em compensação, rodei a
+  MESMA lógica de checagem fora do harness (`tests/design/collect.ts` +
+  `tests/design/deviations.ts`, via `tsx`, sem tocar banco): tipografia, cor por
+  contexto, paridade de tema, movimento (CSS e JS) e o corte global de
+  `prefers-reduced-motion` — os cinco, zero violações não registradas. Se alguém rodar
+  isto com o Postgres de pé, espero 6/6 verde; se não bater, é porque o ambiente com
+  banco pegou algo que a checagem isolada não vê (improvável, mas registro a ressalva).
+
+---
+
 ## Pedido do PO — Santos Dumont, fio colado, redesenho da proposta pública
 
 ### 1. Prancha nova — `BiplanePlate`
