@@ -240,3 +240,25 @@ export function CopyIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/** Dinheiro — moeda com duas barras, sem cifrão de nenhuma moeda específica.
+ * Nav de "Vendas"/"Financeiro" (S9): o mesmo círculo de sempre (TodayIcon,
+ * ClientsIcon), não um cifrão nem uma cédula desenhada. */
+export function MoneyIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="8" cy="8" r="5.75" />
+      <path d="M5.6 6.35h4.8M5.6 9.65h4.8" />
+    </Icon>
+  );
+}
+
+/** Recibo — folha com borda serrilhada e linhas, para a conferência de comissão. */
+export function ReceiptIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4 1.75h8v12.5l-1.6-1.1-1.4 1.1-1.4-1.1-1.4 1.1-1.4-1.1L4 14.25Z" />
+      <path d="M6 5.5h4M6 8h4M6 10.5h2.5" />
+    </Icon>
+  );
+}

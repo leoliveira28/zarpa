@@ -1,5 +1,119 @@
 # Nina — status
 
+## S9 — o dinheiro: `/vendas`, `/financeiro`, e o botão que liga as duas
+
+### Entregue
+
+- **`src/app/(app)/vendas/page.tsx` + `VendasScreen.tsx`** — lista real
+  (`listarVendas`), filtro por status de comissão (chip row, ver decisão 2),
+  vazio com conteúdo de exemplo, linha por venda (fornecedor, badge de status
+  da comissão, valor bruto e margem em `tabular-nums` com largura reservada
+  pelo maior valor da lista inteira — não só da própria linha, senão a coluna
+  perde alinhamento vertical quando um valor é maior que os outros). Clique
+  abre o detalhe.
+- **`src/app/(app)/vendas/[id]/page.tsx` + `VendaScreen.tsx`** — a ficha:
+  - **Resumo**: fornecedor, valor bruto, custo, comissão prevista e taxa de
+    serviço, todos com autosave por campo (`atualizarVenda`, `CentsInput` +
+    `SavedMark`, mesmo padrão da ficha de cliente) e um `MoneyStat` de margem
+    calculada (comissão + taxa — nunca inclui custo, que já é o que sai para
+    o fornecedor).
+  - **Comissão da operadora**: badge + `Select` para `atualizarStatusComissao`
+    — sem trava de máquina de estado (o contrato deixa explícito que é
+    conferência manual, dá pra voltar de "recebida" para "prevista").
+  - **Parcelas**: lista de `receivables` com vencimento, valor, status e
+    "marcar paga" (`marcarParcelaPaga`); duas Sheets — "Gerar parcelas
+    mensais" (`gerarParcelasDaVenda`, só aparece com a venda ainda sem
+    parcela) e "Adicionar parcela" manual (`criarParcela`, sempre disponível,
+    para entrada maior ou parcela avulsa); remover parcela usa
+    `useDeferredDelete` (some da tela na hora, `excluirParcela` de verdade só
+    depois de 8s sem "Desfazer").
+  - **Encerramento**: `excluirVenda` com o mesmo padrão de desfazer de 8s da
+    ficha de cliente. Se o servidor recusar por parcela paga (`CONFLITO`), o
+    toast de erro mostra a mensagem pronta do contrato — não escondi essa
+    regra atrás de um botão desabilitado porque descobrir SÓ no clique
+    (parcela pode ter sido paga por outra aba nesse meio-tempo) é o cenário
+    real que o backend está protegendo.
+- **`src/app/(app)/financeiro/page.tsx` + `FinanceiroScreen.tsx`** — duas
+  seções:
+  - **A receber**: todas as parcelas em aberto do tenant, atraso primeiro,
+    com "marcar paga" direto na linha e link para a venda de origem; parcelas
+    já acertadas ficam atrás de "Mostrar acertadas" (mesmo padrão de
+    "Mostrar arquivadas" de Propostas/Clientes — não é informação que a
+    agente precisa ver toda vez que abre a tela).
+  - **Comissão da operadora**: três cartas-resumo (prevista/recebida/atrasada,
+    contagem + soma em `tabular-nums`) e a lista completa ordenada por
+    URGÊNCIA de ação (atrasada → prevista → recebida, não a ordem alfabética
+    do enum), cada linha com `Select` para trocar o status sem sair da tela.
+  - Ver decisão 1 (abaixo) sobre por que isso é feito com `listarVendas` +
+    `listarParcelas` por venda, em vez de um endpoint agregado.
+- **`converterPropostaEmVenda` ligado no editor de proposta**
+  (`PropostaEditorScreen.tsx`, `PublishBar`): quando `proposta.status ===
+  "accepted"`, o botão de destaque vira "Gerar venda" — chama a conversão
+  (idempotente do lado do servidor) e navega direto para `/vendas/[id]`.
+  Testei que o caminho existe de ponta a ponta: `aceitarOpcaoPublica` (que já
+  está implementado na proposta pública, achei ao ler `sales.ts`) é o que
+  leva uma proposta a `status: 'accepted'` — não é um estado morto que só um
+  seed manual alcança.
+- **Navegação**: um item novo na barra, `MoneyIcon` (`icons.tsx`) + rótulo
+  "Dinheiro", apontando para `/vendas` — ver decisão 3 sobre por que não
+  virou dois ícones.
+- Ícones novos: `MoneyIcon` (moeda com duas barras, sem cifrão de moeda
+  nenhuma) e `ReceiptIcon` (não usado ainda nesta entrega, deixei pronto para
+  quando a conferência de comissão ganhar um recibo/nota por venda).
+
+### Decisões que tomei sozinha
+
+1. **`/financeiro` busca `listarVendas` e depois `listarParcelas` por venda,
+   em paralelo — não existe "todas as parcelas do tenant" no contrato.** Para
+   o volume declarado do produto (10–15 vendas/mês por agente) isso é uma
+   tela carregando em paralelo, não um problema de escala; documentei o
+   porquê no topo do arquivo para não parecer descuido. Se o volume real
+   provar isso errado, é um pedido de endpoint agregado a Rafa, não algo para
+   eu contornar com paginação client-side.
+2. **Filtro de status na lista de Vendas não é `<Tabs>`.** Comecei com o
+   componente `Tabs` (Radix) e desfiz: `Tabs`/`TabsTrigger` gera
+   `aria-controls` apontando para um `TabsContent` que não existe (aqui não
+   há painel por status, é a MESMA lista filtrada — o padrão certo, que já
+   existe no código, é o toggle de "Mostrar arquivadas"). Troquei por um chip
+   row simples com `aria-pressed`, sem fingir uma semântica de abas que a
+   tela não tem.
+3. **Um item de navegação só ("Dinheiro" → `/vendas`), não dois.** `/vendas`
+   e `/financeiro` são dois contratos de servidor diferentes, mas para a
+   agente são a MESMA pergunta ("fechei, me pagaram?"). A barra inferior já
+   estava em 4 itens no limite recomendado para 390px; um sexto ícone
+   caberia fisicamente mas brigaria por atenção com Hoje/Funil/Propostas/
+   Clientes, que são olhados muito mais vezes por dia. Resolvi com
+   `MoneyHubTabs` (`src/components/app/MoneyHubTabs.tsx`) — o mesmo
+   segmented control que o construtor de proposta já usa para
+   Editar/Prévia, aqui trocando de ROTA de verdade (as duas continuam
+   linkáveis e indexáveis, `AppShell.tsx` ganhou `NavItem.activeMatch` para
+   `/financeiro` acender o mesmo item "Dinheiro" da barra). Documentei a
+   decisão com comentário no próprio `NavItem`.
+4. **A lista de Vendas mostra só valor bruto e margem — não as seis colunas
+   do contrato.** `custoCents`/`comissaoPrevistaCents`/`taxaServicoCents`
+   moram no DETALHE, com `tabular-nums` e largura reservada lá. Seis colunas
+   numéricas em 390px viram tabela de rolagem lateral, e uma lista financeira
+   que pede scroll horizontal no celular é pior do que duas linhas com
+   hierarquia clara (quanto o cliente pagou, quanto eu ganho). A regra do
+   CLAUDE.md sobre `tabular-nums` continua valendo — só não obriga a expor
+   TUDO na mesma tela.
+5. **Não adicionei "Nova venda" manual.** O contrato só tem
+   `converterPropostaEmVenda` a partir de uma proposta; uma venda solta sem
+   proposta de origem quebraria o link `dealId`/`proposalId`/
+   `proposalOptionId` que o resto do sistema assume. Se isso virar um pedido
+   de produto (venda sem proposta prévia), é uma mudança de contrato antes de
+   ser uma tela.
+
+### Verificação
+
+- `npx tsc --noEmit` — limpo.
+- `npm run build` — limpo; `/vendas`, `/vendas/[id]` e `/financeiro` aparecem
+  como rotas dinâmicas novas.
+- `npx vitest run tests/design/guards.test.ts` — 6/6 verde.
+- Não commitei — o PO commita.
+
+---
+
 ## S8 — religar a tela Hoje (tarefas reais + aberturas reais)
 
 O S8 chegou pronto do lado do Rafa (`listarTarefasDeHoje`, `listarAberturasRecentes`,

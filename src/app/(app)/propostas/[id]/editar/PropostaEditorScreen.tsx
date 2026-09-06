@@ -2,9 +2,11 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   atualizarOpcao,
   atualizarProposta,
+  converterPropostaEmVenda,
   criarOpcao,
   enviarProposta,
   excluirOpcao,
@@ -179,11 +181,33 @@ function PublishBar({
   proposta: PropostaEdicao;
   onPatched: (patch: Partial<PropostaEdicao>) => void;
 }) {
+  const router = useRouter();
   const toast = useToast();
   const [sending, setSending] = React.useState(false);
+  const [convertingSale, setConvertingSale] = React.useState(false);
   const isDraft = proposta.status === "draft";
   const canSend = proposta.options.length > 0;
   const meta = STATUS_META[proposta.status] ?? { label: proposta.status, tone: "neutral" as const };
+
+  // Idempotente do lado do servidor (índice único em `sales.proposal_id`):
+  // clicar duas vezes não cria venda duplicada, só devolve a mesma — por isso
+  // não escondo o botão depois do primeiro clique bem-sucedido, e o `router.push`
+  // sempre acerta a venda certa mesmo que o agente clique de novo por engano.
+  async function handleGenerateSale() {
+    setConvertingSale(true);
+    const result = await converterPropostaEmVenda(proposta.id);
+    setConvertingSale(false);
+    if (!result.ok) {
+      toast.show({
+        title: "Não consegui gerar a venda",
+        description: result.mensagem,
+        tone: "danger",
+        action: result.correcao ? { label: result.correcao, onClick: () => void handleGenerateSale() } : undefined,
+      });
+      return;
+    }
+    router.push(`/vendas/${result.data.id}`);
+  }
 
   async function handleSend() {
     setSending(true);
@@ -228,6 +252,13 @@ function PublishBar({
             Enviar proposta
           </Button>
           {!canSend ? <span className="text-13 text-muted">Adicione uma opção para enviar.</span> : null}
+        </>
+      ) : proposta.status === "accepted" ? (
+        <>
+          <Button size="sm" loading={convertingSale} onClick={() => void handleGenerateSale()}>
+            Gerar venda
+          </Button>
+          <CardAction onClick={() => window.open(publicUrl(), "_blank", "noopener")}>Ver proposta</CardAction>
         </>
       ) : (
         <>

@@ -13,6 +13,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import {
   ClientsIcon,
   FunnelIcon,
+  MoneyIcon,
   PlusIcon,
   ProposalIcon,
   TodayIcon,
@@ -37,6 +38,17 @@ interface NavItem {
   href: string;
   label: string;
   icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
+  /**
+   * Rotas extras que acendem este mesmo item. Existe por causa de "Dinheiro":
+   * `/vendas` e `/financeiro` (S9) são duas telas com contratos de servidor
+   * diferentes, mas para a agente são a MESMA pergunta ("fechei, me pagaram?")
+   * — colocar as duas na barra inferior custaria o sexto ícone num alvo de
+   * toque que já está no limite em 390px. Dentro de cada tela, um segmented
+   * control (`MoneyHubTabs`, `vendas/shared.tsx`) troca de uma para outra sem
+   * esconder rota nenhuma: as duas continuam linkáveis e indexáveis, só não
+   * duplicam item de navegação principal.
+   */
+  activeMatch?: string[];
 }
 
 const NAV: NavItem[] = [
@@ -44,6 +56,7 @@ const NAV: NavItem[] = [
   { href: "/funil", label: "Funil", icon: FunnelIcon },
   { href: "/propostas", label: "Propostas", icon: ProposalIcon },
   { href: "/clientes", label: "Clientes", icon: ClientsIcon },
+  { href: "/vendas", label: "Dinheiro", icon: MoneyIcon, activeMatch: ["/financeiro"] },
 ];
 
 /**
@@ -85,8 +98,9 @@ function useWideRoute(): boolean {
 function useActiveHref() {
   const pathname = usePathname();
   return React.useMemo(() => {
+    const hits = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
     const match = NAV.find(
-      (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
+      (item) => hits(item.href) || item.activeMatch?.some(hits),
     );
     return match?.href ?? null;
   }, [pathname]);
