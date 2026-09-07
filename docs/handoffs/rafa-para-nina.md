@@ -776,3 +776,79 @@ dado aqui, o card do funil perde esse selo, ou você decide buscar via
 alvo for a coluna "Fechada" com `stage: 'ganho'` está tudo igual; **não existe drop target
 para "perdido"** (ver seção da action acima) — precisa de uma segunda entrada de UI fora do
 arrasto.
+
+---
+
+## S9/S10 — `criarTarefa`, o "Criar lembrete" morto da tela Hoje agora tem back-end
+
+Auditoria ao vivo no produto confirmou: o botão "Criar lembrete" na tela Hoje não tinha
+`onClick`, e não existia nenhuma função de servidor para criar tarefa manual em lugar
+nenhum do repositório. O schema `tasks` já suportava isso por inteiro (`source: 'manual'`
+já era valor do enum, `dedupeKey` já era opcional) — não há migration nesta entrega, só a
+Server Action que faltava. Vive no mesmo arquivo do runner de follow-up,
+`src/server/followups.ts`, exportada em `@/server`.
+
+```ts
+type CriarTarefaInput = {
+  title: string;                 // obrigatório, 2–200 caracteres depois de trim
+  notes?: string;                // opcional, até 4000 caracteres; '' vira null
+  kind?: 'followup' | 'ligar' | 'whatsapp' | 'email' | 'outro'; // default 'outro'
+  dueAt: string | Date;          // OBRIGATÓRIO — é lembrete, precisa de quando.
+                                  // aceita Date ou qualquer string que `new Date(...)`
+                                  // entenda (ISO 'AAAA-MM-DD', datetime completo, etc.)
+  dealId?: string;                // uuid, opcional — precisa ser negócio existente do tenant
+  contactId?: string;             // uuid, opcional — precisa ser contato existente do tenant
+};
+
+async function criarTarefa(input: CriarTarefaInput): Promise<ServiceResult<TarefaResumo>>
+```
+
+`TarefaResumo` é o mesmo tipo que `listarTarefas` (`alerts.ts`) já devolve — já exportado
+no barril:
+
+```ts
+type TarefaResumo = {
+  id: string;
+  title: string;
+  notes: string | null;
+  kind: string;
+  source: string;      // sempre 'manual' aqui
+  contactId: string | null;
+  dealId: string | null;
+  dueAt: Date;
+  doneAt: Date | null;  // sempre null na criação
+  createdAt: Date;
+};
+```
+
+Pontos que valem atenção na tela:
+
+- `title` e `dueAt` são os dois únicos campos realmente obrigatórios. `kind` sem valor
+  vira `'outro'` — se o formulário quiser oferecer os cinco valores num select, ótimo; se
+  quiser simplificar para um botão único "Criar lembrete" sem escolher tipo, também
+  funciona sem mudar nada aqui.
+- `dealId`/`contactId` são conferidos contra o banco DENTRO da mesma transação antes do
+  INSERT — se você mandar um id de outro tenant (não deveria acontecer pela UI normal,
+  mas por segurança o contrato já cobre), a resposta é `NAO_ENCONTRADO` com
+  `campo: 'dealId'`/`'contactId'` e `correcao` pronta, igual ao padrão de `criarNegocio`.
+  Não é preciso os dois — dá para criar um lembrete solto, sem negócio nem contato.
+- Não existe `dedupeKey` aqui de propósito — isso é só para tarefa GERADA (régua de
+  follow-up, alerta de passaporte/aniversário), que pode ser recriada pelo cron.
+  Lembrete manual não deduplica: a agente pode querer duas tarefas com o mesmo título e a
+  mesma data, e a Server Action não decide por ela que isso é engano.
+- Depois de criar, chame `listarTarefasDeHoje()` de novo para atualizar a lista (o item
+  só aparece nela se `dueAt` cair em hoje ou já tiver vencido — um lembrete para semana
+  que vem é criado com sucesso mas não aparece na tela Hoje até o dia chegar, por
+  desenho: é a mesma janela que `listarTarefasDeHoje` já usa para tudo). Se quiser inserir
+  otimisticamente no state local antes do round-trip, o retorno de `criarTarefa` já tem
+  todos os campos que `TarefaDeHoje` tem MENOS `suggestedMessage` (sempre `null` em
+  manual — não invente mensagem que a agente não pediu), `contactName`/`dealTitle`/
+  `destination` (não vêm no retorno; se precisar deles na hora sem esperar o refetch, use
+  o próprio nome/negócio que já está selecionado no formulário) e `vencida` (calcule
+  `dueAt < new Date()` no cliente, é a mesma regra que o servidor usa).
+- Erros de validação (`title` vazio, `dueAt` numa string que `new Date()` não entende)
+  voltam como `DADOS_INVALIDOS` com `campo` apontando o input errado — mesmo padrão de
+  `criarContato`/`criarNegocio`.
+
+Verificação: `npx tsc --noEmit` limpo e `npx tsx scripts/check/known-failures.ts` verde
+(378 testes, allowlist vazio, sem regressão) com o Postgres de dev de pé.

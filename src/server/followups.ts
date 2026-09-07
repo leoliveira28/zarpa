@@ -1,6 +1,7 @@
 'use server';
 
 import { and, asc, eq, gte, isNull, lte, sql } from 'drizzle-orm';
+import { z } from 'zod';
 import { contacts, deals, proposals, tasks, tenants } from '@/db/schema';
 import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
@@ -11,6 +12,7 @@ import {
   gerarAlertasDeAniversario,
   gerarAlertasDePassaporte,
   type ResultadoAlertasTenant,
+  type TarefaResumo,
 } from './alerts';
 
 /**
@@ -363,3 +365,149 @@ export async function listarTarefasDeHoje(opcoes?: {
 // necessidade de uma segunda action fazendo a mesma coisa. `listarTarefasDeHoje` só
 // LÊ; quem termina a tarefa chama `concluirTarefa(tarefaId)`, já exportado no barril.
 // Ver `docs/handoffs/rafa-para-nina.md`.
+
+// ---------------------------------------------------------------------------
+// Criação manual — o "Criar lembrete" da tela Hoje
+// ---------------------------------------------------------------------------
+
+/**
+ * `dueAt` chega do cliente como `Date` ou string (o que um `<input type="datetime-local">`
+ * ou `type="date"` mandar). Mesma régua de erro do resto do projeto: `ctx.addIssue` +
+ * `z.NEVER` em vez de deixar `new Date('lixo')` virar `Invalid Date` silencioso que só
+ * estoura na hora do INSERT com uma mensagem de Postgres que ninguém traduz para a tela.
+ */
+const dueAtInput = z
+  .union([z.date(), z.string().trim().min(1, 'Escolha quando lembrar')])
+  .transform((value, ctx) => {
+    const data = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(data.getTime())) {
+      ctx.addIssue({ code: 'custom', message: 'Não entendi essa data de vencimento.' });
+      return z.NEVER;
+    }
+    return data;
+  });
+
+const criarTarefaInput = z.object({
+  title: z.string().trim().min(2, 'Dê um título ao lembrete').max(200),
+  notes: z.string().trim().max(4000).optional().or(z.literal('')),
+  /** Lembrete manual não tem "objetivo" definido de antemão — `outro` é o default certo;
+   * quem preenche escolhe `ligar`/`whatsapp`/`email`/`followup` quando fizer sentido. */
+  kind: z.enum(['followup', 'ligar', 'whatsapp', 'email', 'outro']).optional(),
+  dueAt: dueAtInput,
+  dealId: z.uuid('Negócio inválido').optional().or(z.literal('')),
+  contactId: z.uuid('Contato inválido').optional().or(z.literal('')),
+});
+
+/** Contrato de `criarTarefa` — o shape que a tela Hoje deve montar antes de chamar a action. */
+export type CriarTarefaInput = z.input<typeof criarTarefaInput>;
+
+function vazioParaNulo(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+const COLUNAS_TAREFA_CRIADA = {
+  id: tasks.id,
+  title: tasks.title,
+  notes: tasks.notes,
+  kind: tasks.kind,
+  source: tasks.source,
+  contactId: tasks.contactId,
+  dealId: tasks.dealId,
+  dueAt: tasks.dueAt,
+  doneAt: tasks.doneAt,
+  createdAt: tasks.createdAt,
+} as const;
+
+/**
+ * O botão "Criar lembrete" da tela Hoje, morto até aqui — sem `onClick` na interface e
+ * sem função de servidor nenhuma (confirmado usando o produto: não existe em lugar
+ * algum do repositório antes deste commit). `tasks` (schema) já suportava isto por
+ * inteiro — `source: 'manual'` já era um valor do enum e `dedupeKey` já era opcional —
+ * então não há migration nesta entrega, só a Server Action que faltava.
+ *
+ * Mesmas quatro regras de `contacts.ts`/`deals.ts`: `tenantId` e `userId` vêm da sessão
+ * via `requireAuthContext()`, nunca do input; toda escrita dentro de `withTenant`; zod
+ * valida antes de tocar no banco; `dealId`/`contactId`, quando vierem, são conferidos
+ * dentro da MESMA transação — a policy de RLS faz uma referência de outro tenant virar
+ * "não encontrado" (zero linhas), não um vazamento nem um erro 500 de FK.
+ *
+ * `dedupeKey` fica de fora de propósito: dedupe é para tarefa GERADA (régua de
+ * follow-up, alerta de passaporte/aniversário) que pode ser recriada pelo cron. Lembrete
+ * manual não tem chave determinística — a agente pode querer duas tarefas com o mesmo
+ * título e a mesma data, e não é a esta função que cabe decidir que isso é duplicata.
+ * `tasks_dedupe_key_check` no banco (migration `0001`) já EXIGE `dedupeKey is null`
+ * quando `source = 'manual'`, então nem tentamos passar um.
+ */
+export async function criarTarefa(input: CriarTarefaInput): Promise<ServiceResult<TarefaResumo>> {
+  return comoResultado(async () => {
+    const { tenantId, userId } = await requireAuthContext();
+
+    const parsed = criarTarefaInput.safeParse(input);
+    if (!parsed.success) {
+      const primeiro = parsed.error.issues[0];
+      throw new ServiceError('DADOS_INVALIDOS', primeiro?.message ?? 'Dados inválidos', {
+        campo: primeiro?.path.join('.'),
+        correcao: 'Corrigir e tentar de novo',
+      });
+    }
+    const dados = parsed.data;
+    const notes = vazioParaNulo(dados.notes);
+    const dealId = vazioParaNulo(dados.dealId);
+    const contactId = vazioParaNulo(dados.contactId);
+
+    return withTenant(tenantId, async (tx) => {
+      if (dealId) {
+        const [negocio] = await tx.select({ id: deals.id }).from(deals).where(eq(deals.id, dealId)).limit(1);
+        if (!negocio) {
+          throw new ServiceError('NAO_ENCONTRADO', 'Esse negócio não existe mais.', {
+            campo: 'dealId',
+            correcao: 'Escolher outro negócio',
+          });
+        }
+      }
+
+      if (contactId) {
+        const [contato] = await tx
+          .select({ id: contacts.id })
+          .from(contacts)
+          .where(eq(contacts.id, contactId))
+          .limit(1);
+        if (!contato) {
+          throw new ServiceError('NAO_ENCONTRADO', 'Esse contato não existe mais.', {
+            campo: 'contactId',
+            correcao: 'Escolher outro contato',
+          });
+        }
+      }
+
+      const [criada] = await tx
+        .insert(tasks)
+        .values({
+          tenantId,
+          dealId,
+          contactId,
+          title: dados.title,
+          notes,
+          kind: dados.kind ?? 'outro',
+          source: 'manual',
+          dueAt: dados.dueAt,
+          createdBy: userId,
+        })
+        .returning(COLUNAS_TAREFA_CRIADA);
+
+      const tarefa = criada!;
+
+      await registrarAuditoria(tx, {
+        tenantId,
+        actorUserId: userId,
+        action: 'task.created',
+        entity: 'task',
+        entityId: tarefa.id,
+        metadata: { kind: tarefa.kind, comNegocio: Boolean(dealId), comContato: Boolean(contactId) },
+      });
+
+      return tarefa as TarefaResumo;
+    });
+  });
+}

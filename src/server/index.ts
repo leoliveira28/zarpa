@@ -72,9 +72,11 @@ export {
   rodarFilaDeFollowups,
   gerarFollowupsDaProposta,
   listarTarefasDeHoje,
+  criarTarefa,
   type ResultadoFilaTenant,
   type ResultadoFilaGeral,
   type TarefaDeHoje,
+  type CriarTarefaInput,
 } from './followups';
 export {
   listarPropostas,

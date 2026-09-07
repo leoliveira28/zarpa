@@ -1,6 +1,102 @@
 # Status — Rafa (backend / plataforma)
 
-## Tarefa desta rodada: S4 — o funil (backend)
+## Tarefa desta rodada: `criarTarefa` — o "Criar lembrete" morto da tela Hoje
+
+Pedido: auditoria ao vivo no produto encontrou o botão "Criar lembrete" da tela Hoje sem
+`onClick`, e nenhuma função de servidor de criação manual de tarefa em lugar nenhum do
+repositório (`src/server/followups.ts` já tinha o runner automático de follow-up e a
+leitura `listarTarefasDeHoje`, mas não a escrita manual). O schema `tasks`
+(`src/db/schema/pipeline.ts`) já suportava isso por inteiro desde a fundação — `source`
+já tinha o valor `'manual'`, `dedupeKey` já era opcional (e o CHECK
+`tasks_dedupe_key_check` já EXIGE `dedupeKey is null` quando `source = 'manual'`) — então
+esta entrega é só a Server Action que faltava, sem migration.
+
+### Pronto
+
+1. **`criarTarefa(input)`**, em `src/server/followups.ts`, exportada em
+   `src/server/index.ts`. Mesmo padrão de sempre: `tenantId`/`userId` vêm de
+   `requireAuthContext()` (nunca de argumento), toda escrita dentro de `withTenant`, zod
+   valida antes de tocar no banco, retorno `ServiceResult<TarefaResumo>` (reaproveitei o
+   tipo `TarefaResumo` já exportado por `alerts.ts` — não criei um tipo irmão quase
+   idêntico à toa).
+   - Campos: `title` (obrigatório, 2–200), `notes` (opcional), `kind` (opcional, default
+     `'outro'`), `dueAt` (**obrigatório** — é lembrete, não faz sentido sem "quando"; aceita
+     `Date` ou string que `new Date(...)` entenda, com `ctx.addIssue` + `z.NEVER` em vez
+     de deixar `Invalid Date` estourar mais adiante no INSERT), `dealId`/`contactId`
+     (ambos opcionais, uuid).
+   - Quando `dealId`/`contactId` vierem preenchidos, confiro que existem NO TENANT ATUAL
+     dentro da MESMA transação antes do INSERT — mesmo padrão de `criarNegocio`
+     (`deals.ts`): se o id pertence a outro tenant, o RLS já faz o SELECT de checagem
+     devolver zero linhas, e a resposta é `NAO_ENCONTRADO` com `campo` apontando qual dos
+     dois — nunca um erro de FK de baixo nível vazando para a tela.
+   - `source: 'manual'` fixo, sem parâmetro — não é o chamador que decide a proveniência.
+   - `dedupeKey` fica de fora de propósito: dedupe é para tarefa GERADA (régua de
+     follow-up, alerta de passaporte/aniversário), que precisa sobreviver a "o cron rodou
+     duas vezes". Lembrete manual não tem essa necessidade — a agente pode querer duas
+     tarefas com o mesmo título na mesma data, e não cabe a esta função decidir que isso é
+     engano dela.
+   - Grava `createdBy: userId` (a coluna já existia no schema, `ON DELETE SET NULL`,
+     ninguém preenchia ainda) e uma linha de `audit_log` (`task.created`) com metadata
+     `{ kind, comNegocio, comContato }` — nunca o título/notas (podem conter nome/dado de
+     cliente; audit log não é o lugar).
+2. **Contrato para a Nina**: `docs/handoffs/rafa-para-nina.md`, seção nova no fim do
+   arquivo — assinatura exata, o shape de `TarefaResumo`, o que fazer depois de criar
+   (chamar `listarTarefasDeHoje()` de novo, ou montar o item otimisticamente com os
+   campos que faltam calculados no cliente: `vencida = dueAt < new Date()`,
+   `suggestedMessage` sempre `null` em manual).
+
+### Decisões que tomei sozinha
+
+- **Reaproveitar `TarefaResumo` (de `alerts.ts`) como retorno**, em vez de inventar um
+  `TarefaCriada` novo quase idêntico. É o mesmo shape que `listarTarefas` já devolve, e
+  reduz o número de tipos que a Nina precisa conhecer. Se a tela quiser mostrar
+  `contactName`/`dealTitle` no item recém-criado sem esperar o próximo `listarTarefasDeHoje()`,
+  ela já tem essa informação no próprio formulário (quem escolheu o contato/negócio sabe
+  o nome) — não fiz um segundo JOIN só para devolver um dado que o chamador já tinha.
+- **`dueAt` aceita `Date` OU string livre, sem exigir formato `AAAA-MM-DD` fixo.** É
+  `timestamptz`, não `date` — diferente de `departureOn`/`birthDate` (que são `date` e
+  passam por `parseDataFlexivel`, formato brasileiro), aqui um lembrete pode carregar hora
+  do dia (`<input type="datetime-local">`), então usei `new Date(value)` puro em vez do
+  parser de data brasileira. Se a Nina fizer um `<input type="date">` simples (só o dia,
+  sem hora), o valor vira meia-noite UTC daquele dia — funciona para "vence hoje/amanhã",
+  mas se a agente digitar `dueAt` de hoje depois da meia-noite UTC (21h em Brasília, por
+  causa do fuso -3), a tarefa nasce "vencida" no mesmo instante em que é criada. Não é bug
+  desta função — é a mesma superfície de todo `timestamptz` do projeto sem componente de
+  hora explícito. Registro aqui para a Nina decidir: se o formulário for só "dia", pode
+  valer a pena mandar `23:59:59` local em vez de meia-noite, ou pedir um componente de
+  hora. Não resolvi por ela porque é decisão de produto/UX, não de dado.
+- **Não fiz `criarTarefa` autofilar `contactId` a partir de `dealId`** (mesmo quando o
+  negócio tem um contato associado). Os dois campos são independentes de propósito — um
+  lembrete pode ser sobre um negócio sem menção a contato específico (ex.: "revisar
+  cotação de voo"), e forçar o preenchimento automático tiraria da agente a opção de criar
+  um lembrete "solto" ligado só ao negócio. Se a Nina achar que a UX pede o contrário
+  (herdar o contato do negócio escolhido), é decisão de tela: ela já tem o `contactId` do
+  negócio disponível (via `NegocioDoFunil.contactId`/`NegocioDetalhe.contactId`) para
+  preencher no formulário antes de chamar a action.
+
+### Verificação
+
+- `npx tsc --noEmit` — limpo.
+- `npx eslint src/server/followups.ts src/server/index.ts` — limpo.
+- `npx tsx scripts/check/known-failures.ts` — verde: 378 testes, allowlist vazio, sem
+  regressão, contra o Postgres de dev de pé (não precisei subir Docker nesta rodada — já
+  estava rodando).
+- Não escrevi teste de isolamento novo para `criarTarefa` especificamente (fronteira do
+  Téo, `tests/**`) — a função segue exatamente o mesmo caminho (`withTenant` +
+  `requireAuthContext` + checagem de FK dentro da transação) que `criarNegocio` já tem
+  coberto por teste de isolamento multi-tenant; se o Téo quiser um caso específico para
+  "criar lembrete com `dealId`/`contactId` de outro tenant devolve `NAO_ENCONTRADO`", é
+  queda de braço rápida a partir do teste equivalente de `deals.ts`.
+
+### Não fiz (fora da fronteira/pedido desta rodada)
+
+- **Não toquei em `src/app/**`** — o botão "Criar lembrete" continua sem `onClick` até a
+  Nina ligar. Contrato pronto em `docs/handoffs/rafa-para-nina.md`.
+- **Não commitei** — pedido explícito do PO/tarefa: quem commita é o PO.
+
+---
+
+## Rodada anterior: S4 — o funil (backend)
 
 Entrega: o serviço completo do funil que faltava atrás de `FunnelScreen.tsx` e do topo de
 `TodayScreen.tsx` — hoje os dois rodam 100% sobre `src/lib/ui/sample-data.ts`. Arquivo novo
