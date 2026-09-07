@@ -24,10 +24,15 @@
  *     desrespeita o CHECK sozinha, então só um UPDATE cru prova que o BANCO barra).
  *  7. `ON DELETE RESTRICT` de `sales.deal_id`/`sales.proposal_id`.
  *  8. `excluirVenda` recusa com `CONFLITO` quando existe parcela paga — não apaga nada.
+ *  9. `gerarParcelasDaVenda` sob concorrência REAL (duas chamadas via `Promise.allSettled`,
+ *     não sequenciais) — cobre o buraco que motivou `0008_receivables_dedupe.sql` — mais
+ *     um teste cirúrgico de `receivables_sale_id_vence_em_key` + `onConflictDoNothing` via
+ *     inserção direta, porque a Server Action sozinha não provocou experimentalmente o
+ *     caminho de corrida pura neste ambiente (ver comentário no teste).
  */
 import { randomUUID } from 'node:crypto'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import {
   contacts,
   deals,
@@ -39,6 +44,10 @@ import {
   user,
 } from '@/db/schema'
 import { withTenant } from '@/lib/tenant/withTenant'
+// Type-only: apagado na compilação, não conflita com o `vi.mock('@/lib/auth/session', ...)`
+// nem com o `await import('@/server/sales')` mais abaixo (que é quem traz o runtime real
+// já sob o mock ativo).
+import type { ParcelaResumo } from '@/server/sales'
 
 const authCtx = vi.hoisted(() => ({
   tenantId: '',
@@ -365,6 +374,156 @@ describe('parcelas (receivables) — geração, pagamento e o CHECK de pago_em',
     expect(segunda.ok).toBe(false)
     if (segunda.ok) return
     expect(segunda.code).toBe('CONFLITO')
+  })
+
+  it('gerarParcelasDaVenda sob concorrência real (Promise.allSettled): nunca duplica, nunca perde centavo, nunca falha feio', async () => {
+    // Mesma dúvida que motivou `0008_receivables_dedupe.sql`: duas chamadas
+    // simultâneas de `gerarParcelasDaVenda` para a MESMA venda (duplo clique real,
+    // não hipótese) — antes da migration, a checagem "conta quantas já existem"
+    // passava para as duas ANTES de qualquer insert e a segunda duplicava tudo.
+    // `priceCents` não múltiplo de 4 de propósito — se sobrar/faltar 1 centavo em
+    // algum caminho de concorrência, a soma denuncia.
+    const fixture = await seedPropostaAceita({ priceCents: 100_003 })
+    criados.push(fixture.tenantId)
+    entrarComo(fixture)
+
+    const venda = await converterPropostaEmVenda(fixture.propostaId)
+    if (!venda.ok) throw new Error('setup falhou')
+
+    const dispararGeracao = () =>
+      gerarParcelasDaVenda(venda.data.id, { quantidade: 4, primeiraVencimento: '2026-04-05' })
+
+    const resultados = await Promise.allSettled([dispararGeracao(), dispararGeracao()])
+
+    // Nível 1: `comoResultado` (src/server/errors.ts) captura QUALQUER erro
+    // (inclusive um unique_violation cru do Postgres que porventura escapasse do
+    // `onConflictDoNothing`) e devolve `{ ok: false, ... }` em vez de deixar a
+    // promise rejeitar. Então a primeira prova é: nenhuma das duas chamadas
+    // rejeita a promise em si — "erroar feio" nesse sentido já está descartado
+    // antes de olhar o conteúdo.
+    expect(
+      resultados.every((r) => r.status === 'fulfilled'),
+      'nenhuma chamada deveria rejeitar a promise — comoResultado captura tudo',
+    ).toBe(true)
+
+    const valores = (resultados as PromiseFulfilledResult<Awaited<ReturnType<typeof gerarParcelasDaVenda>>>[]).map(
+      (r) => r.value,
+    )
+
+    // Nível 2 — o comportamento REAL, não o hipotético. O comentário de
+    // `gerarParcelasDaVenda` em sales.ts é explícito: a checagem "já existe
+    // parcela" é a MENSAGEM AMIGÁVEL para o caso sequencial; quem garante a
+    // concorrência de verdade é o índice único `receivables_sale_id_vence_em_key`
+    // via `onConflictDoNothing`. Rodando este teste de verdade contra o Postgres
+    // (não um mock), a saída observada foi: uma chamada terminou (checagem + insert
+    // + commit) ANTES da outra sequer rodar a sua checagem — a segunda viu
+    // "já existem parcelas" e devolveu `CONFLITO`. Isso é IDEMPOTÊNCIA VÁLIDA
+    // (o duplo clique não duplicou nada, só um dos dois cliques "venceu"), não uma
+    // falha feia. O outro desfecho POSSÍVEL sob timing diferente — as duas
+    // passarem pela checagem antes de qualquer insert e as duas devolverem sucesso
+    // via `onConflictDoNothing` + reselect do estado persistido — também é válido.
+    // O que NUNCA pode acontecer: uma falha com código diferente de `CONFLITO`
+    // (sinal de erro cru do driver escapando para o usuário) ou as duas terem
+    // sucesso com dados que não batem entre si.
+    const sucesso = valores.filter((v): v is Extract<typeof valores[number], { ok: true }> => v.ok)
+    const falha = valores.filter((v): v is Extract<typeof valores[number], { ok: false }> => !v.ok)
+
+    expect(sucesso.length + falha.length).toBe(2)
+    expect(sucesso.length, 'pelo menos uma das duas chamadas concorrentes tem que ter sucesso').toBeGreaterThanOrEqual(1)
+    for (const f of falha) {
+      expect(f.code, `falha "feia" — esperava CONFLITO, veio ${f.code}: ${f.mensagem}`).toBe('CONFLITO')
+    }
+
+    // Todo sucesso individual já reflete o estado final persistido inteiro (4
+    // parcelas, soma exata) — nunca uma fotografia parcial da corrida (a chamada
+    // perdedora, se tiver sucesso, lê o estado já gravado via reselect, não "o que
+    // ela mesma conseguiu inserir").
+    for (const s of sucesso) {
+      expect(s.data).toHaveLength(4)
+      expect(s.data.reduce((acc, p) => acc + p.valorCents, 0)).toBe(100_003)
+    }
+
+    // Nível 3 — a prova que realmente importa: a VERDADE do banco, relida DEPOIS
+    // que as duas promises já resolveram, não o que cada chamada devolveu (evita
+    // um teste que só reafirma a própria memória do processo Node). É isto que
+    // teria denunciado a duplicata antes de `0008_receivables_dedupe.sql` existir
+    // — nesse cenário, as duas chamadas passavam pela checagem antes de qualquer
+    // insert e a tabela terminava com 8 linhas em vez de 4.
+    const persistidas = await listarParcelas(venda.data.id)
+    expect(persistidas.ok).toBe(true)
+    if (!persistidas.ok) return
+
+    expect(persistidas.data).toHaveLength(4)
+    const somaPersistida = persistidas.data.reduce((acc, p) => acc + p.valorCents, 0)
+    expect(somaPersistida).toBe(100_003)
+
+    // Se as duas chamadas tiveram sucesso, elas convergem para o MESMO conjunto de
+    // linhas (mesmos ids, mesmas datas, mesmos valores) — não duas fotografias
+    // parecidas-mas-diferentes do mesmo dinheiro.
+    if (sucesso.length === 2) {
+      const normalizar = (linhas: ParcelaResumo[]) =>
+        [...linhas]
+          .sort((a, b) => a.venceEm.localeCompare(b.venceEm))
+          .map((p) => ({ id: p.id, venceEm: p.venceEm, valorCents: p.valorCents }))
+      expect(normalizar(sucesso[0]!.data)).toEqual(normalizar(sucesso[1]!.data))
+      expect(normalizar(sucesso[0]!.data)).toEqual(normalizar(persistidas.data))
+    }
+  })
+
+  it('receivables_sale_id_vence_em_key + onConflictDoNothing: duas inserções diretas simultâneas na MESMA (sale_id, vence_em) não erroam e não duplicam', async () => {
+    // Complemento cirúrgico do teste acima. Rodando `gerarParcelasDaVenda` via
+    // `Promise.allSettled` neste ambiente (Docker Postgres local + vitest em
+    // processo único), as 10 execuções manuais que fiz sempre resolveram pelo
+    // caminho "uma chamada termina inteira antes da outra checar" (CONFLITO
+    // amigável) — nunca observei experimentalmente as duas passando pela
+    // checagem "já existe parcela" ao mesmo tempo e caindo no
+    // `onConflictDoNothing`. Isso não prova que esse caminho está certo, só que
+    // não consegui provocá-lo pela Server Action inteira. Este teste ataca o
+    // mecanismo de baixo nível DIRETAMENTE — duas inserções cruas na mesma chave
+    // única, no mesmo idioma do que `gerarParcelasDaVenda` faz internamente
+    // (mesmo `.onConflictDoNothing({ target: [...] })`) — para provar, sem
+    // depender de vencer uma corrida de timing, que o índice + a cláusula
+    // realmente seguram a concorrência sem lançar erro, ao contrário do teste
+    // "sales_proposal_id_key barra no BANCO" (que insere SEM
+    // `onConflictDoNothing` de propósito, para provar que o índice REJEITA).
+    const fixture = await seedPropostaAceita()
+    criados.push(fixture.tenantId)
+    entrarComo(fixture)
+
+    const venda = await converterPropostaEmVenda(fixture.propostaId)
+    if (!venda.ok) throw new Error('setup falhou')
+
+    const inserirComOnConflict = () =>
+      withTenant(fixture.tenantId, (tx) =>
+        tx
+          .insert(receivables)
+          .values({
+            tenantId: fixture.tenantId,
+            saleId: venda.data.id,
+            venceEm: '2026-05-05',
+            valorCents: 12_345,
+            status: 'pendente',
+          })
+          .onConflictDoNothing({ target: [receivables.saleId, receivables.venceEm] }),
+      )
+
+    const resultados = await Promise.allSettled([inserirComOnConflict(), inserirComOnConflict()])
+
+    expect(
+      resultados.every((r) => r.status === 'fulfilled'),
+      resultados
+        .map((r) => (r.status === 'rejected' ? textoCompletoDoErro(r.reason) : 'ok'))
+        .join(' | '),
+    ).toBe(true)
+
+    const linhas = await withTenant(fixture.tenantId, (tx) =>
+      tx
+        .select({ id: receivables.id, valorCents: receivables.valorCents })
+        .from(receivables)
+        .where(and(eq(receivables.saleId, venda.data.id), eq(receivables.venceEm, '2026-05-05'))),
+    )
+    expect(linhas).toHaveLength(1)
+    expect(linhas[0]!.valorCents).toBe(12_345)
   })
 
   it('marcarParcelaPaga muda status e grava pagoEm', async () => {

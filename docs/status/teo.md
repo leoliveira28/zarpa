@@ -1,6 +1,84 @@
 # Status — Téo
 
-## Rodada atual: S9 — vendas, comissão e recebíveis
+## Rodada atual: S9 (follow-up) — concorrência real em `gerarParcelasDaVenda`
+
+Fecha o gap que eu mesmo documentei na rodada anterior ("O que NÃO está coberto" —
+"Concorrência em `gerarParcelasDaVenda` não foi testada"). O Rafa corrigiu
+`gerarParcelasDaVenda` (`src/server/sales.ts`) para ser idempotente sob concorrência:
+índice único `receivables_sale_id_vence_em_key` em `(sale_id, vence_em)`
+(`drizzle/0008_receivables_dedupe.sql`) + `INSERT ... onConflictDoNothing`, com a resposta
+sempre refletindo o estado JÁ PERSISTIDO (reselect), não o que a chamada em particular
+conseguiu inserir.
+
+### Entrega
+
+Dois testes novos em `tests/sales/vendas.test.ts` (17 no total agora, mesma filosofia:
+funções REAIS contra Postgres, só `requireAuthContext` mockado):
+
+1. **`gerarParcelasDaVenda sob concorrência real (Promise.allSettled)`** — dispara duas
+   chamadas da Server Action de verdade para a MESMA venda, ao mesmo tempo, com o mesmo
+   input (`quantidade: 4`, `priceCents: 100_003` — não múltiplo de 4 de propósito, pra
+   sobra/perda de centavo aparecer na soma). Prova três níveis:
+   - nenhuma das duas chamadas rejeita a promise (`comoResultado` captura tudo);
+   - **comportamento REAL observado, não o hipotético**: rodei este teste 10x seguidas
+     manualmente antes de fechar a asserção. Nas 10, o desfecho foi sempre o mesmo — uma
+     chamada termina inteira (checagem + insert + commit) antes da outra sequer rodar a
+     sua checagem "já existe parcela", e a segunda recebe `CONFLITO` (mensagem amigável,
+     não erro cru). O comentário em `sales.ts` já avisa que essa checagem é "só a
+     mensagem amigável para o caso sequencial" — e é exatamente esse caminho que a
+     corrida, neste ambiente (Docker Postgres local + vitest em processo único), sempre
+     resolveu. O teste ACEITA os dois desfechos possíveis por contrato (as duas
+     sucedem com o mesmo conjunto, OU uma sucede e a outra recebe `CONFLITO`), mas só
+     observei o segundo na prática — registrado explicitamente, não escondido;
+   - a verdade do banco, relida DEPOIS que as duas promises resolvem: exatamente 4
+     parcelas, soma = 100_003 centavos exatos. É isto que teria denunciado a duplicata
+     (8 linhas, soma dobrada) se a correção do Rafa não existisse.
+2. **`receivables_sale_id_vence_em_key + onConflictDoNothing` (inserção direta)** — como o
+   teste acima nunca observou experimentalmente o caminho "as duas chamadas passam pela
+   checagem ao mesmo tempo e caem no `onConflictDoNothing`", escrevi um teste cirúrgico que
+   ataca esse mecanismo diretamente: duas inserções cruas concorrentes na MESMA
+   `(sale_id, vence_em)`, usando o mesmo `.onConflictDoNothing({ target: [...] })` que a
+   Server Action usa internamente. Prova, sem depender de vencer uma corrida de timing, que
+   índice + cláusula seguram a concorrência sem lançar erro — nenhuma promise rejeita, e a
+   tabela termina com exatamente 1 linha, não 2. Espelha a filosofia do teste
+   `sales_proposal_id_key barra no BANCO` já existente (que insere SEM
+   `onConflictDoNothing` de propósito, para provar que o índice REJEITA); este prova o
+   outro lado do mesmo tipo de índice — com a cláusula, a segunda tentativa não falha, só
+   não faz nada.
+
+### Sanidade (feita e revertida, não ficou no arquivo)
+
+Troquei de propósito os valores esperados para simular duplicata: `toHaveLength(4)` →
+`toHaveLength(8)`, soma `100_003` → `200_006`, e `toHaveLength(1)` → `toHaveLength(2)` no
+teste de inserção direta. Rodei — as duas asserções falharam com a mensagem certa
+(`expected 8 to be 4` etc.). Revertido antes de considerar a entrega pronta (diff contra
+backup confirmou reversão limpa).
+
+### Verificação
+
+- `npx tsc --noEmit`: limpo.
+- `npx tsx scripts/check/known-failures.ts`: **365 testes** (363 + 2 novos), allowlist
+  vazia (0), **verde, sem regressão**.
+- Rodei o arquivo `tests/sales/vendas.test.ts` isolado 6x seguidas depois de fechar as
+  asserções finais — 17/17 verdes todas as vezes, sem flakiness observada.
+- Não toquei em `src/**`.
+
+### O que NÃO está coberto (explícito)
+
+- **O caminho "as duas chamadas passam pela checagem `existentes > 0` ao mesmo tempo e
+  as duas sucedem via `onConflictDoNothing`" não foi observado através da Server Action
+  em si** — só provado separadamente via inserção direta (teste 2 acima). Se um dia isto
+  rodar num ambiente com latência de rede real entre app e banco (produção, não
+  Docker local), a corrida pode se comportar diferente do que vi aqui; o teste da Server
+  Action aceita esse desfecho por contrato mas não o exercita de fato neste ambiente.
+- Continuam os mesmos itens já registrados na rodada anterior que esta rodada não tocou:
+  fórmula "oficial" de margem, `listarVendas`/`atualizarVenda` (campos além de
+  `custoCents`)/`excluirParcela` sem teste dedicado, `atualizarVenda`/`atualizarParcela`
+  com payload vazio sem teste, e nenhum teste de UI (fora da fronteira).
+
+---
+
+## Rodada anterior: S9 — vendas, comissão e recebíveis
 
 Handoff: `docs/handoffs/rafa-para-teo.md`, seção "S9". Backend já commitado (`dba5eed`):
 `sales`/`receivables` (migration `0007`, RLS na mesma migration) e `src/server/sales.ts`.
