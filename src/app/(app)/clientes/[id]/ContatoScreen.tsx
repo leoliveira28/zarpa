@@ -47,6 +47,7 @@ import {
 import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { Skeleton, SkeletonRow, SkeletonText } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
+import { NovoNegocioSheet } from "@/components/app/NovoNegocioSheet";
 import {
   CakeIcon,
   ChevronRightIcon,
@@ -84,6 +85,9 @@ import {
 type Status = "loading" | "ready" | "error";
 
 export function ContatoScreen({ contatoId }: { contatoId: string }) {
+  const router = useRouter();
+  const toast = useToast();
+
   const [status, setStatus] = React.useState<Status>("loading");
   const [contact, setContact] = React.useState<ContatoDetalhe | null>(null);
   const [errorInfo, setErrorInfo] = React.useState<{
@@ -93,6 +97,12 @@ export function ContatoScreen({ contatoId }: { contatoId: string }) {
 
   const [reloadToken, setReloadToken] = React.useState(0);
   const retry = React.useCallback(() => setReloadToken((token) => token + 1), []);
+
+  // Atalho "Novo negócio" a partir da ficha — o segundo ponto de entrada do
+  // bloqueio nº1 (ver docs/status/nina.md e o cabeçalho de FunnelScreen.tsx).
+  // O Funil não está montado aqui, então o card não "aparece" na hora — o
+  // toast com o link resolve isso sem esperar a agente navegar às cegas.
+  const [negocioSheetOpen, setNegocioSheetOpen] = React.useState(false);
 
   React.useEffect(() => {
     let active = true;
@@ -136,15 +146,27 @@ export function ContatoScreen({ contatoId }: { contatoId: string }) {
         </Card>
       ) : (
         <>
-          <header className="flex flex-col gap-1">
-            <h2 className="display truncate text-32 text-ink">{contact.name}</h2>
-            <p className="text-13 text-muted">
-              Cliente desde {formatDayMonth(new Date(contact.createdAt))} ·{" "}
-              {contact.totalViajantes}{" "}
-              {contact.totalViajantes === 1 ? "passageiro" : "passageiros"} ·{" "}
-              {contact.totalNegocios}{" "}
-              {contact.totalNegocios === 1 ? "negócio" : "negócios"}
-            </p>
+          <header className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="display truncate text-32 text-ink">{contact.name}</h2>
+              <p className="text-13 text-muted">
+                Cliente desde {formatDayMonth(new Date(contact.createdAt))} ·{" "}
+                {contact.totalViajantes}{" "}
+                {contact.totalViajantes === 1 ? "passageiro" : "passageiros"} ·{" "}
+                {contact.totalNegocios}{" "}
+                {contact.totalNegocios === 1 ? "negócio" : "negócios"}
+              </p>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="shrink-0"
+              onPointerDown={() => setNegocioSheetOpen(true)}
+            >
+              <PlusIcon className="size-4" />
+              <span className="hidden sm:inline">Novo negócio</span>
+              <span className="sr-only sm:hidden">Novo negócio</span>
+            </Button>
           </header>
 
           <DadosCard contact={contact} contatoId={contatoId} onPatched={patch} />
@@ -152,6 +174,22 @@ export function ContatoScreen({ contatoId }: { contatoId: string }) {
           <PassageirosCard contatoId={contatoId} />
           <LembretesCard contatoId={contatoId} />
           <EncerramentoCard contact={contact} onPatched={patch} />
+
+          <NovoNegocioSheet
+            open={negocioSheetOpen}
+            onOpenChange={setNegocioSheetOpen}
+            contatoFixo={{ id: contact.id, nome: contact.name }}
+            onCreated={(negocio) => {
+              setNegocioSheetOpen(false);
+              patch({ totalNegocios: contact.totalNegocios + 1 });
+              toast.show({
+                title: `Negócio criado: ${negocio.title}`,
+                description: "Entrou no Funil, coluna Novo contato.",
+                tone: "ok",
+                action: { label: "Abrir Funil", onClick: () => router.push("/funil") },
+              });
+            }}
+          />
         </>
       )}
     </div>

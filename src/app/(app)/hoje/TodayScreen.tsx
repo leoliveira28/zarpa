@@ -4,11 +4,14 @@ import * as React from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   concluirTarefa,
+  criarTarefa,
   listarAberturasRecentes,
+  listarContatos,
   listarNegociosParados,
   listarTarefasDeHoje,
   obterResumoDoPipeline,
   type AberturaProposta,
+  type ContatoResumo,
   type ResumoDeParados,
   type ResumoDoPipeline,
   type TarefaDeHoje,
@@ -21,9 +24,19 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, SectionHeading } from "@/components/ui/Card";
 import { Checkbox } from "@/components/ui/Checkbox";
+import { Combobox } from "@/components/ui/Combobox";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { FieldError } from "@/components/ui/Field";
+import { Field, FieldError, FieldHint, Label } from "@/components/ui/Field";
+import { Input, Textarea } from "@/components/ui/Input";
 import { Money } from "@/components/ui/Money";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/Select";
+import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import {
@@ -34,6 +47,7 @@ import {
   CopyIcon,
   OpenedIcon,
   PassportIcon,
+  PlusIcon,
 } from "@/components/app/icons";
 
 /* =============================================================================
@@ -80,6 +94,10 @@ export function TodayScreen() {
     () => setTasksReload((n) => n + 1),
     [],
   );
+
+  // "Criar lembrete" — botão morto até aqui (sem `onClick`, sem função de
+  // servidor). Ver docs/status/nina.md: `criarTarefa` (S9/S10) liga os dois.
+  const [reminderSheetOpen, setReminderSheetOpen] = React.useState(false);
 
   const [openedStatus, setOpenedStatus] = React.useState<Status>("loading");
   const [opened, setOpened] = React.useState<AberturaProposta[]>([]);
@@ -246,11 +264,23 @@ export function TodayScreen() {
       <section aria-labelledby="hoje-tarefas">
         <SectionHeading
           action={
-            tasksStatus === "ready" ? (
-              <span className="text-13 tabular-nums text-muted" data-numeric>
-                {tasks.length} {tasks.length === 1 ? "pendente" : "pendentes"}
-              </span>
-            ) : null
+            <div className="flex items-center gap-1">
+              {tasksStatus === "ready" ? (
+                <span className="text-13 tabular-nums text-muted" data-numeric>
+                  {tasks.length} {tasks.length === 1 ? "pendente" : "pendentes"}
+                </span>
+              ) : null}
+              <Button
+                variant="quiet"
+                size="sm"
+                iconOnly
+                aria-label="Criar lembrete"
+                className="-my-1"
+                onPointerDown={() => setReminderSheetOpen(true)}
+              >
+                <PlusIcon className="size-3.5" />
+              </Button>
+            </div>
           }
         >
           <span id="hoje-tarefas">Tarefas de hoje</span>
@@ -273,7 +303,15 @@ export function TodayScreen() {
           <EmptyState
             title="Nada marcado para hoje"
             description="Toda proposta enviada vira um lembrete de follow-up automático — passaporte perto de vencer e aniversário de cliente também aparecem aqui sozinhos."
-            action={<Button variant="primary">Criar lembrete</Button>}
+            action={
+              <Button
+                variant="primary"
+                onPointerDown={() => setReminderSheetOpen(true)}
+              >
+                <PlusIcon className="size-4" />
+                Criar lembrete
+              </Button>
+            }
           />
         ) : (
           <Card className="overflow-hidden">
@@ -479,6 +517,18 @@ export function TodayScreen() {
           </Card>
         )}
       </section>
+
+      <NovoLembreteSheet
+        open={reminderSheetOpen}
+        onOpenChange={setReminderSheetOpen}
+        onCreated={(task) =>
+          setTasks((current) =>
+            [...current, task].sort(
+              (a, b) => new Date(a.dueAt).valueOf() - new Date(b.dueAt).valueOf(),
+            ),
+          )
+        }
+      />
     </div>
   );
 }
@@ -636,5 +686,247 @@ function OpenedPreview() {
         <span className="text-13 text-muted">abriu 6 vezes · há 3h</span>
       </span>
     </div>
+  );
+}
+
+/* =============================================================================
+   Novo lembrete — o "Criar lembrete" morto agora chama `criarTarefa`
+   -----------------------------------------------------------------------------
+   Sheet curta: título e vencimento são os dois campos que o servidor exige.
+   Tipo e contato são opcionais — a doutrina do produto é "lembrete solto"
+   funcionar tão bem quanto um vinculado.
+
+   `dueAt` é `type="datetime-local"`, não `type="date"` (cuidado do Rafa em
+   docs/handoffs/rafa-para-nina.md): um `<input type="date">` sozinho manda
+   "AAAA-MM-DD" puro, que o construtor `Date` do JS interpreta como meia-noite
+   UTC — em Brasília isso nasce com até 3h de atraso, "vencido" na hora de
+   criar. `datetime-local` manda "AAAA-MM-DDTHH:mm" SEM fuso, e a mesma
+   especificação do `Date` trata essa forma (sem "Z"/offset) como hora LOCAL
+   do navegador — exatamente o comportamento certo, sem gambiarra nenhuma no
+   componente. O valor default é "agora + 30min, arredondado para os 15min
+   seguintes": fica quase sempre no mesmo dia (aparece em "Tarefas de hoje" na
+   mesma hora) e quase nunca nasce como "vencida" — o oposto de sugerir 09:00
+   fixo, que nasceria atrasado toda tarde.
+
+   `dealId` ficou de fora do formulário: vincular a um negócio pede escolher
+   PRIMEIRO o contato dono dele, e dois buscadores empilhados numa Sheet curta
+   é exatamente a "cara de formulário genérico" que a direção proíbe. Quem
+   quiser lembrete atrelado a um negócio específico ainda tem o atalho da
+   ficha do contato (`LembretesCard`, que não pede tipo/contato porque já
+   está dentro da ficha) — documentado em docs/status/nina.md.
+
+   O retorno de `criarTarefa` não traz `contactName`/`vencida`/
+   `suggestedMessage` (contrato documentado em rafa-para-nina.md). Em vez de
+   um segundo round-trip só para preencher isso — o que atrasaria a tarefa
+   aparecer na lista —, a Sheet já tem o nome do contato selecionado (mesma
+   lista carregada para o Combobox) e computa `vencida` localmente: mesma
+   regra que o servidor usa (`dueAt < agora`).
+   ========================================================================== */
+
+const REMINDER_KIND_LABELS: Record<string, string> = {
+  followup: "Follow-up",
+  ligar: "Ligar",
+  whatsapp: "WhatsApp",
+  email: "E-mail",
+  outro: "Outro",
+};
+
+const REMINDER_KIND_OPTIONS = Object.entries(REMINDER_KIND_LABELS).map(
+  ([value, label]) => ({ value, label }),
+);
+
+/** "Agora + 30min", arredondado para o próximo múltiplo de 15 — nasce no
+ * futuro (não "vencida" ao salvar) e quase sempre ainda hoje. */
+function defaultReminderDueAt(): string {
+  const target = new Date(Date.now() + 30 * 60 * 1000);
+  target.setSeconds(0, 0);
+  target.setMinutes(Math.ceil(target.getMinutes() / 15) * 15);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}T${pad(target.getHours())}:${pad(target.getMinutes())}`;
+}
+
+function NovoLembreteSheet({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: (task: TarefaDeHoje) => void;
+}) {
+  const [title, setTitle] = React.useState("");
+  const [dueAt, setDueAt] = React.useState(defaultReminderDueAt);
+  const [kind, setKind] = React.useState("outro");
+  const [notes, setNotes] = React.useState("");
+  const [contactId, setContactId] = React.useState("");
+  const [creating, setCreating] = React.useState(false);
+  const [fieldError, setFieldError] = React.useState<{
+    campo?: string;
+    mensagem: string;
+  } | null>(null);
+  const [contatos, setContatos] = React.useState<ContatoResumo[]>([]);
+  const [loadingContatos, setLoadingContatos] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!open) {
+      setTitle("");
+      setDueAt(defaultReminderDueAt());
+      setKind("outro");
+      setNotes("");
+      setContactId("");
+      setFieldError(null);
+      setContatos([]);
+      return;
+    }
+    setLoadingContatos(true);
+    void listarContatos({ limite: 200 }).then((result) => {
+      setLoadingContatos(false);
+      if (result.ok) setContatos(result.data);
+    });
+  }, [open]);
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setCreating(true);
+    setFieldError(null);
+    const result = await criarTarefa({
+      title: title.trim(),
+      notes: notes.trim() || undefined,
+      kind: kind as "followup" | "ligar" | "whatsapp" | "email" | "outro",
+      dueAt,
+      contactId: contactId || undefined,
+    });
+    setCreating(false);
+    if (!result.ok) {
+      setFieldError({ campo: result.campo, mensagem: result.mensagem });
+      return;
+    }
+
+    const created = result.data;
+    const contactName = contatos.find((c) => c.id === contactId)?.name ?? null;
+    onCreated({
+      ...created,
+      contactName,
+      dealTitle: null,
+      destination: null,
+      suggestedMessage: null,
+      vencida: new Date(created.dueAt).valueOf() < Date.now(),
+    });
+    onOpenChange(false);
+  }
+
+  const selectedContato = contatos.find((c) => c.id === contactId);
+  const canSubmit = title.trim().length >= 2 && dueAt.length > 0;
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        open={open}
+        onOpenChange={onOpenChange}
+        title="Novo lembrete"
+        description="Título e vencimento são os únicos campos obrigatórios."
+        footer={
+          <Button
+            variant="primary"
+            block
+            type="submit"
+            form="novo-lembrete-form"
+            loading={creating}
+            disabled={!canSubmit}
+          >
+            Criar lembrete
+          </Button>
+        }
+      >
+        <form
+          id="novo-lembrete-form"
+          onSubmit={handleSubmit}
+          className="flex flex-col gap-4 py-2"
+        >
+          <Field invalid={fieldError?.campo === "title"}>
+            <Label>Título</Label>
+            <Input
+              autoFocus
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="Ex.: Ligar para confirmar hospedagem"
+            />
+            {fieldError?.campo === "title" ? (
+              <FieldError>{fieldError.mensagem}</FieldError>
+            ) : null}
+          </Field>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field invalid={fieldError?.campo === "dueAt"}>
+              <Label>Quando</Label>
+              <Input
+                type="datetime-local"
+                value={dueAt}
+                onChange={(event) => setDueAt(event.target.value)}
+                className="tabular-nums"
+              />
+              {fieldError?.campo === "dueAt" ? (
+                <FieldError>{fieldError.mensagem}</FieldError>
+              ) : (
+                <FieldHint>Hora do seu aparelho — sem conversão de fuso.</FieldHint>
+              )}
+            </Field>
+
+            <Field>
+              <Label optional>Tipo</Label>
+              <Select value={kind} onValueChange={setKind}>
+                <SelectTrigger>
+                  <SelectValue>{REMINDER_KIND_LABELS[kind]}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {REMINDER_KIND_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+
+          <Field invalid={fieldError?.campo === "contactId"}>
+            <Label optional>Contato</Label>
+            <Combobox
+              value={contactId}
+              onValueChange={(value) => setContactId(value ?? "")}
+              options={contatos.map((c) => ({
+                value: c.id,
+                label: c.name,
+                hint: c.whatsapp ?? c.phone ?? undefined,
+              }))}
+              placeholder="Nenhum — lembrete solto"
+              searchPlaceholder="Buscar por nome"
+              loading={loadingContatos}
+              emptyMessage="Nenhum contato encontrado"
+              invalid={fieldError?.campo === "contactId"}
+            />
+            {fieldError?.campo === "contactId" ? (
+              <FieldError>{fieldError.mensagem}</FieldError>
+            ) : selectedContato ? (
+              <FieldHint>Aparece na ficha de {selectedContato.name} também.</FieldHint>
+            ) : null}
+          </Field>
+
+          <Field>
+            <Label optional>Nota</Label>
+            <Textarea
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              placeholder="O que lembrar na hora de agir…"
+              rows={2}
+            />
+          </Field>
+
+          {fieldError && !fieldError.campo ? (
+            <FieldError>{fieldError.mensagem}</FieldError>
+          ) : null}
+        </form>
+      </SheetContent>
+    </Sheet>
   );
 }

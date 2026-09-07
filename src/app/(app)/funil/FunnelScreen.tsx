@@ -28,7 +28,8 @@ import { Money } from "@/components/ui/Money";
 import { Rule } from "@/components/plates";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import { CheckIcon, ClockIcon } from "@/components/app/icons";
+import { CheckIcon, ClockIcon, PlusIcon } from "@/components/app/icons";
+import { NovoNegocioSheet } from "@/components/app/NovoNegocioSheet";
 
 /* =============================================================================
    Funil — quadro de cinco estágios
@@ -66,6 +67,16 @@ import { CheckIcon, ClockIcon } from "@/components/app/icons";
       `contactId` não é 1:1 com `dealId` (um contato pode ter duas propostas
       em negócios diferentes). Cruzar por contato inflaria o selo errado no
       card errado. `Signal` ficou só com "parada há N dias" / "hoje".
+
+   5. "+ NOVO NEGÓCIO" NO CABEÇALHO (docs/status/nina.md). Auditoria ao vivo
+      achou o bloqueio nº1 do produto: não existia NENHUM jeito de criar um
+      negócio pela interface — `criarNegocio` já funcionava no servidor desde
+      o S4, mas nenhuma tela chamava. `NovoNegocioSheet`
+      (`src/components/app/`) é a mesma Sheet usada na ficha do contato; aqui
+      ela busca o contato por nome, lá ele já vem decidido. O retorno de
+      `criarNegocio` é o MESMO shape de `listarNegociosDoFunil` — o card entra
+      direto em `items`, cai na coluna "Novo contato" por conta do
+      `useMemo` de `columns`, sem reconsultar o quadro.
 
    O que NÃO mudou, porque já estava certo: a raia é um campo preenchido do
    topo à base da coluna; card e card se separam por um fio interno; card
@@ -186,6 +197,11 @@ export function FunnelScreen() {
   const [lossReason, setLossReason] = React.useState("");
   const [lossSubmitting, setLossSubmitting] = React.useState(false);
   const [lossError, setLossError] = React.useState<string | null>(null);
+
+  // "+ Novo negócio" — o ponto de entrada que faltava (docs/status/nina.md).
+  // `criarNegocio` já devolve o MESMO shape de `listarNegociosDoFunil`, então
+  // o card entra direto na coluna "Novo contato" sem reconsultar o quadro.
+  const [negocioSheetOpen, setNegocioSheetOpen] = React.useState(false);
 
   const columnRefs = React.useRef(new Map<EstagioDeFunil, HTMLElement>());
 
@@ -406,8 +422,16 @@ export function FunnelScreen() {
           Nem subtítulo de instrução, nem total — os dois comiam altura do
           quadro na v1, e nenhum dos dois é conteúdo da página: são conteúdo
           do quadro (abaixo). */}
-      <header className="lg:shrink-0">
+      <header className="flex items-center justify-between gap-3 lg:shrink-0">
         <h2 className="text-32 font-semibold text-ink">Funil</h2>
+        <Button
+          variant="primary"
+          iconOnly
+          aria-label="Novo negócio"
+          onPointerDown={() => setNegocioSheetOpen(true)}
+        >
+          <PlusIcon className="size-4" />
+        </Button>
       </header>
 
       {/* faixa do QUADRO: o total "Em aberto" mora aqui, não na página — é o
@@ -654,6 +678,15 @@ export function FunnelScreen() {
           </Field>
         </DialogContent>
       </Dialog>
+
+      <NovoNegocioSheet
+        open={negocioSheetOpen}
+        onOpenChange={setNegocioSheetOpen}
+        onCreated={(negocio) => {
+          setItems((current) => [negocio, ...current]);
+          setNegocioSheetOpen(false);
+        }}
+      />
     </div>
   );
 }

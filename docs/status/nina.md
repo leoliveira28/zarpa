@@ -700,3 +700,147 @@ Next precisa de um manifesto global de Server Actions, o erro de bundling de
   build/dev em `storage.ts` (grave, bloqueia o app inteiro), (2) pedido de
   `listarNegocios()` para trocar o campo de ID colado por um seletor de
   verdade.
+
+## Dois botões mortos — `criarNegocio` e `criarTarefa` ligados na interface
+
+Auditoria ao vivo (não teste, clique real) achou dois buracos: (1) **nenhum
+lugar da UI criava negócio** — `criarNegocio` existia no servidor desde o S4,
+sem tela chamando, e isso travava "Nova proposta" (combobox vazio pra tenant
+novo) — bloqueio nº1 do produto; (2) **"Criar lembrete" no Hoje era
+`<Button variant="primary">Criar lembrete</Button>` sem `onClick`**, e não
+existia `criarTarefa` do lado do servidor até este sprint. Contrato completo
+em `docs/handoffs/rafa-para-nina.md` (seção "S9/S10").
+
+### Onde entrei
+
+**Novo negócio** — dois pontos de entrada, mesma Sheet:
+
+- `src/app/(app)/funil/FunnelScreen.tsx` — cabeçalho ganhou `Button
+  variant="primary" iconOnly` ("+") ao lado do título "Funil", mesmo desenho
+  do "+" de `PropostasScreen.tsx`. Não existia nenhum botão "Nova proposta"
+  no cabeçalho do Funil antes (o handoff sugeria "ao lado de Nova proposta",
+  mas essa tela nunca teve isso — só título). `onCreated` insere o retorno
+  de `criarNegocio` (que já vem no MESMO shape de `NegocioDoFunil`) direto em
+  `items`; a coluna "Novo contato" é derivada de `items` por `useMemo`, então
+  o card aparece sem reconsultar o quadro.
+- `src/app/(app)/clientes/[id]/ContatoScreen.tsx` — atalho no cabeçalho da
+  ficha ("+ Novo negócio", `variant="secondary"`, texto oculto abaixo de
+  `sm`). Como o Funil não está montado quando se cria por aqui, o card não
+  "aparece na hora" nesta tela — troquei por um toast com o resultado
+  (`Negócio criado: <título> · Entrou no Funil, coluna Novo contato`) e uma
+  ação **Abrir Funil** que navega para lá. O contador "N negócios" do
+  cabeçalho da ficha também é atualizado localmente (`patch`), sem refetch.
+
+`src/components/app/NovoNegocioSheet.tsx` é o componente compartilhado pelos
+dois pontos de entrada — mesmo raciocínio de `CardBody` no funil (duas
+marcações do mesmo registro divergiriam no primeiro ajuste). Prop
+`contatoFixo?: { id, nome }` é a diferença: vindo da ficha, o contato já está
+decidido e o campo vira um rótulo estático (`bg-inset`) em vez de Combobox —
+buscar de novo o nome que já está no topo da tela seria pedir a mesma
+informação duas vezes. Sheet curta de propósito: contato, título, destino,
+ida/volta. Moeda/pax/valor/`expectedCloseOn` ficam de fora — nascem no
+default do servidor (BRL, pax 1, valor R$ 0,00) e se ajustam depois na ficha
+do negócio, quando essa tela existir; enfiar seis campos numa Sheet de
+criação rápida é a "cara de formulário gerado" que a direção proíbe.
+
+**Criar lembrete** — `src/app/(app)/hoje/TodayScreen.tsx`:
+
+- O botão morto do `EmptyState` ("Nada marcado para hoje") ganhou
+  `onPointerDown` abrindo a Sheet.
+- Adicionei um segundo ponto de entrada: um `Button variant="quiet" iconOnly
+  size="sm"` ("+") ao lado da contagem "N pendentes" no `SectionHeading` de
+  "Tarefas de hoje". Sem ele, depois da primeira tarefa criada não havia
+  NENHUM jeito de criar a segunda sem completá-la antes — o botão só existia
+  no estado vazio. É a primeira vez que um `SectionHeading.action` carrega um
+  `Button` em vez de só texto/`Badge`; mantive `variant="quiet"` e `size="sm"`
+  de propósito (sem preenchimento em repouso) para não quebrar o registro
+  silencioso do miolo do app com um CTA gritando ao lado de um número.
+- `NovoLembreteSheet` (função local no mesmo arquivo — só esta tela usa).
+  Campos: título e "Quando" (obrigatórios), tipo e contato (opcionais, um
+  Combobox com a mesma busca de `listarContatos` usada em `NovoNegocioSheet`),
+  nota (opcional). **Sem `dealId` no formulário**: vincular a um negócio pede
+  escolher primeiro o contato dono dele, e dois buscadores empilhados numa
+  Sheet curta é exatamente a "cara de template" que a direção proíbe. Quem
+  quiser lembrete preso a um negócio específico ainda tem o atalho de dentro
+  da ficha do contato (`LembretesCard`, que já teria contato implícito).
+
+### O cuidado do Rafa — fuso do `dueAt` — decisão e por quê
+
+`dueAt` é `timestamptz`. Um `<input type="date">` sozinho manda
+`"AAAA-MM-DD"` puro, que o construtor `Date` do JS interpreta pela
+especificação como **meia-noite UTC** — em Brasília isso nasce até 3h
+"atrasado" na hora de criar. Usei **`<input type="datetime-local">`**, não
+`type="date"` com hora fixa. A mesma especificação do `Date` trata a forma
+`"AAAA-MM-DDTHH:mm"` (sem `Z`, sem offset) como **hora LOCAL do navegador** —
+exatamente o comportamento certo, sem nenhuma gambiarra de fuso no
+componente nem no servidor (`criarTarefa` só faz `new Date(value)`, que já
+existia pronto para essa forma — ver o comentário de `dueAtInput` em
+`followups.ts`).
+
+Valor default do campo: **"agora + 30min, arredondado para o próximo
+múltiplo de 15"** (`defaultReminderDueAt()`), não "09:00 fixo" como o handoff
+sugeria como opção. Escolhi isso porque a tela Hoje é usada o dia inteiro —
+um default de 09:00 nasceria "vencido" (vermelho) toda tarde, o oposto do
+que dá confiança na hora de criar. "Agora + 30min" nasce no futuro quase
+sempre (só rola pro dia seguinte se criado nos últimos ~45min antes da
+meia-noite — aceitável, e o campo continua editável).
+
+### Latência percebida — sem segundo round-trip para a tarefa aparecer
+
+O retorno de `criarTarefa` (`TarefaResumo`) não tem `contactName`, `vencida`
+nem `suggestedMessage` — o handoff já avisa disso e sugere completar
+localmente em vez de esperar um refetch de `listarTarefasDeHoje()`. É o que
+fiz: `contactName` vem do mesmo `ContatoResumo[]` já carregado para o
+Combobox (sem chamada nova), `dealTitle`/`destination` ficam `null` (não há
+campo de negócio nesta Sheet), `suggestedMessage` fica `null` (contrato: só
+tarefa gerada tem sugestão), e `vencida` é `dueAt < agora` calculado no
+cliente — mesma regra do servidor. A tarefa entra na lista, ordenada por
+`dueAt`, no mesmo `then()` da criação — sem esperar uma segunda ida ao
+servidor só para preencher três campos que já sei localmente. 100ms de
+atraso evitável é 100ms de atraso evitável.
+
+### Verificação
+
+- `npx tsc --noEmit` — limpo.
+- `npx vitest run tests/design` — 203/203 verde (guard de movimento passou
+  sem precisar registrar desvio novo: toda a Sheet nova é composta de
+  componentes já existentes — `Button`, `Sheet`, `Field`, `Combobox`,
+  `Select`, `Input`; não escrevi nenhuma transição de cor nova).
+- `npm run build` — limpo, as 14 rotas geram normalmente.
+- **Testei clicando de verdade**, com Playwright apontado para o `next dev`
+  já rodando em `:3000` (login `dev@zarpa.local`/`dev12345`, viewport
+  390×844):
+  1. Hoje → "+" ao lado de "Tarefas de hoje" → preenchi título → "Quando"
+     já veio preenchido com o default → "Criar lembrete" → a tarefa apareceu
+     na lista "Tarefas de hoje" (contagem 0→1), com hora tabular e o clock
+     glyph, sem reload.
+  2. Funil → "+" no cabeçalho → busquei um contato no Combobox → título →
+     "Criar negócio" → o card apareceu na coluna "NOVO CONTATO" (contagem
+     0→1) com o valor "R$ 0,00" e "hoje" no sinal de estagnação, sem reload.
+  3. Clientes → abri um contato → "+ Novo negócio" no cabeçalho da ficha →
+     campo "Contato" veio fixo com o nome (sem Combobox) → título → "Criar
+     negócio" → toast "Negócio criado: … · Entrou no Funil, coluna Novo
+     contato" com ação "Abrir Funil", e o contador do cabeçalho da ficha
+     mudou de "1 negócio" para "2 negócios" sem refetch.
+  Screenshots do fluxo ficaram no scratchpad da sessão (não fazem parte do
+  repositório); os scripts de Playwright usados para o teste foram apagados
+  do disco depois — eram temporários, não commitados.
+
+### Decisões que tomei sozinha (resumo desta entrega)
+
+1. `NovoNegocioSheet` compartilhada entre Funil e ficha do contato, com
+   `contatoFixo` opcional em vez de dois componentes quase iguais.
+2. Sheet de negócio SEM moeda/pax/valor/data prevista de fechamento — só
+   contato, título, destino, ida/volta. Ajuste fino fica para quando existir
+   tela de detalhe do negócio.
+3. "+" pequeno (`quiet`, `iconOnly`, `size="sm"`) dentro do `SectionHeading`
+   de "Tarefas de hoje" — primeiro caso de um `Button` ali; mantive o peso
+   visual baixo para não brigar com o registro silencioso do miolo do app.
+4. Sheet de lembrete SEM campo de negócio (`dealId`) — só contato. Dois
+   buscadores empilhados numa Sheet curta pareceria template gerado.
+5. Default do "Quando" é "agora + 30min, arredondado pros 15min seguintes",
+   não "09:00 fixo" — decisão de latência percebida/confiança: um lembrete
+   não deveria nascer "atrasado" na tela que acabou de criá-lo.
+6. Inserção otimista da tarefa nova usa dado que já está em memória (lista de
+   contatos carregada para o Combobox) em vez de um segundo `listarTarefasDeHoje()`
+   só para popular `contactName`/`vencida` — evita um round-trip perceptível.
