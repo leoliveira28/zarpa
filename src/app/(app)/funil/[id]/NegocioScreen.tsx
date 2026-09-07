@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   COLUNAS_DO_FUNIL,
+  atualizarNegocio,
   listarPropostas,
   moverEstagioDoNegocio,
   obterNegocio,
@@ -13,6 +14,7 @@ import {
   type EstagioDeFunil,
   type NegocioDetalhe,
   type PropostaResumo,
+  type ServiceResult,
 } from "@/server";
 import { Badge, type BadgeProps } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -25,14 +27,16 @@ import {
   CardTitle,
 } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { FieldError } from "@/components/ui/Field";
-import { MoneyStat } from "@/components/ui/Money";
+import { Field, FieldError, Label, SavedMark } from "@/components/ui/Field";
+import { Input } from "@/components/ui/Input";
+import { CentsInput, MoneyStat } from "@/components/ui/Money";
 import { Skeleton, SkeletonRow, SkeletonText } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { DealStageMenu, LossReasonDialog } from "@/components/app/DealStageMenu";
 import { NovaPropostaSheet } from "@/components/app/NovaPropostaSheet";
 import { ChevronRightIcon, PlusIcon } from "@/components/app/icons";
 import { formatDayMonth, formatTime } from "@/lib/ui/format";
+import { useAutosave } from "@/lib/ui/useAutosave";
 
 /* =============================================================================
    Ficha do negócio — o clique que faltava no Funil
@@ -152,6 +156,10 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
   const retry = React.useCallback(() => setReloadToken((token) => token + 1), []);
 
   const [lossDialogOpen, setLossDialogOpen] = React.useState(false);
+
+  function patch(update: Partial<NegocioDetalhe>) {
+    setNegocio((current) => (current ? { ...current, ...update } : current));
+  }
 
   React.useEffect(() => {
     let active = true;
@@ -329,7 +337,7 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
             </Card>
           ) : null}
 
-          <ViagemCard negocio={negocio} />
+          <ViagemCard negocio={negocio} dealId={negocio.id} onPatched={patch} />
           <PropostaCard negocio={negocio} />
           <TimelineCard activities={negocio.activities} />
 
@@ -363,50 +371,273 @@ function NegocioSkeleton() {
 }
 
 /* =============================================================================
-   Viagem — contato, destino, datas, pax, valor. Leitura, não edição (ver
-   comentário de topo do arquivo).
+   Viagem — destino, pax, datas, valor. Editável com autosave campo a campo,
+   mesmo padrão da ficha de cliente (ContatoScreen) e da ficha de venda
+   (VendaScreen): TextAutoField/CentsAutoField/DateAutoField/NumberAutoField +
+   SavedMark discreto, sem botão Salvar grande.
    ========================================================================== */
 
-function Stat({
-  label,
-  muted,
-  children,
+function ViagemCard({
+  negocio,
+  dealId,
+  onPatched,
 }: {
-  label: string;
-  muted?: boolean;
-  children: React.ReactNode;
+  negocio: NegocioDetalhe;
+  dealId: string;
+  onPatched: (patch: Partial<NegocioDetalhe>) => void;
 }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-13 font-medium text-muted">{label}</span>
-      <span className={muted ? "text-15 text-muted" : "text-15 text-ink"}>{children}</span>
-    </div>
-  );
-}
-
-function ViagemCard({ negocio }: { negocio: NegocioDetalhe }) {
   return (
     <Card>
       <CardHeader>
         <CardTitle>Viagem</CardTitle>
       </CardHeader>
       <CardBody>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Stat label="Destino" muted={!negocio.destination}>
-            {negocio.destination ?? "Não definido"}
-          </Stat>
-          <Stat label="Passageiros">{paxLabel(negocio.paxAdults, negocio.paxChildren)}</Stat>
-          <Stat label="Ida" muted={!negocio.departureOn}>
-            {formatOptionalDate(negocio.departureOn)}
-          </Stat>
-          <Stat label="Volta" muted={!negocio.returnOn}>
-            {formatOptionalDate(negocio.returnOn)}
-          </Stat>
+        <TextAutoField
+          label="Destino"
+          optional
+          initialValue={negocio.destination ?? ""}
+          placeholder="Não definido"
+          onSave={async (value) => {
+            const result = await atualizarNegocio(dealId, { destination: value });
+            if (result.ok) onPatched({ destination: value || null });
+            return result;
+          }}
+        />
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <NumberAutoField
+            label="Adultos"
+            initialValue={negocio.paxAdults}
+            min={1}
+            max={50}
+            onSave={async (value) => {
+              const result = await atualizarNegocio(dealId, { paxAdults: value });
+              if (result.ok) onPatched({ paxAdults: value });
+              return result;
+            }}
+          />
+          <NumberAutoField
+            label="Crianças"
+            optional
+            initialValue={negocio.paxChildren}
+            min={0}
+            max={50}
+            onSave={async (value) => {
+              const result = await atualizarNegocio(dealId, { paxChildren: value });
+              if (result.ok) onPatched({ paxChildren: value });
+              return result;
+            }}
+          />
+          <DateAutoField
+            label="Ida"
+            optional
+            initialValue={negocio.departureOn ?? ""}
+            onSave={async (value) => {
+              const result = await atualizarNegocio(dealId, { departureOn: value });
+              if (result.ok) onPatched({ departureOn: value || null });
+              return result;
+            }}
+          />
+          <DateAutoField
+            label="Volta"
+            optional
+            initialValue={negocio.returnOn ?? ""}
+            onSave={async (value) => {
+              const result = await atualizarNegocio(dealId, { returnOn: value });
+              if (result.ok) onPatched({ returnOn: value || null });
+              return result;
+            }}
+          />
         </div>
 
-        <MoneyStat label="Valor" cents={negocio.valueCents} size="20" align="left" className="mt-1" />
+        <CentsAutoField
+          label="Valor"
+          initialCents={negocio.valueCents}
+          onSave={async (cents) => {
+            const result = await atualizarNegocio(dealId, { valueCents: cents });
+            if (result.ok) onPatched({ valueCents: cents });
+            return result;
+          }}
+        />
       </CardBody>
     </Card>
+  );
+}
+
+/** Campo de texto com salvamento automático no blur — igual ao de `ContatoScreen`/`VendaScreen`. */
+function TextAutoField({
+  label,
+  optional,
+  initialValue,
+  placeholder,
+  onSave,
+}: {
+  label: string;
+  optional?: boolean;
+  initialValue: string;
+  placeholder?: string;
+  onSave: (value: string) => Promise<ServiceResult<unknown>>;
+}) {
+  const [value, setValue] = React.useState(initialValue);
+  const savedRef = React.useRef(initialValue);
+  const { state, error, commit } = useAutosave(onSave);
+
+  function handleBlur() {
+    if (value === savedRef.current) return;
+    savedRef.current = value;
+    void commit(value);
+  }
+
+  return (
+    <Field invalid={state === "error"}>
+      <div className="flex items-baseline justify-between gap-2">
+        <Label optional={optional}>{label}</Label>
+        <SavedMark state={state} />
+      </div>
+      <Input
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onBlur={handleBlur}
+        placeholder={placeholder}
+        aria-invalid={state === "error" || undefined}
+      />
+      {state === "error" ? (
+        <FieldError
+          action={
+            <button
+              type="button"
+              className="font-medium text-danger underline underline-offset-2"
+              onClick={() => void commit(value)}
+            >
+              Tentar de novo
+            </button>
+          }
+        >
+          {error}
+        </FieldError>
+      ) : null}
+    </Field>
+  );
+}
+
+/** Campo de data com autosave no blur — `<input type="date">` em hora local, nunca meia-noite UTC. */
+function DateAutoField({
+  label,
+  optional,
+  initialValue,
+  onSave,
+}: {
+  label: string;
+  optional?: boolean;
+  initialValue: string;
+  onSave: (value: string) => Promise<ServiceResult<unknown>>;
+}) {
+  const [value, setValue] = React.useState(initialValue);
+  const savedRef = React.useRef(initialValue);
+  const { state, error, commit } = useAutosave(onSave);
+
+  function handleBlur() {
+    if (value === savedRef.current) return;
+    savedRef.current = value;
+    void commit(value);
+  }
+
+  return (
+    <Field invalid={state === "error"}>
+      <div className="flex items-baseline justify-between gap-2">
+        <Label optional={optional}>{label}</Label>
+        <SavedMark state={state} />
+      </div>
+      <Input
+        type="date"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onBlur={handleBlur}
+        aria-invalid={state === "error" || undefined}
+      />
+      {state === "error" ? <FieldError>{error}</FieldError> : null}
+    </Field>
+  );
+}
+
+/** Campo numérico inteiro com autosave no blur — para pax (adultos/crianças). */
+function NumberAutoField({
+  label,
+  optional,
+  initialValue,
+  min,
+  max,
+  onSave,
+}: {
+  label: string;
+  optional?: boolean;
+  initialValue: number;
+  min?: number;
+  max?: number;
+  onSave: (value: number) => Promise<ServiceResult<unknown>>;
+}) {
+  const [value, setValue] = React.useState(String(initialValue));
+  const savedRef = React.useRef(String(initialValue));
+  const { state, error, commit } = useAutosave(onSave);
+
+  function handleBlur() {
+    if (value === savedRef.current) return;
+    const num = Number(value);
+    if (Number.isNaN(num)) {
+      setValue(savedRef.current);
+      return;
+    }
+    savedRef.current = value;
+    void commit(num);
+  }
+
+  return (
+    <Field invalid={state === "error"}>
+      <div className="flex items-baseline justify-between gap-2">
+        <Label optional={optional}>{label}</Label>
+        <SavedMark state={state} />
+      </div>
+      <Input
+        type="number"
+        numeric
+        inputMode="numeric"
+        value={value}
+        min={min}
+        max={max}
+        onChange={(event) => setValue(event.target.value)}
+        onBlur={handleBlur}
+        aria-invalid={state === "error" || undefined}
+      />
+      {state === "error" ? <FieldError>{error}</FieldError> : null}
+    </Field>
+  );
+}
+
+/** Campo de centavos com autosave no blur/Enter — a metade "edição" de `Money`. */
+function CentsAutoField({
+  label,
+  initialCents,
+  onSave,
+}: {
+  label: string;
+  initialCents: number;
+  onSave: (cents: number) => Promise<ServiceResult<unknown>>;
+}) {
+  const { state, error, commit } = useAutosave(onSave);
+
+  return (
+    <Field invalid={state === "error"} className="mt-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <Label>{label}</Label>
+        <SavedMark state={state} />
+      </div>
+      <CentsInput
+        cents={initialCents}
+        onCommit={(cents) => void commit(cents)}
+        invalid={state === "error"}
+      />
+      {state === "error" ? <FieldError>{error}</FieldError> : null}
+    </Field>
   );
 }
 

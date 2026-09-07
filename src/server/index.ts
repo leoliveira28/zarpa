@@ -146,6 +146,7 @@ export {
   moverEstagioDoNegocio,
   criarNegocio,
   obterNegocio,
+  atualizarNegocio,
   listarNegociosParados,
   obterResumoDoPipeline,
   type DealStage,
@@ -153,6 +154,7 @@ export {
   type NegocioDoFunil,
   type NegocioMovido,
   type CriarNegocioInput,
+  type NegocioPatch,
   type AtividadeDoNegocio,
   type NegocioDetalhe,
   type NegocioParado,
@@ -195,3 +197,18 @@ export {
   type ResumoDePropostasParadas,
   type ResumoDoMesCsv,
 } from './dashboard';
+export {
+  obterAssinaturaAtual,
+  listarPlanos,
+  trocarPlano,
+  cancelarAssinatura,
+  listarFaturas,
+  processarWebhookAsaas,
+  type PlanoResumo,
+  type StatusAssinatura,
+  type AssinaturaAtual,
+  type StatusFatura,
+  type FaturaResumo,
+  type TrocarPlanoInput,
+} from './billing';
+export { verificarWebhookAsaas } from '@/lib/asaas/client';

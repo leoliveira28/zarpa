@@ -44,8 +44,8 @@ import { parseDataFlexivel } from './normalize';
  *    conscientemente: o caminho normal (arrastar/mover no funil) sempre passa por
  *    `moverEstagioDoNegocio`, então sempre grava `closed_at`.
  *
- * TERCEIRA DECISÃO, menor mas vale registrar: somas (`obterResumoDoPipeline`,
- * `listarNegociosParados`) são feitas em JAVASCRIPT depois de buscar as linhas, não com
+ * TERCEIRA DECISÃO, menor mas vale registrar: somas (`obterResumoDoPipeline`)
+ * são feitas em JAVASCRIPT depois de buscar as linhas, não com
  * `sum()` no SQL. Motivo: `value_cents` é `bigint`, e `sum(bigint)` volta `numeric` do
  * Postgres — um tipo que o driver (`postgres.js`) devolve como STRING para não perder
  * precisão, e essa conversão de string→number NÃO é a mesma que o Drizzle aplica à coluna
@@ -108,8 +108,8 @@ function paraDataOuNula(valor: string | null): Date | null {
 }
 
 /**
- * Subquery correlacionada de "última atividade do negócio" — usada tanto em
- * `listarNegociosDoFunil` quanto em `listarNegociosParados`.
+ * Subquery correlacionada de "última atividade do negócio" — usada em
+ * `listarNegociosDoFunil`.
  *
  * ATENÇÃO PARA QUEM FOR COPIAR ESTE PADRÃO: os nomes de coluna aqui são LITERAIS
  * (`deals.id`, `activities.deal_id`), não `${deals.id}`/`${activities.dealId}` do Drizzle.
@@ -525,69 +525,235 @@ export type NegocioDetalhe = {
   activities: AtividadeDoNegocio[];
 };
 
+/**
+ * Helper interno: busca o `NegocioDetalhe` completo (negócio + timeline) dentro
+ * de uma transação já aberta. Compartilhado entre `obterNegocio` (leitura) e
+ * `atualizarNegocio` (escrita que devolve o estado reconciliado).
+ */
+async function buscarNegocioDetalhe(tx: TenantDb, dealId: string): Promise<NegocioDetalhe> {
+  const [negocio] = await tx
+    .select({
+      id: deals.id,
+      title: deals.title,
+      destination: deals.destination,
+      stage: deals.stage,
+      currency: deals.currency,
+      valueCents: deals.valueCents,
+      costCents: deals.costCents,
+      commissionCents: deals.commissionCents,
+      paxAdults: deals.paxAdults,
+      paxChildren: deals.paxChildren,
+      departureOn: deals.departureOn,
+      returnOn: deals.returnOn,
+      expectedCloseOn: deals.expectedCloseOn,
+      lostReason: deals.lostReason,
+      closedAt: deals.closedAt,
+      contactId: deals.contactId,
+      contactName: contacts.name,
+      createdAt: deals.createdAt,
+      updatedAt: deals.updatedAt,
+    })
+    .from(deals)
+    .innerJoin(contacts, eq(contacts.id, deals.contactId))
+    .where(eq(deals.id, dealId))
+    .limit(1);
+
+  if (!negocio) {
+    throw new ServiceError('NAO_ENCONTRADO', 'Esse negócio não existe mais.', {
+      correcao: 'Voltar para o funil',
+    });
+  }
+
+  const linhasAtividade = await tx
+    .select({
+      id: activities.id,
+      type: activities.type,
+      body: activities.body,
+      metadata: activities.metadata,
+      actorUserId: activities.actorUserId,
+      occurredAt: activities.occurredAt,
+    })
+    .from(activities)
+    .where(eq(activities.dealId, dealId))
+    .orderBy(desc(activities.occurredAt));
+
+  return {
+    ...negocio,
+    // `metadata` é `jsonb` sem `$type<>()` no schema (infere `unknown`) — o cast aqui
+    // documenta o contrato de saída, não esconde um `any`.
+    activities: linhasAtividade as AtividadeDoNegocio[],
+  };
+}
+
 export async function obterNegocio(dealId: string): Promise<ServiceResult<NegocioDetalhe>> {
   return comoResultado(async () => {
     const { tenantId } = await requireAuthContext();
+    return withTenant(tenantId, async (tx) => buscarNegocioDetalhe(tx, dealId));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 4b) Atualizar negócio — autosave campo a campo na ficha
+// ---------------------------------------------------------------------------
+
+/**
+ * Patch de edição: tudo opcional, um campo por vez (a tela salva no blur, não
+ * há botão Salvar grande). Datas aceitam string vazia = limpar (vira `null` no
+ * banco); `undefined` = campo não veio no patch, não mexe.
+ *
+ * Não reusa `dataOpcionalInput` (que transforma `''` em `undefined`): aqui
+ * preciso distinguir "não veio" de "veio vazio", porque `''` significa "limpar
+ * a data" e `undefined` significa "não toque nesta coluna".
+ */
+const atualizarNegocioInput = z.object({
+  title: z.string().trim().min(2, 'Dê um título ao negócio').max(200).optional(),
+  destination: z.string().trim().max(200).optional().or(z.literal('')),
+  paxAdults: z.number().int().min(1).max(50).optional(),
+  paxChildren: z.number().int().min(0).max(50).optional(),
+  valueCents: z.number().int().min(0).optional(),
+  departureOn: z.string().trim().max(20).optional().or(z.literal('')),
+  returnOn: z.string().trim().max(20).optional().or(z.literal('')),
+  expectedCloseOn: z.string().trim().max(20).optional().or(z.literal('')),
+});
+
+export type NegocioPatch = z.infer<typeof atualizarNegocioInput>;
+
+/**
+ * Atualiza campos do negócio — destino, pax, datas, valor. Devolve o
+ * `NegocioDetalhe` completo reconciliado (mesmo shape de `obterNegocio`) pra
+ * a ficha atualizar local sem reconsultar.
+ *
+ * Validação de datas: se o patch toca `departureOn` ou `returnOn`, confere
+ * `returnOn >= departureOn` contra o valor que vai ficar no banco (o novo
+ * se veio no patch, o existente caso contrário) — mesma regra do
+ * `check('deals_dates_check')` no schema e de `criarNegocio`.
+ */
+export async function atualizarNegocio(
+  dealId: string,
+  patch: NegocioPatch,
+): Promise<ServiceResult<NegocioDetalhe>> {
+  return comoResultado(async () => {
+    const { tenantId, userId } = await requireAuthContext();
+    const parsed = atualizarNegocioInput.safeParse(patch);
+    if (!parsed.success) {
+      const primeiro = parsed.error.issues[0];
+      throw new ServiceError('DADOS_INVALIDOS', primeiro?.message ?? 'Dados inválidos', {
+        campo: primeiro?.path.join('.'),
+        correcao: 'Corrigir e tentar de novo',
+      });
+    }
+    const dados = parsed.data;
 
     return withTenant(tenantId, async (tx) => {
-      const [negocio] = await tx
+      const [atual] = await tx
         .select({
           id: deals.id,
-          title: deals.title,
-          destination: deals.destination,
-          stage: deals.stage,
-          currency: deals.currency,
-          valueCents: deals.valueCents,
-          costCents: deals.costCents,
-          commissionCents: deals.commissionCents,
-          paxAdults: deals.paxAdults,
-          paxChildren: deals.paxChildren,
           departureOn: deals.departureOn,
           returnOn: deals.returnOn,
-          expectedCloseOn: deals.expectedCloseOn,
-          lostReason: deals.lostReason,
-          closedAt: deals.closedAt,
-          contactId: deals.contactId,
-          contactName: contacts.name,
-          createdAt: deals.createdAt,
-          updatedAt: deals.updatedAt,
         })
         .from(deals)
-        .innerJoin(contacts, eq(contacts.id, deals.contactId))
         .where(eq(deals.id, dealId))
         .limit(1);
 
-      if (!negocio) {
+      if (!atual) {
         throw new ServiceError('NAO_ENCONTRADO', 'Esse negócio não existe mais.', {
           correcao: 'Voltar para o funil',
         });
       }
 
-      const linhasAtividade = await tx
-        .select({
-          id: activities.id,
-          type: activities.type,
-          body: activities.body,
-          metadata: activities.metadata,
-          actorUserId: activities.actorUserId,
-          occurredAt: activities.occurredAt,
-        })
-        .from(activities)
-        .where(eq(activities.dealId, dealId))
-        .orderBy(desc(activities.occurredAt));
+      const valores: Record<string, unknown> = { updatedAt: new Date() };
+      const mudou: string[] = [];
 
-      return {
-        ...negocio,
-        // `metadata` é `jsonb` sem `$type<>()` no schema (infere `unknown`) — o cast aqui
-        // documenta o contrato de saída, não esconde um `any`.
-        activities: linhasAtividade as AtividadeDoNegocio[],
-      };
+      if (dados.title !== undefined) {
+        valores.title = dados.title;
+        mudou.push('title');
+      }
+      if (dados.destination !== undefined) {
+        valores.destination = dados.destination.trim() || null;
+        mudou.push('destination');
+      }
+      if (dados.paxAdults !== undefined) {
+        valores.paxAdults = dados.paxAdults;
+        mudou.push('paxAdults');
+      }
+      if (dados.paxChildren !== undefined) {
+        valores.paxChildren = dados.paxChildren;
+        mudou.push('paxChildren');
+      }
+      if (dados.valueCents !== undefined) {
+        valores.valueCents = dados.valueCents;
+        mudou.push('valueCents');
+      }
+      if (dados.departureOn !== undefined) {
+        const iso = dados.departureOn ? parseDataFlexivel(dados.departureOn) : null;
+        if (dados.departureOn && !iso) {
+          throw new ServiceError('DADOS_INVALIDOS', 'Data de ida inválida.', {
+            campo: 'departureOn',
+            correcao: 'Usar o formato DD/MM/AAAA',
+          });
+        }
+        valores.departureOn = iso;
+        mudou.push('departureOn');
+      }
+      if (dados.returnOn !== undefined) {
+        const iso = dados.returnOn ? parseDataFlexivel(dados.returnOn) : null;
+        if (dados.returnOn && !iso) {
+          throw new ServiceError('DADOS_INVALIDOS', 'Data de volta inválida.', {
+            campo: 'returnOn',
+            correcao: 'Usar o formato DD/MM/AAAA',
+          });
+        }
+        valores.returnOn = iso;
+        mudou.push('returnOn');
+      }
+      if (dados.expectedCloseOn !== undefined) {
+        const iso = dados.expectedCloseOn ? parseDataFlexivel(dados.expectedCloseOn) : null;
+        if (dados.expectedCloseOn && !iso) {
+          throw new ServiceError('DADOS_INVALIDOS', 'Data de fechamento prevista inválida.', {
+            campo: 'expectedCloseOn',
+            correcao: 'Usar o formato DD/MM/AAAA',
+          });
+        }
+        valores.expectedCloseOn = iso;
+        mudou.push('expectedCloseOn');
+      }
+
+      if (mudou.length === 0) {
+        throw new ServiceError('DADOS_INVALIDOS', 'Nada para salvar.', { correcao: 'Fechar' });
+      }
+
+      // Consistência de datas: `returnOn >= departureOn`. Se o patch só toca
+      // um dos dois, confere contra o valor que já está no banco.
+      const novaIda =
+        valores.departureOn !== undefined ? (valores.departureOn as string | null) : atual.departureOn;
+      const novaVolta =
+        valores.returnOn !== undefined ? (valores.returnOn as string | null) : atual.returnOn;
+      if (novaIda && novaVolta && novaVolta < novaIda) {
+        throw new ServiceError('DADOS_INVALIDOS', 'A volta não pode ser antes da ida.', {
+          campo: 'returnOn',
+          correcao: 'Corrigir as datas',
+        });
+      }
+
+      await tx.update(deals).set(valores).where(eq(deals.id, dealId));
+
+      await registrarAuditoria(tx, {
+        tenantId,
+        actorUserId: userId,
+        action: 'deal.updated',
+        entity: 'deal',
+        entityId: dealId,
+        // Só os NOMES dos campos alterados. Nunca os valores.
+        metadata: { campos: mudou },
+      });
+
+      return buscarNegocioDetalhe(tx, dealId);
     });
   });
 }
 
 // ---------------------------------------------------------------------------
-// 5) Parados há mais de 7 dias — seção "Paradas" do Hoje
+// 5) Parados há mais de 7 dias — seção "Paradas" do Hoje (negócios)
 // ---------------------------------------------------------------------------
 
 const DIAS_PARADO_LIMITE = 7;
@@ -612,6 +778,10 @@ export type ResumoDeParados = {
  * {@link DIAS_PARADO_LIMITE} dias — "movimentação" com a mesma definição de
  * `listarNegociosDoFunil`: o mais recente entre `updatedAt` e a última `activity`.
  * Ordenado do mais parado para o menos parado (é o que precisa de atenção primeiro).
+ *
+ * Sem consumidor de UI hoje (a seção "Paradas" do /hoje passou a usar as
+ * propostas paradas do S10, `obterResumoDoMes`), mas a action permanece — é
+ * testada (`tests/deals/funil.test.ts`) e pode voltar a ser consumida.
  */
 export async function listarNegociosParados(): Promise<ServiceResult<ResumoDeParados>> {
   return comoResultado(async () => {
