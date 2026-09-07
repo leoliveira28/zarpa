@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import {
   criarNegocio,
   listarContatos,
@@ -162,8 +163,21 @@ export function NovoNegocioSheet({
               {fieldError?.campo === "contactId" ? (
                 <FieldError>{fieldError.mensagem}</FieldError>
               ) : !loadingContatos && contatos.length === 0 ? (
+                /* O elo anterior da corrente, com o caminho junto — conta nova
+                   chega aqui sem cliente nenhum, e uma dica sem saída seria só
+                   o beco com outra redação (regra: erro/dica oferece a
+                   correção, com o caminho na mesma linha). */
                 <FieldHint>
-                  Nenhum cliente cadastrado ainda — cadastre um em Clientes primeiro.
+                  Nenhum cliente cadastrado ainda — todo negócio nasce de um.{" "}
+                  <Link
+                    href="/clientes"
+                    /* Fecha a sheet antes de navegar: aberta a partir do
+                       funil ou do Hoje, ela sobreviveria à troca de rota. */
+                    onClick={() => onOpenChange(false)}
+                    className="font-medium text-ink underline underline-offset-4 hover:text-muted"
+                  >
+                    Cadastrar cliente
+                  </Link>
                 </FieldHint>
               ) : selectedContato ? (
                 <FieldHint>

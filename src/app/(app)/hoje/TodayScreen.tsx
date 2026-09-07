@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import {
@@ -9,6 +10,7 @@ import {
   exportarResumoDoMesCsv,
   listarAberturasRecentes,
   listarContatos,
+  listarNegocios,
   listarTarefasDeHoje,
   obterResumoDoMes,
   obterResumoDoPipeline,
@@ -24,6 +26,7 @@ import { cn } from "@/lib/ui/cn";
 import { useTransitionPreset } from "@/lib/ui/motion";
 import { useDeferredDelete } from "@/lib/ui/useDeferredDelete";
 import { formatRelativeShort, formatTime } from "@/lib/ui/format";
+import { useSession } from "@/lib/auth/client";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, SectionHeading } from "@/components/ui/Card";
@@ -43,6 +46,7 @@ import {
 import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
+import { NovoNegocioSheet } from "@/components/app/NovoNegocioSheet";
 import {
   CakeIcon,
   ChatIcon,
@@ -64,6 +68,12 @@ import {
      2. quem mexeu na minha proposta (abriu o link) — é o sinal de compra
      3. o que está morrendo parado (propostas sem resposta há mais de 7 dias)
      4. como está o mês (vendas, comissão, conversão — e o botão de exportar)
+
+   E, para a conta recém-criada (zero negócios), uma quinta antes de todas:
+   por onde começa. O painel "Sua primeira proposta sai daqui" é o único CTA
+   da tela nesse estado — a ordem cliente → negócio → proposta → WhatsApp é o
+   elo que nenhum vazio isolado ensinava (docs/REGRAS_DE_NEGOCIO.md §5, o
+   bater-o-molde).
 
    Desenhada para 390px primeiro. No desktop ela vira duas colunas, mas o
    conteúdo e a ordem são os mesmos: quem trabalha no celular não recebe uma
@@ -110,6 +120,12 @@ export function TodayScreen() {
   const toast = useToast();
   const transition = useTransitionPreset();
 
+  // O nome vem da sessão — nunca de uma constante. Uma agente que acabou de
+  // criar a conta e lê o nome de outra pessoa na primeira tela desconfia do
+  // produto inteiro (e "Camila" era exatamente isso: resto de dado de exemplo).
+  const { data: session } = useSession();
+  const nomeAgente = session?.user?.name?.trim().split(/\s+/)[0] ?? null;
+
   const [tasksStatus, setTasksStatus] = React.useState<Status>("loading");
   const [tasks, setTasks] = React.useState<TarefaDeHoje[]>([]);
   const [tasksError, setTasksError] = React.useState<{
@@ -125,6 +141,36 @@ export function TodayScreen() {
   // "Criar lembrete" — botão morto até aqui (sem `onClick`, sem função de
   // servidor). Ver docs/status/nina.md: `criarTarefa` (S9/S10) liga os dois.
   const [reminderSheetOpen, setReminderSheetOpen] = React.useState(false);
+
+  // Conta recém-criada — zero negócios. Uma sondagem `limite: 1` é o custo
+  // todo: o que a tela precisa saber é só SE existe algum negócio (a ordem
+  // cliente → negócio → proposta é o que a agente nova não tem como adivinhar;
+  // ver docs/REGRAS_DE_NEGOCIO.md §5, o bater-o-molde). Enquanto contaNova,
+  // o painel de primeira venda é o único CTA da tela — "Criar lembrete" some
+  // (não há o que lembrar antes de existir a primeira viagem em negociação)
+  // e volta sozinho no primeiro negócio criado.
+  const [negociosStatus, setNegociosStatus] = React.useState<Status>("loading");
+  const [totalNegocios, setTotalNegocios] = React.useState(0);
+  const [negociosReload, setNegociosReload] = React.useState(0);
+
+  React.useEffect(() => {
+    let active = true;
+    void listarNegocios({ limite: 1 }).then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setNegociosStatus("error");
+        return;
+      }
+      setTotalNegocios(result.data.length);
+      setNegociosStatus("ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, [negociosReload]);
+
+  const contaNova = negociosStatus === "ready" && totalNegocios === 0;
+  const [negocioSheetOpen, setNegocioSheetOpen] = React.useState(false);
 
   const [openedStatus, setOpenedStatus] = React.useState<Status>("loading");
   const [opened, setOpened] = React.useState<AberturaProposta[]>([]);
@@ -323,11 +369,44 @@ export function TodayScreen() {
   return (
     <div className="flex flex-col gap-8">
       <Greeting
+        nome={nomeAgente}
         pipeline={pipeline}
         status={pipelineStatus}
         error={pipelineError}
         onRetry={retryPipeline}
       />
+
+      {/* A primeira hora — o único elo que faltava guiar. Conta nova, a tela
+          abre com UM caminho (cliente → negócio → proposta → WhatsApp) e o
+          CTA do primeiro passo real; as seções abaixo continuam ali, mas sem
+          concorrer por ação (regra do EmptyState: uma ação — duas viram
+          indecisão). A criação do negócio acontece na NovoNegocioSheet, a
+          mesma do funil e da ficha do contato. */}
+      {contaNova ? (
+        <EmptyState
+          plate
+          title="Sua primeira proposta sai daqui"
+          description="O caminho é curto: um cliente, um negócio — a viagem que ele quer fazer —, a proposta com suas opções e o link no WhatsApp dele. Todo negócio nasce de um cliente já cadastrado."
+          preview={<NegocioPreview />}
+          action={
+            <Button
+              variant="primary"
+              onPointerDown={() => setNegocioSheetOpen(true)}
+            >
+              <PlusIcon className="size-4" />
+              Criar primeiro negócio
+            </Button>
+          }
+          secondaryAction={
+            <Link
+              href="/clientes"
+              className="text-13 font-medium text-muted hover:text-ink hover:underline hover:underline-offset-4"
+            >
+              Cadastrar cliente
+            </Link>
+          }
+        />
+      ) : null}
 
       <section aria-labelledby="hoje-tarefas">
         <SectionHeading
@@ -338,16 +417,20 @@ export function TodayScreen() {
                   {tasks.length} {tasks.length === 1 ? "pendente" : "pendentes"}
                 </span>
               ) : null}
-              <Button
-                variant="quiet"
-                size="sm"
-                iconOnly
-                aria-label="Criar lembrete"
-                className="-my-1"
-                onPointerDown={() => setReminderSheetOpen(true)}
-              >
-                <PlusIcon className="size-3.5" />
-              </Button>
+              {/* Conta nova: sem botão — o lembrete não é o primeiro passo e
+                  o painel acima já carrega o único CTA da tela. */}
+              {contaNova ? null : (
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  iconOnly
+                  aria-label="Criar lembrete"
+                  className="-my-1"
+                  onPointerDown={() => setReminderSheetOpen(true)}
+                >
+                  <PlusIcon className="size-3.5" />
+                </Button>
+              )}
             </div>
           }
         >
@@ -372,13 +455,15 @@ export function TodayScreen() {
             title="Nada marcado para hoje"
             description="Toda proposta enviada vira um lembrete de follow-up automático — passaporte perto de vencer e aniversário de cliente também aparecem aqui sozinhos."
             action={
-              <Button
-                variant="primary"
-                onPointerDown={() => setReminderSheetOpen(true)}
-              >
-                <PlusIcon className="size-4" />
-                Criar lembrete
-              </Button>
+              contaNova ? undefined : (
+                <Button
+                  variant="primary"
+                  onPointerDown={() => setReminderSheetOpen(true)}
+                >
+                  <PlusIcon className="size-4" />
+                  Criar lembrete
+                </Button>
+              )
             }
           />
         ) : (
@@ -472,7 +557,17 @@ export function TodayScreen() {
             title="Ninguém abriu ainda"
             description="Assim que o cliente tocar no link, ele aparece aqui — com quantas vezes abriu e quando."
             preview={<OpenedPreview />}
-            action={<Button variant="primary">Enviar uma proposta</Button>}
+            /* Este botão existia sem `onClick` — porta que não abre (regra
+               §5 do negócio: elo sem porta visível é funcionalidade que não
+               existe). O envio mora no editor: a lista é o caminho. Conta
+               nova, sem ação — o painel de primeira venda manda. */
+            action={
+              contaNova ? undefined : (
+                <Button variant="primary" asChild>
+                  <Link href="/propostas">Enviar uma proposta</Link>
+                </Button>
+              )
+            }
           />
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">
@@ -694,6 +789,20 @@ export function TodayScreen() {
           )
         }
       />
+
+      {/* Primeira hora: o CTA do painel de conta nova abre a MESMA Sheet do
+          funil e da ficha do contato — três entradas, um desenho. Criado o
+          primeiro negócio, a sonda re-roda: o painel sai, os números do topo
+          atualizam e a tela "cresce" com a agente. */}
+      <NovoNegocioSheet
+        open={negocioSheetOpen}
+        onOpenChange={setNegocioSheetOpen}
+        onCreated={() => {
+          setNegocioSheetOpen(false);
+          setNegociosReload((n) => n + 1);
+          retryPipeline();
+        }}
+      />
     </div>
   );
 }
@@ -731,11 +840,15 @@ function TaskSourceIcon({
 }
 
 function Greeting({
+  nome,
   pipeline,
   status,
   error,
   onRetry,
 }: {
+  /** Primeiro nome da sessão. Sem sessão legível, sem nome — nunca um nome
+   * inventado no lugar (era o "Camila" hardcoded). */
+  nome: string | null;
   pipeline: ResumoDoPipeline | null;
   status: Status;
   error: { mensagem: string; correcao?: string } | null;
@@ -750,7 +863,8 @@ function Greeting({
     <header className="flex flex-col gap-4">
       <div>
         <p className="text-13 text-muted">
-          {salute}, Camila · {now.getDate()} de{" "}
+          {salute}
+          {nome ? `, ${nome}` : ""} · {now.getDate()} de{" "}
           {
             [
               "janeiro",
@@ -834,6 +948,35 @@ function PipelineStat({
         />
       )}
     </Card>
+  );
+}
+
+/**
+ * Amostra de um negócio no estado vazio de conta nova — o MESMO exemplo que o
+ * funil e a lista de propostas mostram (Marina · Fernando de Noronha ·
+ * R$ 12.840,00): um só personagem recorrente ensina o objeto em todas as
+ * telas. O desenho é o do card do funil (três linhas, valor na sua coluna de
+ * dígitos com largura reservada). Só visual, `aria-hidden` pelo EmptyState.
+ */
+function NegocioPreview() {
+  return (
+    <div className="flex flex-col gap-0.5 rounded-md bg-surface p-3 shadow-1">
+      <span className="truncate text-15 font-medium text-ink">
+        Marina Albuquerque
+      </span>
+      <span className="flex items-baseline justify-between gap-2">
+        <span className="truncate text-13 text-muted">
+          Fernando de Noronha
+        </span>
+        <span data-numeric className="shrink-0 text-13 tabular-nums text-subtle">
+          <span className="sr-only">viagem em </span>
+          6 nov
+        </span>
+      </span>
+      <span className="mt-1">
+        <Money cents={1_284_000} size="15" reserveFor={5_940_000} align="left" />
+      </span>
+    </div>
   );
 }
 

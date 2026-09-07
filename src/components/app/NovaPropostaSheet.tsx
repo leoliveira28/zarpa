@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import {
   criarPropostaAPartirDoNegocio,
   listarNegocios,
@@ -141,6 +142,24 @@ export function NovaPropostaSheet({
               />
               {fieldError?.campo === "dealId" ? (
                 <FieldError>{fieldError.mensagem}</FieldError>
+              ) : !loadingNegocios && negocios.length === 0 ? (
+                /* Conta nova: o "+" global abre esta Sheet antes de existir
+                   qualquer negócio. Sem isto, o Combobox vazio é um beco —
+                   com o link, o toque mais tentador da tela ensina a ordem
+                   certa (cliente → negócio → proposta) em vez de recusar. */
+                <FieldHint>
+                  Você ainda não tem negócio — ele nasce no funil, a partir de
+                  um cliente.{" "}
+                  <Link
+                    href="/funil"
+                    /* Fecha a sheet antes de navegar: ela vive no shell e
+                       sobreviveria à troca de rota, aberta sobre o funil. */
+                    onClick={() => onOpenChange(false)}
+                    className="font-medium text-ink underline underline-offset-4 hover:text-muted"
+                  >
+                    Ir ao funil
+                  </Link>
+                </FieldHint>
               ) : selectedNegocio ? (
                 <FieldHint>
                   {selectedNegocio.contactName}

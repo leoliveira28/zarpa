@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, type PanInfo } from "motion/react";
 import {
@@ -22,6 +23,7 @@ import {
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { FieldError } from "@/components/ui/Field";
 import { Money } from "@/components/ui/Money";
 import { Rule } from "@/components/plates";
@@ -77,6 +79,13 @@ import { NovoNegocioSheet } from "@/components/app/NovoNegocioSheet";
       `criarNegocio` é o MESMO shape de `listarNegociosDoFunil` — o card entra
       direto em `items`, cai na coluna "Novo contato" por conta do
       `useMemo` de `columns`, sem reconsultar o quadro.
+
+   6. CONTA NOVA, QUADRO VAZIO (bater-o-molde). Cinco colunas sem um card não
+      ensinam o funil — ensinam que está vazio. `quadroVazio` troca o quadro
+      por um EmptyState com o primeiro passo real ("Criar primeiro negócio",
+      a mesma Sheet do cabeçalho) e o quadro reaparece no instante em que o
+      card entra, otimista, em "Novo contato". A dica de gesto cala enquanto
+      não há card algum para arrastar.
 
    O que NÃO mudou, porque já estava certo: a raia é um campo preenchido do
    topo à base da coluna; card e card se separam por um fio interno; card
@@ -273,6 +282,16 @@ export function FunnelScreen() {
   );
 
   /**
+   * Conta recém-criada: o quadro de cinco colunas vazias não ensina o funil —
+   * ensina que está vazio. No lugar dele, UM painel com o primeiro passo real
+   * ("Criar primeiro negócio"); o quadro volta na hora em que `onCreated`
+   * insere o card, e a agente vê a própria viagem ganhar o lugar que o vazio
+   * estava guardando. A dica de arrasto também cala: não há card para
+   * arrastar, e instrução de gesto sem objeto é ruído.
+   */
+  const quadroVazio = status === "ready" && items.length === 0;
+
+  /**
    * Reabre um negócio num estágio aberto — o desfazer de um movimento normal
    * E o desfazer de "marcar como perdida" caem aqui, porque as duas coisas
    * são a mesma operação vista do servidor (voltar para um `EstagioDeFunil`).
@@ -416,10 +435,11 @@ export function FunnelScreen() {
       <div className="lg:shrink-0">
         <div className="flex items-baseline justify-between gap-3">
           <p
-            aria-hidden={hintSeen || status !== "ready"}
+            aria-hidden={hintSeen || status !== "ready" || quadroVazio}
             className={cn(
               "text-13 text-subtle [transition:opacity_120ms_var(--curve-out)]",
-              (hintSeen || status !== "ready") && "pointer-events-none opacity-0",
+              (hintSeen || status !== "ready" || quadroVazio) &&
+                "pointer-events-none opacity-0",
             )}
           >
             Arraste o card — ele segue a velocidade do gesto. Ou use o menu do
@@ -447,6 +467,30 @@ export function FunnelScreen() {
             {loadError?.correcao ?? "Tentar de novo"}
           </Button>
         </Card>
+      ) : quadroVazio ? (
+        <EmptyState
+          plate
+          title="Nenhuma viagem em negociação"
+          description="Cada negócio é uma viagem em negociação: entra aqui em “Novo contato” e você arrasta pelo funil até fechar. Todo negócio nasce de um cliente já cadastrado."
+          preview={<NegocioPreview />}
+          action={
+            <Button
+              variant="primary"
+              onPointerDown={() => setNegocioSheetOpen(true)}
+            >
+              <PlusIcon className="size-4" />
+              Criar primeiro negócio
+            </Button>
+          }
+          secondaryAction={
+            <Link
+              href="/clientes"
+              className="text-13 font-medium text-muted hover:text-ink hover:underline hover:underline-offset-4"
+            >
+              Cadastrar cliente
+            </Link>
+          }
+        />
       ) : (
         /* celular: um scroller com encaixe por coluna, o polegar manda.
            desktop: cinco colunas de altura cheia. A largura mínima de 11rem é
@@ -670,6 +714,34 @@ function FunnelSkeleton() {
 }
 
 /* ------------------------------------------------------------------- o card */
+
+/**
+ * Amostra de card no estado vazio do quadro — o MESMO exemplo do /hoje e da
+ * lista de propostas (Marina · Fernando de Noronha · R$ 12.840,00), no MESMO
+ * desenho de três linhas do card real: o vazio mostra o objeto que vai existir,
+ * não um buraco. Só visual (`aria-hidden` pelo EmptyState).
+ */
+function NegocioPreview() {
+  return (
+    <div className="flex flex-col gap-0.5 rounded-md bg-surface p-3 shadow-1">
+      <span className="truncate text-15 font-medium text-ink">
+        Marina Albuquerque
+      </span>
+      <span className="flex items-baseline justify-between gap-2">
+        <span className="truncate text-13 text-muted">
+          Fernando de Noronha
+        </span>
+        <span data-numeric className="shrink-0 text-13 tabular-nums text-subtle">
+          <span className="sr-only">viagem em </span>
+          6 nov
+        </span>
+      </span>
+      <span className="mt-1">
+        <Money cents={1_284_000} size="15" reserveFor={5_940_000} align="left" />
+      </span>
+    </div>
+  );
+}
 
 /**
  * Três linhas, e a hierarquia é de peso e espaço — não de caixa:

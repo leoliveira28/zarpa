@@ -8,6 +8,7 @@ import { CompassPlate, Rule } from "@/components/plates";
 import { EyeIcon, EyeOffIcon } from "@/components/app/icons";
 import { criarConta } from "@/server";
 import { Button } from "@/components/ui/Button";
+import { Checkbox } from "@/components/ui/Checkbox";
 import { Field, FieldError, FieldHint, Label } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { LoadingRegion, Skeleton } from "@/components/ui/Skeleton";
@@ -56,6 +57,14 @@ const E_MAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const acaoLink =
   "shrink-0 rounded-xs text-13 font-medium text-muted hover:text-ink hover:underline hover:underline-offset-4 [@media(pointer:coarse)]:min-h-11";
 
+/**
+ * Voz do rodapé legal: um degrau abaixo dos links de navegação entre as
+ * portas — presente e legível, mas sem disputar o olho com "Entrar"/"Criar
+ * conta". Sem `transition-colors` (mesma razão do `acaoLink`).
+ */
+const acaoLegal =
+  "rounded-xs py-2 text-13 text-subtle hover:text-ink hover:underline hover:underline-offset-4";
+
 export function CadastroScreen() {
   const router = useRouter();
   const { data: session, isPending } = useSession();
@@ -68,15 +77,20 @@ export function CadastroScreen() {
   const [email, setEmail] = React.useState("");
   const [senha, setSenha] = React.useState("");
   const [nomeAgencia, setNomeAgencia] = React.useState("");
+  const [aceitouTermos, setAceitouTermos] = React.useState(false);
   const [showPassword, setShowPassword] = React.useState(false);
   const [enviando, setEnviando] = React.useState(false);
   const [erros, setErros] = React.useState<ErrosPorCampo>({});
   const [erroGeral, setErroGeral] = React.useState<ErroDeCampo | null>(null);
+  /** Mensagem do erro de consentimento — a local (mesmos termos do servidor)
+   * ou a que o servidor devolver com `campo: 'aceitouTermos'`. */
+  const [erroTermos, setErroTermos] = React.useState<string | null>(null);
 
   const nomeAgenteRef = React.useRef<HTMLInputElement>(null);
   const emailRef = React.useRef<HTMLInputElement>(null);
   const senhaRef = React.useRef<HTMLInputElement>(null);
   const nomeAgenciaRef = React.useRef<HTMLInputElement>(null);
+  const termosRef = React.useRef<HTMLButtonElement>(null);
 
   const refs: Record<Campo, React.RefObject<HTMLInputElement | null>> = {
     nomeAgente: nomeAgenteRef,
@@ -124,6 +138,19 @@ export function CadastroScreen() {
       return;
     }
 
+    // Consentimento é obrigatório ANTES de criar a conta — não é um campo a
+    // mais, é a condição legal do cadastro (o servidor também recusa: o campo
+    // nasce obrigatório no zod e `false` é recusa explícita, S13b). A correção
+    // está na mesma linha do erro: marcar a caixa (o foco vai para ela).
+    if (!aceitouTermos) {
+      setErroTermos(
+        "Para criar a conta, é preciso ler e aceitar os Termos de uso e a Política de privacidade.",
+      );
+      setErroGeral(null);
+      termosRef.current?.focus();
+      return;
+    }
+
     setErros({});
     setErroGeral(null);
     setEnviando(true);
@@ -133,11 +160,24 @@ export function CadastroScreen() {
       email: email.trim(),
       senha,
       nomeAgencia: nomeAgencia.trim(),
+      // Obrigatório no contrato (S13b): o backend NÃO assume true — e grava
+      // `terms_accepted_at` + `terms_version` + audit `consent.recorded`.
+      aceitouTermos: true,
     });
 
     if (!result.ok) {
       setEnviando(false);
       const campo = result.campo;
+
+      // Recusa de consentimento vinda do servidor (corrida improvável — o
+      // gate local acima já pegou — mas o ramo existe): a mensagem dele,
+      // junto do checkbox, com o foco nele.
+      if (campo === "aceitouTermos") {
+        setErroTermos(result.mensagem);
+        setErroGeral(null);
+        termosRef.current?.focus();
+        return;
+      }
       const campoValido =
         campo === "nomeAgente" ||
         campo === "email" ||
@@ -335,6 +375,51 @@ export function CadastroScreen() {
             ) : null}
           </Field>
 
+          {/* Consentimento (S13b) — a linha inteira é clicável (geometria do
+              CheckboxRow), mas os links ficam FORA da ativação do label
+              (stopPropagation): navegar para os termos não pode marcar a
+              caixa por acidente. O servidor recusa ausente E `false` com
+              `campo: 'aceitouTermos'`; o gate local é a primeira linha, e o
+              retorno do `criarConta` grava `terms_accepted_at` + versão. */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-start gap-3 py-1.5">
+              <Checkbox
+                id="cadastrar-termos"
+                ref={termosRef}
+                checked={aceitouTermos}
+                onCheckedChange={(checked) => {
+                  setAceitouTermos(checked === true);
+                  if (checked) setErroTermos(null);
+                }}
+                aria-invalid={erroTermos ? true : undefined}
+                className="mt-0.5"
+              />
+              <label
+                htmlFor="cadastrar-termos"
+                className="min-w-0 cursor-pointer select-none text-13 text-muted"
+              >
+                Li e aceito os{" "}
+                <Link
+                  href="/termos"
+                  onClick={(event) => event.stopPropagation()}
+                  className="font-medium text-ink underline underline-offset-4 hover:text-muted"
+                >
+                  Termos de uso
+                </Link>{" "}
+                e a{" "}
+                <Link
+                  href="/privacidade"
+                  onClick={(event) => event.stopPropagation()}
+                  className="font-medium text-ink underline underline-offset-4 hover:text-muted"
+                >
+                  Política de privacidade
+                </Link>
+                .
+              </label>
+            </div>
+            {erroTermos ? <FieldError>{erroTermos}</FieldError> : null}
+          </div>
+
           {/* Erro que não aponta para um campo: não invento campo, mostro no
               caminho do olhar — entre o formulário e a ação que falhou. */}
           {erroGeral ? (
@@ -372,6 +457,17 @@ export function CadastroScreen() {
             Entrar
           </Link>
         </div>
+
+        {/* Rodapé legal — o mesmo par de links nas duas portas (/entrar e
+            /cadastrar); as páginas são do rafa (/termos, /privacidade). */}
+        <div className="flex items-center gap-x-5 pt-3">
+          <Link href="/termos" className={acaoLegal}>
+            Termos de uso
+          </Link>
+          <Link href="/privacidade" className={acaoLegal}>
+            Privacidade
+          </Link>
+        </div>
       </div>
     </div>
   );
@@ -397,6 +493,7 @@ function CadastroSkeleton() {
             <Skeleton className="h-16 w-full rounded-md" />
             <Skeleton className="h-16 w-full rounded-md" />
             <Skeleton className="h-16 w-full rounded-md" />
+            <Skeleton className="h-6 w-full rounded-md" />
             <Skeleton className="h-12 w-full rounded-md" />
           </div>
         </div>

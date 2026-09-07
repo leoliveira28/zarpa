@@ -297,6 +297,23 @@ export function LoginScreen() {
             Criar conta
           </Link>
         </div>
+
+        {/* Rodapé legal — o mesmo par do /cadastrar; as duas portas são o
+            mesmo lugar. As páginas /termos e /privacidade são do rafa. */}
+        <div className="flex items-center gap-x-5 pt-3">
+          <Link
+            href="/termos"
+            className="rounded-xs py-2 text-13 text-subtle hover:text-ink hover:underline hover:underline-offset-4"
+          >
+            Termos de uso
+          </Link>
+          <Link
+            href="/privacidade"
+            className="rounded-xs py-2 text-13 text-subtle hover:text-ink hover:underline hover:underline-offset-4"
+          >
+            Privacidade
+          </Link>
+        </div>
       </div>
     </div>
   );

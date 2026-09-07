@@ -157,11 +157,11 @@ export function ClientesScreen() {
           <EmptyState
             plate
             title="Nenhum cliente ainda"
-            description="Cadastre um cliente na mão, ou importe a planilha que você já usa hoje — o assistente casa as colunas fora de ordem sozinho."
+            description="Todo negócio nasce daqui — é o primeiro elo da primeira venda. Cadastre um cliente na mão, ou importe a planilha que você já usa hoje: o assistente casa as colunas fora de ordem sozinho."
             preview={<SamplePreview />}
             action={
               <Button variant="primary" onClick={() => setSheetOpen(true)}>
-                Adicionar cliente
+                Cadastrar cliente
               </Button>
             }
             secondaryAction={

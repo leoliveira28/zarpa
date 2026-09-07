@@ -1,8 +1,10 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  listarNegocios,
   listarPropostas,
   restaurarProposta,
   type PropostaResumo,
@@ -73,6 +75,23 @@ export function PropostasScreen({ initialIds }: { initialIds?: string[] }) {
   const [reloadToken, setReloadToken] = React.useState(0);
   const hasLoadedOnce = React.useRef(false);
   const retry = React.useCallback(() => setReloadToken((token) => token + 1), []);
+
+  // A proposta nasce de um negócio — a regra do contrato
+  // (`criarPropostaAPartirDoNegocio`). Conta nova não tem negócio nenhum, e o
+  // vazio que não diz isso deixa a agente descobrir dentro da Sheet. Sondagem
+  // de `limite: 1`: a tela só precisa saber SE existe algum negócio.
+  const [temNegocios, setTemNegocios] = React.useState<boolean | null>(null);
+
+  React.useEffect(() => {
+    let active = true;
+    void listarNegocios({ limite: 1 }).then((result) => {
+      if (!active || !result.ok) return;
+      setTemNegocios(result.data.length > 0);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query), 300);
@@ -182,7 +201,9 @@ export function PropostasScreen({ initialIds }: { initialIds?: string[] }) {
             description={
               query
                 ? "Tente outro nome, destino ou título."
-                : "Monte a primeira proposta a partir de um negócio: até 3 opções comparáveis e blocos de hotel, voo, transfer, passeio ou seguro."
+                : temNegocios === false
+                  ? "Você precisa de um negócio antes — toda proposta nasce de um, e todo negócio, de um cliente. Crie o primeiro no funil; a proposta monta a partir dele."
+                  : "Monte a primeira proposta a partir de um negócio: até 3 opções comparáveis e blocos de hotel, voo, transfer, passeio ou seguro."
             }
             preview={
               <Card className="flex items-center justify-between gap-3 p-3">
@@ -199,6 +220,16 @@ export function PropostasScreen({ initialIds }: { initialIds?: string[] }) {
                   <PlusIcon className="size-4" />
                   Nova proposta
                 </Button>
+              ) : undefined
+            }
+            secondaryAction={
+              !query && temNegocios === false ? (
+                <Link
+                  href="/funil"
+                  className="text-13 font-medium text-muted hover:text-ink hover:underline hover:underline-offset-4"
+                >
+                  Ir ao funil
+                </Link>
               ) : undefined
             }
           />

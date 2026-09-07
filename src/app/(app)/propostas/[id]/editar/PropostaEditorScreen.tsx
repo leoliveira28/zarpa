@@ -234,7 +234,16 @@ function PublishBar({
       return;
     }
     onPatched(result.data);
-    toast.show({ title: "Proposta enviada", description: "O link público já está no ar.", tone: "ok" });
+    // O próximo passo óbvio vem no próprio toast — "mandei o link, agora
+    // preciso dele no WhatsApp do cliente" é um toque, sem caçar o botão.
+    // `publicToken` já existe (nasce com a proposta), então copiar funciona
+    // mesmo com o `proposta` do closure ainda em `draft`.
+    toast.show({
+      title: "Proposta enviada",
+      description: "O link público já está no ar.",
+      tone: "ok",
+      action: { label: "Copiar link", onClick: () => void handleCopy() },
+    });
   }
 
   // Aceite manual pela agente — o caminho que faltava. O cliente nem sempre

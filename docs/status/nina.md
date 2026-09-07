@@ -1,5 +1,248 @@
 # Nina — status
 
+## S13b — onboarding de primeira hora: os vazios guiam o caminho da primeira venda
+
+O problema do bater-o-molde não era falta de EmptyState — cada tela tinha o
+seu. Era que eles não se conversavam: a agente nova caía no `/hoje` vazio e
+precisava adivinhar a ordem **cliente → negócio → proposta → link no
+WhatsApp**. Esta rodada não criou wizard, tour nem checklist (restrição de
+escopo respeitada): os vazios é que passaram a apontar o próximo elo, e os
+becos dentro das sheets ganharam porta.
+
+### O que ficou pronto
+
+**1. `/hoje` de conta nova — o painel de primeira venda (`TodayScreen.tsx`)**
+Sondagem `listarNegocios({ limite: 1 })` (uma linha de leitura, o custo todo)
+diz se a conta tem algum negócio. Enquanto `contaNova`, a tela abre com UM
+painel acima de tudo — `EmptyState` com prancha, preview de exemplo e o CTA do
+primeiro passo real:
+
+- **"Criar primeiro negócio"** abre a `NovoNegocioSheet` — a MESMA do funil e
+  da ficha do contato (três entradas, um desenho; nada de uma quarta marcação).
+- Secundário discreto **"Cadastrar cliente"** — a Sheet exige contato
+  pré-existente (confirmado lendo o componente: `criarNegocio` exige
+  `contactId` de contato do tenant), e a copy diz isso: "Todo negócio nasce de
+  um cliente já cadastrado."
+- Preview de exemplo (regra do design system: vazio com conteúdo, não buraco):
+  o card de negócio com o MESMO exemplo do funil e da lista de propostas
+  (Marina · Fernando de Noronha · R$ 12.840,00, `tabular-nums` com largura
+  reservada).
+- Enquanto `contaNova`, os CTAs concorrentes SAEM: o "+" do cabeçalho de
+  "Tarefas de hoje" e o botão "Criar lembrete" do vazio. Lembrete sem primeira
+  viagem é ruído; a regra do `EmptyState` é uma ação — duas viram indecisão.
+  No primeiro negócio criado (`onCreated` re-sonda + atualiza o pipeline), o
+  painel sai e os controles voltam sozinhos.
+- **O botão morto virou porta**: "Ninguém abriu ainda" tinha um
+  `<Button>Enviar uma proposta</Button>` SEM `onClick` — porta que não abre
+  (regra §5 do negócio: elo sem porta visível é funcionalidade que não
+  existe). Com negócios, vira `Link` para `/propostas` (o envio mora no
+  editor); com conta nova, sem ação — o painel de cima manda.
+- **O "Camila" saiu do greeting.** Era resto de dado de exemplo hardcoded — a
+  primeira tela da agente nova saudava OUTRA pessoa. Agora vem da sessão
+  (`useSession()`, import de `@/lib/auth/client`, o único client-safe); sem
+  nome legível, sem nome — nunca um nome inventado.
+- `NovoNegocioSheet` montada na tela (último nó do JSX), com `onCreated`
+  fechando, re-sondando e atualizando "Em negociação" sem reload.
+
+**2. `/funil` vazio — o quadro nasce com a primeira viagem (`FunnelScreen.tsx`)**
+`quadroVazio` (`ready` + zero negócios) troca as cinco colunas vazias por um
+EmptyState: título "Nenhuma viagem em negociação", copy do propósito ("Cada
+negócio é uma viagem em negociação: entra aqui em 'Novo contato' e você arrasta
+pelo funil até fechar."), o card de exemplo, **"Criar primeiro negócio"** e o
+secundário "Cadastrar cliente". A dica de gesto ("Arraste o card…") cala
+enquanto não há card — instrução de gesto sem objeto é ruço. O momento que
+vale a troca: `onCreated` insere o card otimista, o quadro MATERIALIZA com a
+viagem dela já em "Novo contato" e a dica de arrasto aparece — o funil se
+explica com o objeto dela dentro, não com uma aula sobre colunas vazias.
+
+**3. `/propostas` vazio — a copy antecipa o pré-requisito (`PropostasScreen.tsx`)**
+Mesma sondagem `limite: 1`. Sem negócio nenhum, a copy vira "Você precisa de um
+negócio antes — toda proposta nasce de um, e todo negócio, de um cliente. Crie
+o primeiro no funil; a proposta monta a partir dele." e entra o secundário
+"Ir ao funil". O CTA primário continua **"Nova proposta"** (abre a
+`NovaPropostaSheet` que já existe) — pedido da spec; com a dica nova dentro da
+Sheet (abaixo), os dois caminhos terminam em lugar legível.
+
+**4. `/clientes` vazio — o elo de migração (`ClientesScreen.tsx`)**
+CTA renomeado para **"Cadastrar cliente"** (era "Adicionar cliente" — o verbo
+que o resto do produto usa; o hint da `NovoNegocioSheet` já dizia "cadastre um
+em Clientes"). Copy agora abre a corrente: "Todo negócio nasce daqui — é o
+primeiro elo da primeira venda." — e mantém intacto o **"Importar planilha"**,
+que é o elo contra o concorrente real (planilha + WhatsApp + Canva): quem chega
+com a planilha de 200 clientes entra por ali, não pelo cadastro na mão.
+
+**5. Os becos dentro das sheets agora têm porta (`NovoNegocioSheet.tsx`, `NovaPropostaSheet.tsx`)**
+- `NovoNegocioSheet` sem contatos: a dica ganhou link **"Cadastrar cliente"** →
+  `/clientes`.
+- `NovaPropostaSheet` sem negócios (o caso do "+" global do TopBar com conta
+  nova): dica nova "Você ainda não tem negócio — ele nasce no funil, a partir
+  de um cliente." com link **"Ir ao funil"**.
+- Os dois links **fecham a sheet antes de navegar** (`onClick={() =>
+  onOpenChange(false)}`): a sheet do TopBar vive no shell e sobreviveria à
+  troca de rota, aberta sobre o funil — detalhe que só aparece no segundo
+  clique e custa uma linha.
+
+**6. `/cadastrar` + `/entrar` — consentimento e rodapé legal**
+- Rodapé com **"Termos de uso"** e **"Privacidade"** → `/termos` e
+  `/privacidade`, nas DUAS portas, mesma posição, mesma voz (`text-subtle`,
+  um degrau abaixo dos links de navegação entre portas).
+- **Checkbox obrigatório** "Li e aceito os Termos de uso e a Política de
+  privacidade" com os dois links DENTRO do rótulo (clique na linha inteira
+  marca, como todo mundo espera; `stopPropagation` nos links — navegar para os
+  termos não marca a caixa por acidente). Erro junto do checkbox, com os
+  MESMOS termos do servidor ("Para criar a conta, é preciso ler e aceitar…"),
+  foco vai para a caixa.
+- **O rafa pousou o S13b enquanto eu trabalhava** — `criarConta` passou a
+  EXIGIR `aceitouTermos: boolean` (zod sem default; `false` é recusa explícita
+  com `campo: 'aceitouTermos'` e correção pronta; grava `terms_accepted_at` +
+  `terms_version` + audit `consent.recorded`). Liguei o campo na hora: o envio
+  manda `aceitouTermos: true`, e o ramo de erro do servidor (`campo ===
+  'aceitouTermos'`) mostra a mensagem dele junto do checkbox com foco nele.
+  **A pendência que a spec previa não existe mais** — a peça inteira está
+  fechada nas duas pontas.
+- O skeleton de checagem de sessão ganhou a linha do checkbox (mesma geometria
+  da tela real — as duas portas continuam sem piscar).
+
+**7. Do envio ao WhatsApp (`PropostaEditorScreen.tsx`) — conferido e meia linha**
+O PublishBar JÁ trocava "Enviar proposta" por "Copiar link" / "Abrir" /
+"Reenviar" no mesmo lugar, no instante do `onPatched` — sem descoberta nenhuma.
+Só faltava o toast: agora ele carrega a ação **"Copiar link"** junto do
+"Proposta enviada" (o `publicToken` nasce com a proposta, então copiar funciona
+mesmo com o closure ainda em `draft`). De enviado a colar no WhatsApp do
+cliente: um toque.
+
+**8. `/` raiz — conferido, nada mudado**
+`redirect("/hoje")` → o layout do grupo `(app)` roda `getAuthContext()` e, sem
+sessão, manda para `/entrar` ANTES de montar o shell — nenhuma tela-filha
+precisa checar isso. O `/entrar` tem o link duplo ("Primeira vez por aqui?" +
+"Criar conta") e o `/cadastrar` responde ("Já tem conta?" + "Entrar"). O caminho
+visível para `/cadastrar` já existe e funciona.
+
+### Decisões que tomei sozinha
+
+1. **Sonda `limite: 1`, não contagem nem contexto global.** A tela precisa de
+   UM bit ("existe algum negócio?"). O painel só aparece depois de `ready`
+   (nada pisca), e o Hoje paga uma leitura indexada a mais — barato contra o
+   que custa a agente nova sem caminho.
+2. **O "+" global do TopBar continua, mesmo em conta nova.** Escondê-lo exigiria
+   o shell saber de negócios em toda rota, todo dia, para servir um estado que
+   dura quinze minutos. Em vez disso, a Sheet que ele abre explica a ordem e
+   leva ao funil — o toque mais tentador da tela vira aula, não beco.
+3. **Um só personagem de exemplo em todas as telas.** Marina · Fernando de
+   Noronha · R$ 12.840,00 no vazio do Hoje, do funil e das propostas (e já era
+   o exemplo da lista). A mesma pessoa recorrente ensina o objeto; três
+   exemplos diferentes ensinariam três objetos.
+4. **CTAs concorrentes somem em vez de dividir atenção.** "Criar lembrete" não
+   é errado — é cedo demais. Voltam no primeiro negócio, sem ninguém clicar em
+   nada.
+5. **"Camila" era bug de primeira hora, não cosmético.** Estava fora da lista
+   de itens, mas uma agente que acabou de criar a conta e lê o nome de outra
+   pessoa na primeira tela desconfia do produto inteiro — e a confiança é o
+   critério desta rodada.
+6. **O botão morto de "Abriram sua proposta" virou `Link` para `/propostas`,
+   não para o editor direto.** "Enviar" é uma ação sobre UMA proposta; a lista
+   é o caminho honesto de escolha. (`asChild` no `Button` + `Link`, padrão já
+   usado no importador e no banner.)
+7. **Rodapé legal em `text-subtle`, sem `transition-colors`** — um degrau
+   abaixo de "Entrar"/"Criar conta" (não disputa o olho) e fora da régua de
+   movimento (mesma razão registrada no S13a para o `acaoLink`).
+8. **A dica de gesto do funil obedece ao quadro vazio** — `aria-hidden` +
+   `opacity-0` quando não há card. O teste da direção: sem animação nenhuma,
+   a tela continua comunicando exatamente o mesmo.
+
+### O que NÃO fiz
+
+- Não toquei `src/server/**`, `src/db/**`, `tests/**` nem `package.json`. O
+  S13b do rafa (`src/server/signup.ts`, `drizzle/0012_consentimento_de_termos.sql`,
+  `src/app/termos/`, `src/app/privacidade/`) estava pousando no mesmo momento —
+  consumi o contrato, não editei a área dele.
+- Não criei wizard de várias telas, tour, checklist de gamificação — o caminho
+  segue guiado por estados vazios com o CTA certo (restrição de escopo).
+- Não mexi no `AppShell`, no gate de dunning, na proposta pública nem no
+  editor além da linha do toast.
+- Não criei testes (fronteira do Téo) e NÃO commitei — o PO commita.
+
+### Verificação (o que rodei)
+
+- `npx vitest run tests/design/guards.test.ts` — **6/6 verdes** (rodado duas
+  vezes, antes e depois de tudo): tipografia, cor por contexto, paridade de
+  tema, movimento CSS e JS, reduced-motion.
+- `npx tsc --noEmit` — **limpo em todo `src/**` meu**. Restou UM erro, em
+  `tests/signup/criarconta.test.ts(114,3)` (fixture do Téo com
+  `aceitouTermos?: boolean` opcional, contra o campo obrigatório do S13b) —
+  fora da minha fronteira, transitório, mesmo padrão da rodada anterior. O
+  arquivo está COMMITADO nesse estado (`git status` não o lista como modificado),
+  então consertar é uma linha do Téo, não minha.
+- `npm run build` — **compila** ("Compiled successfully in 1.8s"); o type check
+  do `next build` falha no MESMO arquivo de teste do Téo (o tsconfig inclui
+  `**/*.ts`). Rodado no fim da rodada para confirmar: nada piorou, nenhum
+  erro meu. Quando o Téo pousar o fixture, fecha limpo.
+- **Não testei clicando** — o PO (Leandro) clica. Roteiro cronometrado abaixo.
+
+### Passo a passo para o PO clicar — o bater-o-molde, cronometrado
+
+**A. A primeira sessão (390px, janela anônima), contra os 15 minutos**
+
+1. **0:00** `/entrar` → rodapé: "Primeira vez por aqui?" + "Criar conta".
+   Embaixo, novos: "Termos de uso" e "Privacidade" (ambas as portas).
+2. **0:20** `/cadastrar` → preencher os 4 campos; **tocar "Criar conta" sem
+   marcar o checkbox** → erro junto da caixa ("Para criar a conta, é preciso
+   ler e aceitar…") com foco nela. Tocar "Termos de uso" → navega SEM marcar a
+   caixa; voltar, marcar, criar conta.
+3. **1:30** cai em `/hoje`. Conferir: greeting com O NOME DELA (não "Camila");
+   dois números zerados com largura reservada; o painel "Sua primeira proposta
+   sai daqui" com o card de exemplo e UM CTA ("Criar primeiro negócio") +
+   "Cadastrar cliente" discreto. Abaixo: tarefas/aberturas/mês explicam o
+   produto SEM botão concorrente.
+4. **2:00** tocar "Criar primeiro negócio" → a Sheet mostra "Nenhum cliente
+   cadastrado ainda — todo negócio nasce de um. **Cadastrar cliente**" → o link
+   FECHA a sheet e leva a `/clientes`.
+5. **2:30** `/clientes` vazio: "Todo negócio nasce daqui…" + "Cadastrar
+   cliente" + "Importar planilha". Criar um cliente na mão (só o nome é
+   obrigatório) — ou parar aqui e testar o importador à parte.
+6. **4:00** `/funil`: quadro substituído pelo vazio com o mesmo card de
+   exemplo e "Criar primeiro negócio". Criar o negócio → **o quadro NASCE com
+   o card dela em "Novo contato"** e a dica de arrasto aparece. Arrastar o card
+   uma coluna (ele herda a velocidade do gesto).
+7. **5:00** abrir o card (ficha) → "Nova proposta" (negócio já decidido) →
+   editor: criar opção com preço, um bloco de hotel, conferir a prévia.
+8. **9:00** "Enviar proposta" → toast "Proposta enviada" com **"Copiar link" na
+   própria régua de ações** + o topo já virou "Copiar link / Abrir / Reenviar".
+9. **9:30** copiar, colar no WhatsApp de um contato real e abrir o link —
+   conferir que a proposta pública carrega.
+10. **11:00** com o cliente abrindo: `/hoje` → "Abriram sua proposta" mostra a
+    abertura com horário. **Folga de ~4 min para o follow-up.** Critério batido
+    com margem para quem nunca viu o produto.
+
+**B. Os caminhos de beco (fechados) e os vazios, um a um**
+
+1. Ainda em conta nova (ou saindo e relogando), em `/hoje`: tocar o **"+" do
+   TopBar** ("Nova proposta") → a Sheet explica "Você ainda não tem negócio…
+   **Ir ao funil**" e FECHA antes de navegar (a sheet não pode ficar aberta
+   sobre o funil).
+2. `/propostas` sem negócio nenhum: copy "Você precisa de um negócio antes…"
+   + "Ir ao funil" + CTA "Nova proposta" (que abre a Sheet do item 1).
+3. `/funil` com negócio mas sem proposta, e `/propostas` com negócio: as
+   copies originais ("Monte a primeira proposta a partir de um negócio…").
+4. Conta COM negócios: `/hoje` volta a ter "Criar lembrete" e o painel de
+   primeira venda some; "Enviar uma proposta" do vazio de aberturas agora é um
+   link que FUNCIONA (para `/propostas`).
+5. Design gate nos quatro vazios alterados (`/hoje`, `/funil`, `/propostas`,
+   `/clientes`): prancha UMA por tela e nunca no accent, preview `aria-hidden`
+   com máscara, valor do exemplo com largura reservada, tema escuro,
+   `prefers-reduced-motion` (nada anima além do `.enter`), zero scroll
+   horizontal em 390px.
+6. `/cadastrar` no escuro e com reduced-motion: checkbox com foco visível,
+   erro sem jogar o layout (a linha já reservada no skeleton).
+
+Prestar atenção especial a: (a) o painel de primeira venda some no instante em
+que o primeiro negócio existe — e os controles de lembrete voltam sem reload;
+(b) os links DENTRO de sheets fecham a sheet antes de navegar (o caso do "+"
+global é o que expõe o bug); (c) o toast pós-envio tem a ação "Copiar link"
+além da troca de botões do topo — as duas contam a mesma história, sem palavras
+diferentes; (d) `/termos` e `/privacidade` são do rafa — se ainda derem 404 no
+seu disco, os links já apontam certo.
+
 ## S13a — /cadastrar (conta nova) + banner de conta bloqueada (dunning)
 
 Duas frentes sobre o backend que o rafa landou: a rota pública de cadastro
