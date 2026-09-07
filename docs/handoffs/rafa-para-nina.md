@@ -1237,3 +1237,128 @@ chama a API real; se falhar (timeout/401), `ServiceError` com `correcao` e
   Não tente ler `credentialsCiphertext` (não está no `IntegracaoResumo`).
 - **`Cotacao.custoCents` é custo, não preço** — não preencha `priceCents` com
   ele. O preço é o agente quem define.
+
+---
+
+## Aceite manual + split do botão público — a peça que faltava no fluxo
+
+### O buraco que esta entrega tapa
+
+Hoje a proposta só chega em `status='accepted'` por UM caminho: o cliente clica
+"Aceitar esta opção" no link público (`aceitarOpcaoPublica`). Mas o cliente também
+aceita por telefone, WhatsApp fora do app, e-mail — e sem a action nova a agente
+não tinha como registrar esse aceite. Sem `accepted`, o botão "Gerar venda" no
+editor nunca aparece, e a venda nunca nasce. A cadeia aceite→venda só funcionava
+se o cliente clicasse no link.
+
+### `marcarPropostaComoAceita` — o botão "Marcar como aceita" no editor
+
+Nova action autenticada, em `src/server/proposals.ts`, exportada em `@/server`:
+
+```ts
+import { marcarPropostaComoAceita, type PropostaMeta } from '@/server';
+
+const r = await marcarPropostaComoAceita(propostaId, optionId);
+if (!r.ok) {
+  // r.mensagem  -> texto pronto em português
+  // r.correcao  -> o que o botão junto do erro oferece
+  // r.campo     -> 'propostaId' | 'optionId' quando aplicável
+  return;
+}
+const propostaAceita: PropostaMeta = r.data;
+```
+
+Assinatura exata:
+
+```ts
+async function marcarPropostaComoAceita(
+  propostaId: string,   // uuid
+  optionId: string,     // uuid — qual opção foi aceita
+): Promise<ServiceResult<PropostaMeta>>
+```
+
+O que ela faz:
+
+1. `requireAuthContext()` + `withTenant(tenantId, ...)` — RLS corta o tenant, como
+   toda action de `proposals.ts`. `tenantId` nunca vem de argumento.
+2. Valida `propostaId` e `optionId` como uuid (zod).
+3. Confere que a proposta existe (RLS já corta cross-tenant).
+4. **Condições de status**:
+   - `sent` ou `viewed` → grava `accepted`.
+   - Já `accepted` → **idempotente**: devolve o estado atual sem reclamar (não
+     briga com a agente sobre qual opção ela já tinha escolhido antes).
+   - `draft`/`expired`/`declined` → `CONFLITO` com mensagem "Só dá para aceitar
+     uma proposta enviada ou visualizada." e `correcao: 'Enviar a proposta antes
+     de marcar como aceita'`.
+5. Confere que `optionId` pertence àquela proposta (`exigirOpcaoDaProposta`).
+6. Grava `status='accepted'`, `acceptedOptionId=optionId`, `acceptedAt=now()`.
+7. Registra `audit_log` (`action: 'proposal.accepted'`) e `activities`
+   (`type: 'proposal_accepted'`) com `actorUserId: userId` e
+   `metadata: { origem: 'agente', optionId }` — o `origem: 'agente'` é o que
+   distingue do aceite público (que vem sem sessão, `actorUserId: null`).
+8. Devolve `PropostaMeta` — mesmo shape de `enviarProposta`/`atualizarProposta`,
+   com `status`, `acceptedOptionId`, `acceptedAt` reconciliados.
+
+`PropostaMeta` (já existe, não mudei):
+
+```ts
+type PropostaMeta = {
+  id: string;
+  dealId: string;
+  publicToken: string;
+  title: string;
+  summary: string | null;
+  status: string;            // agora: 'accepted'
+  currency: string;
+  coverImageUrl: string | null;
+  terms: string | null;
+  validUntil: string | null;
+  archivedAt: Date | null;
+  viewCount: number;
+  sentAt: Date | null;
+  firstViewedAt: Date | null;
+  lastViewedAt: Date | null;
+  acceptedAt: Date | null;   // agora: preenchido
+  declinedAt: Date | null;
+  acceptedOptionId: string | null; // agora: = optionId
+  createdAt: Date;
+  updatedAt: Date;
+};
+```
+
+Use o retorno para atualizar a tela otimistamente — o `status` virou
+`'accepted'`, `acceptedOptionId` e `acceptedAt` estão preenchidos. O botão
+"Gerar venda" (`converterPropostaEmVenda`) agora aparece (ele exige
+`status === 'accepted'` + `acceptedOptionId` preenchido — os dois já estão).
+
+### Confirmação: `aceitarOpcaoPublica` NÃO depende de WhatsApp
+
+O PO achou que o botão de aceite no `/p/[slug]` só aparece se o tenant tem
+`whatsappLink`. Se for assim, é bug de UI (seu) — a camada de servidor está
+limpa:
+
+- `aceitarOpcaoPublica` (`src/server/publicProposals.ts`) só valida `slug` +
+  `optionId` e chama a função `public.aceitar_opcao_proposta(slug, optionId)`.
+  Não lê `whatsapp`/`whatsappLink` em momento nenhum.
+- A função SQL `public.aceitar_opcao_proposta` (`drizzle/0005_aceitar_opcao.sql`)
+  confere `public_token`, `status`, `sent_at`, `archived_at` e que a opção
+  pertence à proposta. Não toca em `whatsapp` — nem no `tenants`, nem no
+  `brand_snapshot`.
+
+Ou seja: o aceite no banco é independente de WhatsApp. O `whatsappLink` é
+confirmação secundária de UI (o cliente confirma no WhatsApp depois), não
+pré-requisito para o botão de aceite. **Split o botão público sem medo** — se
+quiser mostrar "Aceitar esta opção" sempre, e "Confirmar no WhatsApp" como ação
+secundária só quando `brand.whatsappLink` existir, o servidor já suporta os dois
+casos. O aceite grava sem WhatsApp; o WhatsApp é só um `wa.me` link extra.
+
+### O que NÃO é desta entrega
+
+- **UI do botão "Marcar como aceita" no editor** — é seu. A action está pronta e
+  exportada; o botão que a chama é fronteira sua.
+- **Split do botão público** — é seu. Confirmei que o servidor não tem
+  dependência de WhatsApp; como separar visualmente "Aceitar" de "Confirmar no
+  WhatsApp" é decisão sua.
+- **Testes** — fronteira do Téo.
+- **Não criei "Nova venda" manual** — continua proibido (você travou em S9;
+  vendas só nascem de proposta `accepted` via `converterPropostaEmVenda`).

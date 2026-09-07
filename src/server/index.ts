@@ -85,6 +85,7 @@ export {
   obterPropostaParaEdicao,
   atualizarProposta,
   enviarProposta,
+  marcarPropostaComoAceita,
   arquivarProposta,
   restaurarProposta,
   criarOpcao,

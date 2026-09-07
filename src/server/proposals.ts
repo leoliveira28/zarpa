@@ -733,6 +733,131 @@ export async function enviarProposta(propostaId: string): Promise<ServiceResult<
   });
 }
 
+/**
+ * Marca uma proposta como aceita pela AGENTE — o caminho que faltava.
+ *
+ * Hoje a proposta só chega em `status='accepted'` por um caminho: o cliente clica
+ * "Aceitar esta opção" no link público (`aceitarOpcaoPublica` → função
+ * `SECURITY DEFINER`). Mas o cliente também aceita por telefone, WhatsApp fora do app,
+ * e-mail — e sem esta action a agente não tem como registrar esse aceite. Sem
+ * `accepted`, o botão "Gerar venda" no editor nunca aparece, e a venda nunca nasce.
+ *
+ * Diferente de `aceitarOpcaoPublica` (sem sessão, via `SECURITY DEFINER`), esta roda
+ * autenticada: `requireAuthContext()` + `withTenant`, RLS corta o tenant, e o `actor`
+ * no `audit_log`/`activities` é o `userId` da sessão — nunca `null` como no aceite
+ * público. A `metadata` do `audit_log` carrega `{ origem: 'agente', optionId }` para
+ * distinguir dos aceites que vêm do link (onde `actorUserId` é `null`).
+ *
+ * Condições:
+ * - Proposta existe e é deste tenant (RLS).
+ * - `status` em `['sent', 'viewed']` — não `draft`, não `expired`, não `declined`.
+ * - Já `accepted`? Idempotente: devolve o estado atual sem reclamar (mesma opção ou
+ *   outra — o estado já é "aceita", não vamos brigar com a agente sobre qual opção
+ *   ela já tinha escolhido antes).
+ * - `optionId` pertence àquela proposta (RLS já corta cross-tenant, mas valide a pertinência
+ *   dentro da proposta).
+ *
+ * Devolve `PropostaMeta` — mesmo shape de `enviarProposta`/`atualizarProposta`, com
+ * `status`, `acceptedOptionId`, `acceptedAt` reconciliados. A Nina usa isto para
+ * atualizar a tela otimistamente.
+ */
+export async function marcarPropostaComoAceita(
+  propostaId: string,
+  optionId: string,
+): Promise<ServiceResult<PropostaMeta>> {
+  return comoResultado(async () => {
+    const { tenantId, userId } = await requireAuthContext();
+
+    const uuidSchema = z.uuid('ID inválido');
+    const idProposta = uuidSchema.safeParse(propostaId);
+    const idOpcao = uuidSchema.safeParse(optionId);
+    if (!idProposta.success) {
+      throw new ServiceError('DADOS_INVALIDOS', idProposta.error.issues[0]?.message ?? 'Proposta inválida.', {
+        campo: 'propostaId',
+        correcao: 'Recarregar a proposta',
+      });
+    }
+    if (!idOpcao.success) {
+      throw new ServiceError('DADOS_INVALIDOS', idOpcao.error.issues[0]?.message ?? 'Opção inválida.', {
+        campo: 'optionId',
+        correcao: 'Recarregar a proposta',
+      });
+    }
+
+    return withTenant(tenantId, async (tx) => {
+      const [proposta] = await tx
+        .select({
+          id: proposals.id,
+          dealId: proposals.dealId,
+          status: proposals.status,
+          acceptedOptionId: proposals.acceptedOptionId,
+        })
+        .from(proposals)
+        .where(eq(proposals.id, idProposta.data))
+        .limit(1);
+
+      if (!proposta) {
+        throw new ServiceError('NAO_ENCONTRADO', 'Essa proposta não existe mais.', {
+          correcao: 'Voltar para a lista',
+        });
+      }
+
+      // Já aceita: idempotente. Devolve o estado atual sem reclamar.
+      if (proposta.status === 'accepted') {
+        const [atual] = await tx
+          .select(COLUNAS_META)
+          .from(proposals)
+          .where(eq(proposals.id, proposta.id))
+          .limit(1);
+        return atual! as PropostaMeta;
+      }
+
+      if (proposta.status !== 'sent' && proposta.status !== 'viewed') {
+        throw new ServiceError(
+          'CONFLITO',
+          'Só dá para aceitar uma proposta enviada ou visualizada.',
+          { correcao: 'Enviar a proposta antes de marcar como aceita' },
+        );
+      }
+
+      await exigirOpcaoDaProposta(tx, proposta.id, idOpcao.data);
+
+      const [atualizada] = await tx
+        .update(proposals)
+        .set({
+          status: 'accepted',
+          acceptedOptionId: idOpcao.data,
+          acceptedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, proposta.id))
+        .returning(COLUNAS_META);
+
+      await registrarAuditoria(tx, {
+        tenantId,
+        actorUserId: userId,
+        action: 'proposal.accepted',
+        entity: 'proposal',
+        entityId: proposta.id,
+        metadata: { origem: 'agente', optionId: idOpcao.data },
+      });
+
+      await tx.insert(activities).values({
+        tenantId,
+        dealId: proposta.dealId,
+        proposalId: proposta.id,
+        actorUserId: userId,
+        type: 'proposal_accepted',
+        body: 'Proposta marcada como aceita pela agente.',
+        metadata: { origem: 'agente', optionId: idOpcao.data },
+        occurredAt: new Date(),
+      });
+
+      return atualizada! as PropostaMeta;
+    });
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Opções (até 3 por proposta, comparáveis)
 // ---------------------------------------------------------------------------

@@ -1,5 +1,107 @@
 # Status — Rafa (backend / plataforma)
 
+## 2026-09-07 — `marcarPropostaComoAceita` + confirmação de aceite público independente de WhatsApp
+
+### O que ficou pronto
+
+1. **`marcarPropostaComoAceita(propostaId, optionId)`** — nova action em
+   `src/server/proposals.ts`, exportada em `src/server/index.ts`. Mesmo padrão
+   de sempre: `requireAuthContext()` + `withTenant(tenantId, ...)`, RLS corta o
+   tenant, `tenantId`/`userId` vêm da sessão, zod valida `propostaId`/`optionId`
+   como uuid antes de tocar no banco, retorno `ServiceResult<PropostaMeta>`.
+   - **Condições de status**: aceita se `status in ('sent', 'viewed')`;
+     idempotente se já `accepted` (devolve o estado atual sem reclamar — não
+     briga com a agente sobre qual opção foi escolhida antes); recusa com
+     `CONFLITO` se `draft`/`expired`/`declined` (mensagem "Só dá para aceitar
+     uma proposta enviada ou visualizada.", correção "Enviar a proposta antes
+     de marcar como aceita").
+   - Confirma que `optionId` pertence à proposta via `exigirOpcaoDaProposta`
+     (RLS já corta cross-tenant, mas validei a pertinência dentro da proposta).
+   - Grava `status='accepted'`, `acceptedOptionId=optionId`, `acceptedAt=now()`,
+     `updatedAt=now()`.
+   - Registra `audit_log` (`action: 'proposal.accepted'`, `actorUserId:
+     userId`, `metadata: { origem: 'agente', optionId }`) e `activities`
+     (`type: 'proposal_accepted'`, `actorUserId: userId`, `body`, `metadata`).
+     O `origem: 'agente'` + `actorUserId` preenchido é o que distingue do
+     aceite público (sem sessão, `actorUserId: null`).
+   - Devolve `PropostaMeta` — mesmo shape de `enviarProposta`/`atualizarProposta`,
+     com `status`, `acceptedOptionId`, `acceptedAt` reconciliados. A Nina usa
+     para atualizar a tela otimistamente; o botão "Gerar venda"
+     (`converterPropostaEmVenda`) destrava porque exige `accepted` +
+     `acceptedOptionId` preenchido.
+
+2. **Confirmação (Frente 2): `aceitarOpcaoPublica` e a função SQL
+   `public.aceitar_opcao_proposta` NÃO dependem de `whatsapp`/`whatsappLink`.**
+   Li os dois arquivos inteiros:
+   - `src/server/publicProposals.ts`: `aceitarOpcaoPublica` só valida `slug` +
+     `optionId` (zod) e chama a função SQL. Não lê `whatsapp` em momento nenhum.
+   - `drizzle/0005_aceitar_opcao.sql`: a função `public.aceitar_opcao_proposta`
+     confere `public_token`, `status <> 'draft'`, `sent_at IS NOT NULL`,
+     `archived_at IS NULL`, e que a opção pertence à proposta. Não faz JOIN com
+     `tenants`, não lê `whatsapp` nem `brand_snapshot`.
+   - Conclusão: o aceite no banco é independente de WhatsApp. O `whatsappLink`
+     é confirmação secundária de UI (o cliente confirma no WhatsApp depois),
+     não pré-requisito para o botão de aceite. Se o botão público só aparece
+     quando o tenant tem WhatsApp, é bug de UI (nina), não de servidor. A nina
+     pode splitar o botão público sem medo — documentado no handoff.
+
+### Decisões que tomei sozinha
+
+- **Retorno `PropostaMeta`, não `PropostaResumo`**. `PropostaResumo` (lista)
+  não inclui `acceptedOptionId`/`acceptedAt` — campos que a tela do editor
+  precisa para refletir o aceite. `PropostaMeta` é o mesmo shape que
+  `enviarProposta`/`atualizarProposta` já devolvem, então a nina reutiliza o
+  mesmo caminho de atualização otimista. Escolha documentada no handoff.
+- **Idempotente se já `accepted`, sem rejeitar**. A agente pode estar
+  registrando um aceite que o cliente já clicou no link; reclamar "já está
+  aceita" seria barreira inútil. Devolve o estado atual. Não confere se a
+  `optionId` bate com a que já estava gravada — o estado já é "aceita",
+  trocar de opção aceita não é ação desta função (se um dia for, é action
+  separada).
+- **`metadata.origem: 'agente'` no `audit_log`/`activities`** para distinguir
+  do aceite público (onde `actorUserId` é `null` e não há `origem`). Siga o
+  padrão de `registrarAuditoria` que já usava, só adicionei a chave.
+- **Não chamei `gerarFollowupsDaProposta`** nem disparei notificação — aceite
+  manual não gera follow-up (a régua é pós-envio, não pós-aceite; aceitou,
+  a próxima ação é gerar venda, que é outra tela). Sem efeitos colaterais.
+
+### O que NÃO fiz (fora da fronteira / não pedido)
+
+- **UI** (`src/app`, `src/components`) — nina (botão "Marcar como aceita" no
+  editor + split do botão público). Handoff escrito.
+- **Testes** (`tests/**`) — teo (outra rodada).
+- **Não criei "Nova venda" manual** — continua proibido (nina travou em S9;
+  vendas só nascem de proposta `accepted` via `converterPropostaEmVenda`).
+
+### Verificação (o que eu rodo)
+
+- `npx tsc --noEmit` — limpo.
+- `npm run build` — limpo (20 rotas, nenhuma nova).
+- `npx tsx scripts/check/known-failures.ts` — Postgres `zarpa-db` de pé:
+  **440 testes, allowlist vazia, "Portão ok"**, sem regressão.
+- **NÃO testei clicando** — o PO (Leandro) clica.
+
+### Riscos
+
+- A action segue o mesmo caminho (`withTenant` + `requireAuthContext`) de toda
+  outra action de `proposals.ts` — nenhum GUC novo, nenhuma policy nova, nenhum
+  schema novo. Risco estrutural inalterado.
+- A idempotência no caso "já accepted" não confere se a `optionId` bate — ver
+  decisão acima. Se um dia produto quiser "trocar opção aceita", é action
+  separada (não é o caso desta entrega).
+
+### O que precisa dos outros
+
+- **Nina**: botão "Marcar como aceita" no editor (chama
+  `marcarPropostaComoAceita(propostaId, optionId)`) e split do botão público
+  ("Aceitar esta opção" sempre; "Confirmar no WhatsApp" só quando
+  `brand.whatsappLink` existir). Handoff em `docs/handoffs/rafa-para-nina.md`,
+  seção "Aceite manual + split do botão público".
+- **Téo**: teste de isolamento para a action nova (mesmo padrão de
+  `enviarProposta`/`atualizarProposta` — outra rodada).
+
+---
+
 ## 2026-09-07 — S11: motor de cobrança (assinatura Asaas) — backend pronto
 
 ### O que ficou pronto
