@@ -50,6 +50,15 @@ export const KNOWN_ESCAPE_HATCHES: { table: string; policy: string }[] = [
   { table: 'public.proposal_blocks', policy: 'proposal_blocks_public_read' },
   { table: 'public.proposal_views', policy: 'proposal_views_public_insert' },
   { table: 'public.proposal_views', policy: 'proposal_views_public_select' },
+  // S11 — webhook do Asaas (`drizzle/0010_webhook_context.sql`). O webhook chega
+  // sem sessão; precisa resolver o `tenantId` pelo `asaasSubscriptionId` antes de
+  // abrir `withTenant`. O GUC `app.webhook_context` só liga DENTRO de
+  // `withWebhookContext` (`src/lib/tenant/withWebhookContext.ts`), local à
+  // transação. Policy `FOR SELECT` — só leitura de `id`/`tenant_id`/`status` para
+  // abrir contexto; a escrita (em `payments`/`subscriptions`) passa por
+  // `withTenant` real depois. Mesma ressalva: GUC forjável por SQL arbitrário,
+  // alcance mínimo. Ver docs/handoffs/teo-para-rafa.md.
+  { table: 'public.subscriptions', policy: 'subscriptions_webhook_read' },
 ]
 
 export type RlsAudit = {

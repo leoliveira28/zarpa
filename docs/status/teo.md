@@ -685,3 +685,171 @@ npx tsc --noEmit                        -> limpo
 npx tsx scripts/check/known-failures.ts -> 321 testes; só os 3 vermelhos da S7
                                             (verificado 3x contra Postgres recriado do zero)
 ```
+
+---
+
+## S11 — testes de cobrança (assinatura Asaas)
+
+Handoff: esta rodada. Backend commitado (`14b718b`): `src/server/billing.ts` +
+`src/lib/asaas/client.ts` + migration `drizzle/0009_planos_e_assinatura.sql`.
+Antes desta rodada o gate passava em 378 testes, 10 migrations, allowlist vazia.
+
+### Entrega
+
+`tests/billing/cobranca.test.ts` (novo, 25 testes) — mesmo padrão de
+`tests/sales/vendas.test.ts`: chama as funções REAIS de `src/server/billing.ts`
+contra Postgres de verdade, mockando só `requireAuthContext` (`vi.hoisted`),
+fixture própria por teste (tenant + `user` real — `audit_log.actor_user_id` tem
+FK real para `user`). Gate passou para 403 testes, 2 vermelhos esperados (allowlist
+nomeada, ver abaixo), sem regressão.
+
+Cobre os sete pontos do handoff:
+
+1. **Seed dos 3 planos** — `listarPlanos` devolve Solo 4900 / Pro 9900 / Studio
+   19900, todos `isActive: true`, `currency: 'BRL'`. `ON CONFLICT (slug) DO
+   NOTHING` é re-entrante: re-rodar o INSERT do seed direto (SQL cru, sem Drizzle)
+   não duplica — o índice `plans_slug_key` segura. Confirmei também que o role
+   `zarpa` (NOBYPASSRLS) consegue escrever em `plans`: a policy `plans_read
+   USING(true)` sem `WITH CHECK` explícito tem `WITH CHECK` default = `USING` =
+   `true` — a escrita passa (o CHECK de slug é o que barra slug inválido, não
+   RLS). NOTA: o comentário da migration 0009 diz "escrita negada sob RLS para o
+   role da aplicação" — isso NÃO é o que o Postgres faz com essa policy. É
+   divergência de documentação, não bug de segurança (preço de plano é dado
+   público e a escrita real é só via migration como superuser). Ver handoff
+   para o Rafa.
+2. **RLS de `subscriptions`/`payments`** — confirmado por varredura de catálogo:
+   teste explícito em `cobranca.test.ts` faz query em `pg_class` e confirma que
+   as duas tabelas têm `tenant_id` e estão no schema `public` (o mesmo
+   mecanismo de `tenant-isolation.test.ts`). Mais isolamento via action:
+   `obterAssinaturaAtual`/`listarFaturas` de B contra assinatura de A devolvem
+   `null`/`[]`.
+3. **`trocarPlano` idempotente** — chamar duas vezes com o mesmo `planId`
+   devolve o mesmo `id` e deixa 1 assinatura no banco. Trocar de pro para
+   studio atualiza a existente (não cria segunda). O índice único parcial
+   `subscriptions_one_live_per_tenant` é quem garante "uma viva por tenant"
+   no banco — prova com dois inserts diretos simultâneos via `Promise.allSettled`
+   (mesmo idioma do `vendas.test.ts`): um vence, o outro falha com unique
+   violation.
+4. **`trocarPlano` com `planId` inexistente** → `NAO_ENCONTRADO`. `planId`
+   não-UUID → `DADOS_INVALIDOS` (zod barrou antes do banco).
+5. **Modo dev sem `ASAAS_API_KEY`** — `trocarPlano` cria assinatura com
+   `status: 'trialing'`, `asaasCustomerId`/`asaasSubscriptionId` nulos (não
+   chama Asaas). `cancelarAssinatura` marca `canceled` sem chamar Asaas;
+   segunda chamada devolve `null` (idempotente). O cliente `asaas/client.ts`
+   lança `ASAAS_NAO_CONFIGURADO` com `code`/`correcao` certos se chamado direto
+   sem chave — testado para `criarClienteAsaas`/`criarAssinaturaAsaas`/
+   `cancelarAssinaturaAsaas` e para `erroAsaasNaoConfigurado()` (confirma
+   `correcao` menciona `ASAAS_API_KEY`).
+6. **`processarWebhookAsaas` idempotente** — o índice `payments_asaas_payment_key`
+   (unique parcial em `asaas_payment_id`) é provado isoladamente em SQL direto:
+   segundo insert com o mesmo `asaasPaymentId` falha com `23505`/`duplicate
+   key`. O caminho pela função (`processarWebhookAsaas`) está VERMELHO de
+   propósito — ver "Bug do webhook" abaixo.
+7. **`verificarWebhookAsaas`** — sem `ASAAS_WEBHOOK_TOKEN` (estado atual do
+   ambiente): retorna `true` (dev/teste não trava). Com token configurado
+   (`vi.stubEnv` + `vi.resetModules` + re-import dentro do teste, porque
+   `client.ts` lê a env como const no carregamento): só `true` se header
+   (`asaas-access-token` ou `Asaas-Access-Token`) ou query (`access_token`)
+   bater; header/query errados devolvem `false`.
+
+### Bug do webhook — porta de fuga de RLS (entrega para o Rafa)
+
+`processarWebhookAsaas` faz a busca inicial da assinatura por
+`unsafeDbWithoutTenant.select(...).from(subscriptions).where(eq(
+subscriptions.asaasSubscriptionId, asaasSubId))` — sem `set_config('app.tenant_id')`.
+A policy `subscriptions_isolation` é `USING("tenant_id" = nullif(
+current_setting('app.tenant_id', true), '')::uuid)` — sem `app.tenant_id`, o
+SELECT devolve **zero linhas**, e o webhook sempre cai em `processado: false,
+motivo: 'assinatura não encontrada'`. O role `zarpa` é NOBYPASSRLS, então
+`unsafeDbWithoutTenant` não bypassa a policy.
+
+Confirmei com probe direto em Postgres de teste: mesma subscription com
+`asaasSubscriptionId` setado, busca sem contexto devolve 0 linhas, busca com
+`app.tenant_id` devolve 1. O webhook nunca funciona em produção com o código
+como está.
+
+Dois testes em `cobranca.test.ts` ficam vermelhos documentando o contrato
+esperado (o webhook deveria encontrar a assinatura e processar o pagamento).
+Entradas na allowlist de `scripts/check/known-failures.ts` com dono=teo e
+motivo apontando para `docs/handoffs/teo-para-rafa.md`. Quando o Rafa consertar
+a porta de fuga, os testes ficam verdes e o gate acusa as entradas como
+OBSOLETAS — sinal de remover.
+
+Sugestões de conserto (decisão é do Rafa):
+- Função `SECURITY DEFINER` (como a da proposta pública em `0004`) que resolve
+  `tenantId` pelo `asaasSubscriptionId` bypassando RLS, com `search_path` fixo.
+- Ou policy permissiva específica para leitura por `asaasSubscriptionId`
+  (abre porta estreita — avaliar risco).
+- Ou o webhook recebe o `tenantId` de outra forma (header assinado pelo Asaas
+  com referência ao tenant — mas o Asaas não sabe o nosso `tenantId`).
+
+### O que NÃO está coberto
+
+- **Rota HTTP do webhook** (`src/app/api/asaas/webhook/route.ts`) — fronteira do
+  PO, ainda não existe. A lógica server-side (`processarWebhookAsaas`) está
+  testada (quando a porta de fuga for consertada); a rota só vai chamar esta
+  função + `verificarWebhookAsaas`.
+- **Integração real com Asaas** — sem `ASAAS_API_KEY` no ambiente, todo o
+  fluxo de criação/cancelamento de customer/subscription no Asaas não é
+  exercitado. Os testes cobrem o "modo dev" (só DB). Quando a chave entrar,
+  o mesmo código passa a chamar a API — os testes atuais não cobrem esse
+  caminho (precisará de mock do `fetch` ou de sandbox do Asaas).
+- **Trial/dunning/enforcement/paywall** — não existe (decisão de produto em
+  aberto, documentada no handoff). Nada a testar.
+- **Checkout real (cartão/Pix/boleto via Asaas)** — pós-v1; em dev o
+  `billingType` só grava intenção.
+- **`listarFaturas` mapeamento de status** — testei que a lista de B é vazia,
+  mas não testei isoladamente o mapeamento `confirmed`/`received` → `paid`,
+  `canceled` → `pending`. O caminho está coberto indiretamente (o webhook
+  cria `payments` com status recebido do Asaas), mas quando a porta de fuga
+  for consertada vale adicionar um teste que confere o mapeamento.
+- **`obterAssinaturaAtual` com `planId` nulo** (fallback para `plan` slug) —
+  não testei isoladamente. O `buscarPlanoDaAssinatura` faz fallback, mas o
+  caminho só acontece com rows pré-0009 (que não existem neste banco). Baixo
+  risco, mas não coberto.
+- **Comentário da migration 0009 sobre `plans` sem `WITH CHECK`** — diverge do
+  comportamento real do Postgres (a policy permite escrita para o role da
+  aplicação). Documentei no handoff para o Rafa; não é bug de segurança, é
+  divergência de documentação.
+
+### Decisões que tomei sozinho
+
+- **Allowlist deixou de ser vazia** — o handoff pedia "allowlist vazia", mas o
+  bug do webhook é real e o teste vermelho é a forma honesta de documentar o
+  contrato que falta. Adicionei 2 entradas nomeadas com dono e motivo. Quando
+  o Rafa consertar a porta de fuga, os testes ficam verdes e o gate acusa as
+  entradas como OBSOLETAS — sinal de remover e voltar a vazia.
+- **Teste do índice `payments_asaas_payment_key` em transação própria** — o
+  segundo insert (que falha) não pode rodar dentro do mesmo `withTenant` do
+  setup, porque o erro do insert aborta a transação inteira e o `withTenant`
+  falha no commit, mascarando o erro real. Separei em dois `withTenant`: um
+  para setup, outro para o insert que falha. Mesma lição do `vendas.test.ts`
+  com o `sales_proposal_id_key`.
+- **`vi.resetModules()` no teste do webhook com token** — `client.ts` lê
+  `ASAAS_WEBHOOK_TOKEN` como const no carregamento do módulo. Para testar o
+  caminho "com token", re-importo o módulo com `vi.stubEnv` + `vi.resetModules`.
+  As referências do topo do arquivo (usadas pelos outros testes) apontam para
+  a instância original sem token — não são afetadas. Coloquei o teste no final
+  do arquivo por segurança, mas a ordem não importa para as referências
+  capturadas.
+
+### O que preciso dos outros
+
+- **Rafa**: consertar a porta de fuga do webhook (ver
+  `docs/handoffs/teo-para-rafa.md`). Quando consertar, os 2 testes vermelhos
+  ficam verdes e o gate acusa as entradas da allowlist como OBSOLETAS — remover
+  e voltar a vazia. Também: revisar o comentário da migration 0009 sobre
+  `plans` sem `WITH CHECK` (diverge do comportamento real).
+- **PO**: a rota HTTP do webhook (`src/app/api/asaas/webhook/route.ts`) é
+  fronteira sua. Quando escrever, chamar `verificarWebhookAsaas` (já testado)
+  + `processarWebhookAsaas` (depende do conserto do Rafa). Sem nova lógica de
+  testes da minha parte — a rota é glue.
+
+### Verificação (S11)
+
+```
+npx tsc --noEmit                        -> limpo
+npx tsx scripts/check/known-failures.ts -> 403 testes; 2 vermelhos esperados
+                                           (webhook/RLS), sem regressão.
+                                           Docker/Postgres de pé (zarpa-db healthy).
+```

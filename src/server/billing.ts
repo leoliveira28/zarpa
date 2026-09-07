@@ -3,7 +3,8 @@
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { payments, plans, subscriptions } from '@/db/schema';
-import { withTenant, unsafeDbWithoutTenant } from '@/lib/tenant/withTenant';
+import { withTenant } from '@/lib/tenant/withTenant';
+import { withWebhookContext } from '@/lib/tenant/withWebhookContext';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
 import { registrarAuditoria } from './audit';
@@ -590,9 +591,11 @@ function metodoPagamentoAsaas(billingType: string | undefined): 'pix' | 'credit_
  * atualiza a mesma linha, não duplica.
  *
  * O webhook não tem sessão de tenant. O `tenantId` é descoberto pelo
- * `asaasSubscriptionId` no payload (busca em `unsafeDbWithoutTenant`, sem RLS —
- * só para achar o tenant dono da assinatura). Depois abre `withTenant` e
- * processa o evento dentro do contexto do tenant.
+ * `asaasSubscriptionId` no payload via `withWebhookContext` (porta de fuga
+ * controlada — liga o GUC `app.webhook_context`, que a policy
+ * `subscriptions_webhook_read` exige para SELECT; `zarpa` é NOBYPASSRLS, então
+ * `unsafeDbWithoutTenant` sozinho não bypassa a `subscriptions_isolation`).
+ * Depois abre `withTenant` e processa o evento dentro do contexto do tenant.
  *
  * A rota HTTP (`src/app/api/asaas/webhook/route.ts`) é fronteira do PO — esta
  * função é só a lógica server-side importável.
@@ -614,17 +617,25 @@ export async function processarWebhookAsaas(
     return { processado: false, motivo: 'subscription id ausente no payload' };
   }
 
-  // Busca a assinatura pelo asaasSubscriptionId. Sem RLS: o webhook não tem
-  // sessão. Só usamos o tenantId para abrir contexto — não devolvemos dados.
-  const [assinatura] = await unsafeDbWithoutTenant
-    .select({
-      id: subscriptions.id,
-      tenantId: subscriptions.tenantId,
-      status: subscriptions.status,
-    })
-    .from(subscriptions)
-    .where(eq(subscriptions.asaasSubscriptionId, asaasSubId))
-    .limit(1);
+  // Busca a assinatura pelo asaasSubscriptionId. O webhook não tem sessão, e
+  // `subscriptions` está sob FORCE RLS — `unsafeDbWithoutTenant` sozinho não
+  // bypassa a policy (`zarpa` é NOBYPASSRLS). `withWebhookContext` liga o GUC
+  // `app.webhook_context`, que a policy `subscriptions_webhook_read`
+  // (`drizzle/0010_webhook_context.sql`) exige para SELECT. Só usamos o
+  // `tenantId`/`id`/`status` para abrir contexto de tenant de verdade na
+  // sequência — nunca devolvemos dados do webhook.
+  const assinatura = await withWebhookContext(async (tx) => {
+    const [row] = await tx
+      .select({
+        id: subscriptions.id,
+        tenantId: subscriptions.tenantId,
+        status: subscriptions.status,
+      })
+      .from(subscriptions)
+      .where(eq(subscriptions.asaasSubscriptionId, asaasSubId))
+      .limit(1);
+    return row ?? null;
+  });
 
   if (!assinatura) {
     // Webhook de subscription que não é nossa — ignora.

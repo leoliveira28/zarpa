@@ -1,19 +1,16 @@
 /**
  * Portão de CI para a suíte do vitest, sem baixar a régua.
  *
- * Hoje 3 testes ficam vermelhos DE PROPÓSITO, todos em `public-proposal.test.ts`:
- * a leitura pública da proposta é trabalho da S7 (função SECURITY DEFINER ainda
- * não existe). Ver `docs/handoffs/rafa-para-teo.md`, item 5.
- *
- * (Havia uma 4ª entrada aqui — `pii.test.ts` reclamando de `ENCRYPTION_KEY_V1`
- * sem 32 bytes. A chave de desenvolvimento foi corrigida e o teste ficou verde;
- * a entrada foi removida no dia em que este script apontou ela como OBSOLETA.
- * Isto é o script funcionando como projetado — ver regra 2 abaixo.)
+ * Hoje a allowlist está VAZIA — todos os testes passam. (Histórico: já teve
+ * 3 entradas da S7 — função SECURITY DEFINER da proposta pública — e 2 do S11
+ * — porta de fuga do webhook do Asaas. Ambas ficaram verdes e foram removidas.
+ * O script acusa entrada verde como OBSOLETA, que é o sinal de "consertou,
+ * tire daqui". Isto é o script funcionando como projetado — ver regra 2 abaixo.)
  *
  * A escolha aqui NÃO é `.todo`/`.skip`: isso pararia de rodar a asserção, e
  * o dia em que alguém quebrar a função por engano ninguém saberia — o teste
  * simplesmente não existiria mais para o CI. A escolha é uma ALLOWLIST
- * NOMEADA: os 4 nomes exatos abaixo, cada um com dono e motivo. O script:
+ * NOMEADA: os nomes exatos abaixo, cada um com dono e motivo. O script:
  *
  *   1. roda a suíte inteira via `vitest run --reporter=json`;
  *   2. falha se QUALQUER teste fora da lista estiver vermelho — regressão
@@ -21,7 +18,7 @@
  *   3. falha se um teste DA lista virar verde — allowlist que sobrevive ao
  *      código que ela tolerava é a mesma "entrada morta" que
  *      `deviations.test.ts` já não aceita para os guardas visuais. Aqui é o
- *      sinal de "a S7 chegou, tire a entrada e apague `.todo` nenhum".
+ *      sinal de "a porta de fuga chegou, tire a entrada".
  *
  *   npx tsx scripts/check/known-failures.ts
  *
@@ -35,12 +32,11 @@ import { join } from 'node:path'
 type KnownFailure = { fullName: string; owner: string; reason: string }
 
 /**
- * Vazia de propósito. As 3 entradas da S7 (função SECURITY DEFINER da proposta
- * pública) ficaram verdes: a função existe (`drizzle/0004_proposta_publica.sql`),
- * tem `search_path` fixo, e `public-proposal.test.ts` agora semeia sua própria
- * fixture (`seedPublicProposalFixture`, proposta em status `sent` com opção com
- * custo/comissão preenchidos) em vez de depender de `tenant-isolation.test.ts`
- * rodar antes — ver docs/handoffs/rafa-para-teo.md, seção S7.
+ * Allowlist vazia — sem vermelhos esperados. O webhook do Asaas (S11) agora
+ * usa `withWebhookContext` (porta de fuga controlada, GUC `app.webhook_context`
+ * + policy `subscriptions_webhook_read` em `drizzle/0010_webhook_context.sql`),
+ * então `processarWebhookAsaas` encontra a assinatura sem sessão e os 2 testes
+ * que documentavam o bug ficaram verdes — ver `docs/handoffs/teo-para-rafa.md`.
  */
 export const KNOWN_FAILURES: readonly KnownFailure[] = [] as const
 
