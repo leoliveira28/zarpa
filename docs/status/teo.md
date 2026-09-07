@@ -853,3 +853,122 @@ npx tsx scripts/check/known-failures.ts -> 403 testes; 2 vermelhos esperados
                                            (webhook/RLS), sem regressão.
                                            Docker/Postgres de pé (zarpa-db healthy).
 ```
+
+## S12 — testes de integrações (Wooba + Infotravel, cotação só)
+
+Handoff: `docs/handoffs/rafa-para-teo.md`, seção S12. Backend commitado em `e0cdfc5`
+(`src/server/integrations.ts` + `src/lib/integrations/` + migration `drizzle/0011_integracoes.sql`
+com tabela `integrations` e RLS). O gate JÁ PASSAVA antes desta rodada (409 testes,
+12 migrations, allowlist vazia) — a migration aplica limpa e a varredura por catálogo de
+`tenant-isolation.test.ts` já cobria `integrations` (tabela com `tenant_id` e RLS). Esta
+rodada adicionou teste de **behavior** da camada de actions, que não existia.
+
+### Entrega
+
+`tests/integrations/integrations.test.ts` (novo, 31 testes) — mesmo padrão de
+`tests/billing/cobranca.test.ts` e `tests/deals/funil.test.ts`: chama as funções REAIS
+de `src/server/integrations.ts` contra Postgres de verdade, mockando só
+`requireAuthContext` (`vi.hoisted`). Fixture própria por teste (tenant + `user` real —
+`registrarAuditoria` tem FK para `user.id`, então `authCtx.userId` precisa apontar para
+linha que existe).
+
+Cobre os 7 pontos pedidos no handoff:
+
+1. **RLS de `integrations`** — sanity: confirmo por varredura direta em `pg_class` que
+   a tabela tem `tenant_id`, está no schema `public`, e tem `relrowsecurity` +
+   `relforcerowsecurity` (ENABLE + FORCE — o role `zarpa` é dono, sem FORCE a policy é
+   ignorada). A varredura por catálogo de `tenant-isolation.test.ts` já cobre o
+   SELECT/UPDATE/DELETE/INSERT cruzado em SQL direto; aqui confirmo só que a tabela
+   existe e tem RLS.
+2. **Credenciais encriptadas (AES-256-GCM)** — dois testes:
+   - `credentials_ciphertext` é envelope `zp1.<key_id>.<iv>.<tag>.<ct>` (confirmado com
+     `isEncryptedEnvelope`), o segredo em claro NÃO aparece no ciphertext, e `keyId`
+     está preenchido e bate com o padrão `^v\d+$`.
+   - O `context` do AAD é `integrations:${tenantId}` — copiar a row para outro tenant
+     não decripta. Crio integração no tenant A, leio o ciphertext direto (via `withTenant`,
+     RLS), e: `decryptPII(ct, { context: integrations:A })` funciona; `decryptPII(ct,
+     { context: integrations:B })` lança erro de autenticação (AAD mismatch);
+     `decryptPII(ct)` sem context também falha. É o que impede "copiar a row de A para
+     B e ainda ler as credenciais" — o `context` é parte da autenticação do GCM, não
+     um comentário.
+3. **`listarIntegracoes` não devolve credenciais** — `IntegracaoResumo` não tem
+   `credentials`/`credentialsCiphertext`/`keyId` (nem em snake_case). Testado tanto no
+   retorno de `criarIntegracao` quanto no de `listarIntegracoes`, iterando sobre as
+   chaves do objeto para pegar até campos que um dia entrassem por acidente.
+4. **Modo dev sem credencial** — `buscarHoteis`/`obterCotacao` sem integração ativa
+   devolvem `exemplo: true` e 3 hotéis/cotação determinísticos (ids `ex-wooba-1`/`2`/`3`,
+   `destino` e `moeda` corretos, `precoCents`/`custoCents` > 0, `detalhes` menciona
+   "exemplo"). `buscarHoteis` chamado duas vezes com o mesmo input devolve exatamente o
+   mesmo resultado (determinismo do adapter Wooba — `hoteisExemplo` deriva `seed` do
+   `destino`).
+5. **Idempotência de cotação** — `obterCotacao` duas vezes com o mesmo input devolve o
+   mesmo resultado, e não cria rows em `integrations` (cotação é efêmera, não persiste;
+   confirmado lendo o count de `integrations` para o tenant depois de duas chamadas).
+6. **`criarIntegracao` valida** — provider inválido (`'despegar' as 'wooba'`), label
+   curto (1 char), label longo (101 chars), credentials vazia (`{}`) — todos devolvem
+   `ServiceError` com `code: 'DADOS_INVALIDOS'`, `campo`/`correcao` preenchidos. Label
+   com 2 chars e com 100 chars passam. Label com espaços laterais é trimado antes de
+   gravar.
+7. **`removerIntegracao` é físico** — depois de remover, `listarIntegracoes` não
+   inclui; id inexistente devolve `NAO_ENCONTRADO`; id de outro tenant também devolve
+   `NAO_ENCONTRADO` (RLS barra na query `where id = $1 and tenant_id = tenantId(B)` —
+   zero linhas, e a action trata como "não existe") e a integração de A continua lá.
+
+**Bônus (não pedidos, baixo custo):**
+- Isolamento por tenant na camada de action — `listarIntegracoes` de B contra A devolve
+  `[]`; dois tenants com integrações distintas (A wooba, B infotravel) não misturam —
+  cada um só vê a própria.
+- `buscarHoteis`/`obterCotacao` com `integracaoId` inexistente → `NAO_ENCONTRADO` (não
+  `DADOS_INVALIDOS`); com `integracaoId` de outro tenant → `NAO_ENCONTRADO` (RLS).
+- `buscarHoteis` com destino curto, `checkIn` em formato errado, `paxAdults < 1` →
+  `DADOS_INVALIDOS` com `correcao`.
+- `obterCotacao` com `hotelId` vazio → `DADOS_INVALIDOS`.
+- **Credencial sem `apiKey`** — o único caminho "com credencial ativa" testável sem
+  chamar a API real do Wooba: crio uma integração com `credentials: { agencyId: 'ag-1' }`
+  (sem `apiKey`), aponto `buscarHoteis` para ela, e o adapter Wooba lança
+  `ServiceError('DADOS_INVALIDOS', 'A credencial da conta Wooba não tem chave de
+  API.')` ANTES de qualquer fetch. Confirma que o adapter valida o shape da credencial
+  antes de ir para a rede.
+
+### Verificação (S12)
+
+```
+npx tsc --noEmit                        -> limpo (houve um vermelho transitório em
+                                           src/components/app/CotacaoSheet.tsx linha 151
+                                           comparando window.open com boolean — fronteira
+                                           da Nina, corrigido por ela durante esta rodada).
+npx vitest run tests/integrations/      -> 31/31 verdes (953ms).
+npx tsx scripts/check/known-failures.ts -> 440 testes no total (409 baseline + 31 novos),
+                                           allowlist vazia (0), verde, sem regressão.
+                                           Docker/Postgres de pé (zarpa-db healthy, 18h).
+                                           (Houve um vermelho transitório em
+                                           tests/design/guards.test.ts por
+                                           CotacaoSheet.tsx com transition-colors — Nina
+                                           corrigiu durante a rodada; gate verde no final.)
+```
+
+### O que NÃO está coberto (explícito)
+
+- **Chamada real à API do Wooba/Infotravel** — sem credencial provisionada, sem rede
+  no CI. O adapter Wooba tem fallback de exemplo para `credencial = null` (testado);
+  o caminho "credencial existe, fetch real" só é exercitável com a API real ou um
+  servidor mock HTTP (subir `http.createServer` que responde JSON shaped como Wooba).
+  Fora do escopo do S12 — o handoff diz "API real não está provisionada neste
+  repositório (sem credencial, sem doc oficial em mãos)".
+- **`isActive: false`** — não existe action de toggle ainda (handoff S12: "Sem toggle
+  de `isActive` — não existe action ainda"). A coluna existe, mas nenhuma action liga/
+  desliga. Quando existir, merece teste próprio.
+- **Reserva/booking** — cotação só, fora do v1 (handoff: "Sem reserva real (booking) —
+  cotação só").
+- **Integração de checkout real (cartão/Pix/boleto via Wooba/Infotravel)** — pós-v1;
+  em dev o adapter só devolve exemplo.
+- **Trial/dunning/enforcement do S11** — decisão de produto em aberto, não testada.
+- **Timeout do adapter (12s)** — não testado; exigiria um servidor mock que segura a
+  requisição por >12s. O `AbortController` + `setTimeout` está no código, mas sem
+  teste de behavior.
+- **401 real do Wooba** — o adapter trata `res.status === 401` com `ServiceError`
+  específico, mas sem API real ou mock que devolva 401, não exercitado.
+- **Rotatividade de chaves (`keyId` como rotação)** — o `keyId` está gravado junto do
+  ciphertext (envelope + coluna), mas o caminho "sobe ENCRYPTION_KEY_V2, reescreve
+  rows com a v1, leitura pela v2 funciona até o backfill" não tem teste aqui — é
+ infra de crypto (`src/lib/crypto/keyring.ts`), fronteira do Rafa.
