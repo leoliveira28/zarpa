@@ -118,6 +118,36 @@ registrado aqui antes já não reproduz — `npm run build` está limpo nesta
 sessão, incluindo `/p/[slug]`. Não sei se foi você ou o PO quem resolveu, só
 registro que sumiu.)
 
+## 4. Ficha do negócio (`/funil/[id]`, entrega desta rodada) — dois pedidos pequenos
+
+Construí `src/app/(app)/funil/[id]/NegocioScreen.tsx` sobre `obterNegocio`
+(perfeito para o que ele já traz — dados + `activities`). Dois furos que
+contornei no cliente, registrando aqui para quando fizer sentido resolver do
+lado do servidor:
+
+1. **Falta um jeito de achar a(s) proposta(s) de UM negócio.** `obterNegocio`
+   não devolve proposta (correto — não é dado do negócio). Não existe hoje
+   `obterPropostaDoNegocio(dealId)` nem um filtro por `dealId` em
+   `listarPropostas`. Contornei buscando `listarPropostas({ incluirArquivadas:
+   true, limite: 200 })` inteiro e filtrando por `p.dealId === dealId` no
+   cliente — mesma doutrina que `deals.ts` já documenta pra
+   `listarNegociosDoFunil`/`listarNegociosParados` (filtrar/somar em JS depois
+   de buscar, seguro no volume esperado). Funciona, mas é claramente um
+   provisório: um tenant com muitas propostas paga o preço de buscar todas
+   toda vez que alguém abre a ficha de UM negócio. Pedido: `listarPropostas({
+   dealId })` como filtro de verdade (ou um `obterPropostaDoNegocio(dealId)`
+   dedicado, se preferir devolver só o resumo em vez de uma lista).
+
+2. **Não existe `atualizarNegocio`.** A ficha mostra destino, pax, ida/volta
+   e valor como LEITURA — não são editáveis, porque só existem
+   `criarNegocio`/`moverEstagioDoNegocio` no servidor. Isso é aceitável por
+   ora (nada no pedido original exigia edição), mas se um dia a agente
+   precisar corrigir um valor ou uma data depois que o negócio já foi
+   criado, vai faltar essa action. Não é urgente — só deixando mapeado.
+
+Nenhum dos dois bloqueia nada agora; a ficha funciona de ponta a ponta do
+jeito que está (testei clicando de verdade — ver `docs/status/nina.md`).
+
 ## O que ENTREGUEI (contexto, não pedido)
 
 - `/p/[slug]` pública, fora do grupo `(app)`, sem AppShell/auth — server

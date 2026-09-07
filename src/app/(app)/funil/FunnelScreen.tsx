@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { useRouter } from "next/navigation";
 import { motion, type PanInfo } from "motion/react";
 import {
   COLUNAS_DO_FUNIL,
@@ -20,15 +20,14 @@ import {
 } from "@/lib/ui/motion";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Card, CardAction } from "@/components/ui/Card";
-import { Dialog, DialogClose, DialogContent } from "@/components/ui/Dialog";
-import { Field, FieldError, FieldHint, Label } from "@/components/ui/Field";
-import { Textarea } from "@/components/ui/Input";
+import { Card } from "@/components/ui/Card";
+import { FieldError } from "@/components/ui/Field";
 import { Money } from "@/components/ui/Money";
 import { Rule } from "@/components/plates";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { CheckIcon, ClockIcon, PlusIcon } from "@/components/app/icons";
+import { DealStageMenu, LossReasonDialog } from "@/components/app/DealStageMenu";
 import { NovoNegocioSheet } from "@/components/app/NovoNegocioSheet";
 
 /* =============================================================================
@@ -95,9 +94,6 @@ const COLUMN_MONEY_FLOOR = 10_000_000;
 /** Estágio terminal — soma em tinta de estado, sem sinal de estagnação no card. */
 const CLOSED_STAGE: EstagioDeFunil = "ganho";
 
-/** Mesmo mínimo que o servidor exige (`moverEstagioDoNegocio`) — a tela recusa antes de gastar uma chamada de rede. */
-const MIN_LOST_REASON_LENGTH = 3;
-
 /**
  * `COLUNAS_DO_FUNIL` traz `estagio` + `label`; o texto de coluna vazia é copy
  * de interface, não contrato de servidor — por isso mora aqui, não em
@@ -162,6 +158,7 @@ function useDragHint(): [boolean, () => void] {
 type Status = "loading" | "ready" | "error";
 
 export function FunnelScreen() {
+  const router = useRouter();
   const toast = useToast();
   const reducedMotion = usePrefersReducedMotion();
 
@@ -194,9 +191,6 @@ export function FunnelScreen() {
   const [lossDialog, setLossDialog] = React.useState<NegocioDoFunil | null>(
     null,
   );
-  const [lossReason, setLossReason] = React.useState("");
-  const [lossSubmitting, setLossSubmitting] = React.useState(false);
-  const [lossError, setLossError] = React.useState<string | null>(null);
 
   // "+ Novo negócio" — o ponto de entrada que faltava (docs/status/nina.md).
   // `criarNegocio` já devolve o MESMO shape de `listarNegociosDoFunil`, então
@@ -359,42 +353,20 @@ export function FunnelScreen() {
   function openLossDialog(deal: NegocioDoFunil) {
     dismissHint();
     setLossDialog(deal);
-    setLossReason("");
-    setLossError(null);
   }
 
   function handleLossDialogChange(open: boolean) {
-    if (open) return;
-    setLossDialog(null);
-    setLossReason("");
-    setLossError(null);
-    setLossSubmitting(false);
+    if (!open) setLossDialog(null);
   }
 
-  async function confirmLoss() {
+  /** Chamado por `LossReasonDialog` DEPOIS que o servidor já confirmou a perda. */
+  function handleLost(dealId: string, motivo: string) {
     const deal = lossDialog;
-    if (!deal) return;
-    const motivo = lossReason.trim();
-    if (motivo.length < MIN_LOST_REASON_LENGTH) {
-      setLossError("Escreva pelo menos 3 caracteres — é o que fica no histórico do negócio.");
-      return;
-    }
-
-    setLossSubmitting(true);
-    setLossError(null);
-    const result = await moverEstagioDoNegocio(deal.id, "perdido", motivo);
-    setLossSubmitting(false);
-
-    if (!result.ok) {
-      setLossError(result.mensagem);
-      return;
-    }
-
+    if (!deal || deal.id !== dealId) return; // não deveria divergir — proteção, não fluxo esperado
     const previousStage = deal.stage;
     const previousIdle = deal.diasParado;
     setItems((current) => current.filter((item) => item.id !== deal.id));
     setLossDialog(null);
-    setLossReason("");
 
     toast.undo(
       `${deal.contactName} → Perdida`,
@@ -596,6 +568,7 @@ export function FunnelScreen() {
                           onDragEnd={(info) => handleDragEnd(deal, info)}
                           onMove={(stage) => void moveTo(deal, stage, false)}
                           onRequestLoss={() => openLossDialog(deal)}
+                          onOpen={() => router.push(`/funil/${deal.id}`)}
                         />
                       </React.Fragment>
                     ))
@@ -635,49 +608,15 @@ export function FunnelScreen() {
           )
         : null}
 
-      <Dialog open={lossDialog !== null} onOpenChange={handleLossDialogChange}>
-        <DialogContent
-          title="Marcar como perdida"
-          description={
-            lossDialog
-              ? `${lossDialog.contactName} sai do quadro. O motivo fica na linha do tempo do negócio — obrigatório, não dá para arquivar sem ele.`
-              : undefined
-          }
-          footer={
-            <>
-              <DialogClose asChild>
-                <CardAction>cancelar</CardAction>
-              </DialogClose>
-              <Button
-                variant="danger"
-                loading={lossSubmitting}
-                disabled={lossReason.trim().length < MIN_LOST_REASON_LENGTH}
-                onClick={() => void confirmLoss()}
-              >
-                Marcar como perdida
-              </Button>
-            </>
-          }
-        >
-          <Field invalid={lossError !== null}>
-            <Label>Motivo da perda</Label>
-            <Textarea
-              value={lossReason}
-              onChange={(event) => {
-                setLossReason(event.target.value);
-                if (lossError) setLossError(null);
-              }}
-              placeholder="Ex.: escolheu outra agência, orçamento não fechou, foi remarcado sem previsão…"
-              rows={3}
-            />
-            {lossError ? (
-              <FieldError>{lossError}</FieldError>
-            ) : (
-              <FieldHint>Dá para desfazer por 8 segundos depois de confirmar.</FieldHint>
-            )}
-          </Field>
-        </DialogContent>
-      </Dialog>
+      <LossReasonDialog
+        deal={
+          lossDialog
+            ? { id: lossDialog.id, contactName: lossDialog.contactName }
+            : null
+        }
+        onOpenChange={handleLossDialogChange}
+        onLost={handleLost}
+      />
 
       <NovoNegocioSheet
         open={negocioSheetOpen}
@@ -751,6 +690,7 @@ function FunnelCard({
   onDragEnd,
   onMove,
   onRequestLoss,
+  onOpen,
 }: {
   deal: NegocioDoFunil;
   dragging: boolean;
@@ -763,8 +703,19 @@ function FunnelCard({
   onDragEnd: (info: PanInfo) => void;
   onMove: (stage: EstagioDeFunil) => void;
   onRequestLoss: () => void;
+  /** Abre a ficha do negócio — tudo que o card não resolve sozinho (histórico, proposta). */
+  onOpen: () => void;
 }) {
   const ref = React.useRef<HTMLElement>(null);
+  /* O card é arrastável E abre a ficha — os dois gestos começam no mesmo
+     pointerdown, e só um dos dois pode vencer. `moved` marca se o framer
+     chegou a reconhecer um arrasto de verdade (acima do próprio limiar
+     dele); só quando ele NÃO reconheceu é que o pointerup conta como toque.
+     Isto (e não `onTap` do motion) porque `onTap` teria que reconciliar seu
+     próprio limiar de gesto com o de `drag` no mesmo nó — dois relógios
+     medindo a mesma coisa é onde bug de gesto nasce. Um booleano só, fechado
+     entre o pointerdown e o pointerup, não tem essa fresta. */
+  const movedRef = React.useRef(false);
 
   return (
     <motion.article
@@ -777,11 +728,30 @@ function FunnelCard({
       dragElastic={0.25}
       dragMomentum={false}
       onDragStart={(_, info) => {
+        movedRef.current = true;
         const rect = ref.current?.getBoundingClientRect();
         if (rect) onDragStart(rect, info.point);
       }}
       onDrag={(_, info) => onDrag(info)}
       onDragEnd={(_, info) => onDragEnd(info)}
+      onPointerDown={() => {
+        movedRef.current = false;
+      }}
+      onPointerUp={(event: React.PointerEvent<HTMLElement>) => {
+        if (movedRef.current) return; // foi arrasto — o solta já decidiu o destino
+        const target = event.target as HTMLElement;
+        if (target.closest("[data-stage-menu]")) return; // o menu cuida do próprio toque
+        onOpen();
+      }}
+      onKeyDown={(event: React.KeyboardEvent<HTMLElement>) => {
+        if (event.key !== "Enter") return;
+        if ((event.target as HTMLElement).closest("[data-stage-menu]")) return;
+        event.preventDefault();
+        onOpen();
+      }}
+      role="link"
+      tabIndex={0}
+      aria-label={`Abrir negócio de ${deal.contactName}${deal.destination ? ` — ${deal.destination}` : ""}`}
       className={cn(
         "group/card relative cursor-grab touch-none px-3 py-3",
         "active:cursor-grabbing",
@@ -797,7 +767,13 @@ function FunnelCard({
         hideSignal={hideSignal}
         moneyCeiling={moneyCeiling}
         menu={
-          <StageMenu deal={deal} onMove={onMove} onRequestLoss={onRequestLoss} />
+          <DealStageMenu
+            contactName={deal.contactName}
+            currentStage={deal.stage}
+            onMove={onMove}
+            onRequestLoss={onRequestLoss}
+            revealOnHover
+          />
         }
       />
     </motion.article>
@@ -905,85 +881,5 @@ function Signal({ deal }: { deal: NegocioDoFunil }) {
       <span className="sr-only">parada há </span>
       {deal.diasParado} d
     </span>
-  );
-}
-
-/* --------------------------------------------------------- caminho de teclado */
-
-/** Caminho de teclado para a mesma ação do arrasto — e a única porta para "perdida". */
-function StageMenu({
-  deal,
-  onMove,
-  onRequestLoss,
-}: {
-  deal: NegocioDoFunil;
-  onMove: (stage: EstagioDeFunil) => void;
-  onRequestLoss: () => void;
-}) {
-  return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger
-        aria-label={`Mover ${deal.contactName} de estágio`}
-        className={cn(
-          "-mt-1 -mr-1 grid size-8 shrink-0 place-items-center rounded-sm",
-          "text-muted hover:bg-surface-3 hover:text-ink",
-          // some no repouso do ponteiro fino e volta no hover, no foco e
-          // enquanto o menu está aberto. Em ponteiro grosso não há hover:
-          // lá ele fica sempre visível, senão vira ação inalcançável.
-          "opacity-0 [transition:opacity_120ms_var(--curve-out)]",
-          "group-hover/card:opacity-100 focus-visible:opacity-100",
-          "data-[state=open]:opacity-100",
-          "[@media(pointer:coarse)]:opacity-100",
-        )}
-      >
-        <svg
-          viewBox="0 0 16 16"
-          className="size-4"
-          fill="currentColor"
-          aria-hidden
-        >
-          <circle cx="8" cy="3.5" r="1.15" />
-          <circle cx="8" cy="8" r="1.15" />
-          <circle cx="8" cy="12.5" r="1.15" />
-        </svg>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          align="end"
-          sideOffset={4}
-          className="zk-pop z-50 min-w-48 rounded-lg border border-line bg-surface p-1 shadow-3"
-        >
-          <DropdownMenu.Label className="px-2 py-1.5 text-13 font-semibold tracking-[0.04em] text-muted uppercase">
-            Mover para
-          </DropdownMenu.Label>
-          {COLUNAS_DO_FUNIL.map(({ estagio, label }) => (
-            <DropdownMenu.Item
-              key={estagio}
-              disabled={estagio === deal.stage}
-              onSelect={() => onMove(estagio)}
-              className={cn(
-                "flex min-h-9 cursor-pointer items-center rounded-md px-2 text-15 text-ink outline-none",
-                "data-[highlighted]:bg-accent-soft data-[highlighted]:text-accent-soft-ink",
-                "data-[disabled]:pointer-events-none data-[disabled]:text-subtle",
-                "[@media(pointer:coarse)]:min-h-11",
-              )}
-            >
-              {label}
-            </DropdownMenu.Item>
-          ))}
-          <DropdownMenu.Separator className="mx-1 my-1 h-px bg-hairline" />
-          <DropdownMenu.Item
-            onSelect={onRequestLoss}
-            className={cn(
-              "flex min-h-9 cursor-pointer items-center rounded-md px-2 text-15 text-danger outline-none",
-              "data-[highlighted]:bg-danger-soft data-[highlighted]:text-danger-soft-ink",
-              "[@media(pointer:coarse)]:min-h-11",
-            )}
-          >
-            Marcar como perdida…
-          </DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
   );
 }
