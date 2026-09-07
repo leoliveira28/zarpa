@@ -17,6 +17,7 @@ cd "$(dirname "$0")/.."
 
 PROJETO_NEON="gentle-bread-99525731"
 BRANCH_NEON="br-old-poetry-ac4g99ub"
+VERCEL_SCOPE="lp-development"
 URL_PROD="https://zarpa.vercel.app"
 
 echo "── 0/5 Repo público no GitHub (idempotente)"
@@ -31,8 +32,8 @@ NEON_URL="$(neonctl connection-string "$BRANCH_NEON" --project "$PROJETO_NEON" -
 echo "── 2/5 Migrations no Neon (a 0009 semeia Solo/Pro/Studio)"
 DATABASE_URL="$NEON_URL" node --import ./src/db/_register.mjs src/db/migrate.ts
 
-echo "── 3/5 Vercel: link do projeto"
-vercel link --yes --project zarpa
+echo "── 3/5 Vercel: link do projeto (escopo pessoal ${VERCEL_SCOPE} — NÃO usar outro)"
+vercel link --yes --project zarpa --scope "$VERCEL_SCOPE"
 
 echo "── 4/5 Envs de produção"
 SECRETS_DIR="$HOME/.zarpa-secrets"
