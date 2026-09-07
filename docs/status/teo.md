@@ -1,6 +1,134 @@
 # Status — Téo
 
-## Rodada atual: S9 (follow-up) — concorrência real em `gerarParcelasDaVenda`
+## Rodada atual: S4 — o funil (`src/server/deals.ts`)
+
+Handoff: `docs/handoffs/rafa-para-teo.md`, seção "S4 — o funil". Backend commitado e verde
+(gate em 365, allowlist vazia) antes desta rodada — nenhuma migration nova, `deals`/`tasks`/
+`activities` já tinham RLS desde `0000_fundacao.sql`.
+
+### Entrega
+
+`tests/deals/funil.test.ts` (novo, 13 testes) — mesma filosofia de
+`tests/sales/vendas.test.ts`/`tests/followups/regua.test.ts`: chama as seis funções REAIS de
+`src/server/deals.ts` contra Postgres de verdade, mockando só `requireAuthContext`
+(`vi.hoisted`), fixture própria por teste (tenant + `user` real — `activities.actorUserId`/
+`audit_log.actor_user_id` têm FK real para `user`, então a sessão mockada precisa apontar
+para uma linha que existe de verdade, não uma string qualquer).
+
+Cobre os cinco pontos pedidos:
+
+1. **Motivo de perda obrigatório** — `moverEstagioDoNegocio(id, 'perdido')` sem
+   `motivoPerda` E com motivo curto demais (`' a '`, 1 caractere depois de trim) falham com
+   `DADOS_INVALIDOS`/`campo: 'motivoPerda'`; a prova que importa é lendo o negócio de volta
+   do banco (`stage` continua `negociando`, `lostReason`/`closedAt` continuam `null`) — não
+   só o retorno da action. Também confirmei que nenhuma `activity`/`audit_log` nasce de uma
+   tentativa recusada (zero linhas). Com motivo válido (`'  Cliente escolheu outra agência  '`,
+   testando o `trim()`): `stage` vira `perdido`, `lostReason` grava o texto JÁ TRIMADO,
+   `closedAt` grava a hora, e a `activity` `stage_changed` nasce com
+   `metadata.motivoPerda` preenchido com o mesmo texto.
+2. **Idempotência sob clique duplo — os dois caminhos**:
+   - Sequencial: `novo → cotando` duas vezes com o mesmo `novoEstagio` — `activities` fica
+     em 1 linha (`type: 'stage_changed'`), `audit_log` fica em 1 linha
+     (`action: 'deal.stage_changed'`), não 2.
+   - Concorrente de verdade via `Promise.allSettled` (mesmo idioma de `vendas.test.ts`):
+     duas chamadas simultâneas movendo o MESMO negócio para `'ganho'`. Nenhuma promise
+     rejeita (`comoResultado` captura tudo), as duas devolvem `ok: true`, e a VERDADE do
+     banco relida depois — não o retorno em si — confirma `stage: 'ganho'` e exatamente 1
+     `activity`. É o `UPDATE ... WHERE stage <> novoEstagio` (comentado em `deals.ts`) quem
+     segura isto sob corrida real, e o teste prova que segura de verdade, não só na leitura
+     do código.
+   - Reabertura: `ganho → negociando` zera `closedAt`; `perdido → negociando` zera
+     `lostReason` E `closedAt` — testado nos dois sentidos, lendo o banco depois de cada
+     transição, não só o retorno da última chamada.
+3. **`listarNegociosParados()` exclui `ganho`/`perdido`, mesmo "velhos"** — seed com três
+   negócios de `updatedAt` idêntico (10 dias atrás): um `novo` (aparece), um `ganho`
+   (não aparece, mesmo "velho"), um `perdido` (não aparece, mesmo "velho"). `itens` tem
+   exatamente 1, `totalCents` bate exatamente com o valor do único item, não a soma dos
+   três. Teste extra (não pedido, mas barato e direto): negócio aberto parado há EXATAMENTE
+   3 dias (dentro do limite de 7) não aparece — trava que o corte é `> 7`, não `>= algo
+   menor`.
+4. **Isolamento nas seis actions** — tenant A cria negócio "canário" (`valueCents: 999_999`,
+   10 dias parado); a partir do contexto de B: `listarNegociosDoFunil` não inclui o negócio
+   nem nenhum negócio com `contactId` de A; `obterNegocio`/`moverEstagioDoNegocio` com o
+   `dealId` de A devolvem `NAO_ENCONTRADO` (nunca erro de permissão — RLS transforma "existe
+   em outro tenant" em "zero linhas"); `criarNegocio` com `contactId` de A a partir do
+   contexto de B também devolve `NAO_ENCONTRADO` (RLS decide "existe"); `listarNegociosParados`
+   de B não inclui o canário nem soma o valor dele; `obterResumoDoPipeline` de B bate
+   EXATAMENTE com a soma só dos negócios de B (`50_000`, não `50_000 + 999_999`) — não só
+   "não erra", a soma é exata. Ao final, confirmei que o negócio de A continua
+   completamente intocado, lido de volta sob o contexto de A (`valueCents` do canário
+   intacto). Mais um teste de varredura direta em SQL (sem passar pela action) para o mesmo
+   padrão que `tenant-isolation.test.ts` já usa.
+5. **Contrato de regressão para o bug de `sql<Date>()`** (`docs/status/rafa.md`, seção S4,
+   "Dois defeitos reais encontrados", item 3 — um `sql<Date>()` livre chega como STRING crua
+   do driver, nunca `Date`, mesmo com `::timestamptz`; `paraDataOuNula()` em `deals.ts`
+   existe para proteger disso). Três casos, o do meio é o que realmente pegaria a
+   regressão: negócio sem nenhuma `activity` e `updatedAt` de HOJE → `diasParado: 0`;
+   negócio sem `activity` e `updatedAt` de 8 dias atrás → `diasParado: 8` (não `null`/`NaN`
+   por falta de `activity` — o caso mais comum do produto); negócio com `updatedAt` de 30
+   dias atrás MAS uma `activity` de ONTEM → `diasParado: 1`, confirmando explicitamente
+   `Number.isNaN(...) === false` e `Number.isFinite(...) === true` antes de checar o valor —
+   se `ultimaAtividadeSql()` voltasse a vazar como string sem `paraDataOuNula()`, comparar
+   `Date` com `string` dentro de `maisRecente`/`diasDesde` produziria um resultado
+   silenciosamente errado que `tsc` nunca pegaria, e este teste pegaria.
+
+**Bônus (fora do pedido do PO, baixo custo, pedido explícito da Rafa no handoff item 5):**
+trava o enum inteiro de `listarNegociosDoFunil` — seed com um negócio em cada um dos 6
+estágios do banco, confirma que o retorno tem exatamente 5 (nunca `perdido`) e que o
+`stage` de cada linha bate exatamente com `COLUNAS_DO_FUNIL` (importado direto de
+`@/server/deals`, não uma segunda lista escrita à mão) — é exatamente esse tipo de
+divergência (5 colunas de exemplo vs. 6 valores do banco) que motivou o pedido original.
+
+### Sanidade (feita e revertida)
+
+Troquei de propósito `expect(await contarActivitiesDeTransicao(...)).toBe(1)` para
+`.toBe(2)` no teste de idempotência sequencial. Rodei `npx vitest run tests/deals/funil.test.ts
+-t "sequencial: mover novo"` — falhou com `expected 1 to be 2`, exatamente o esperado (o
+código está correto, é a asserção que estava errada de propósito). Revertido antes de
+considerar a entrega pronta.
+
+### Verificação
+
+- `npx tsc --noEmit`: limpo.
+- `npx tsx scripts/check/known-failures.ts`: **378 testes** (365 + 13 novos), allowlist
+  vazia (0), **verde, sem regressão**.
+- Não toquei em `src/**` — nenhum bug de produto encontrado nesta rodada que exigisse
+  handoff (`docs/handoffs/teo-para-rafa.md` não foi necessário desta vez).
+
+### O que NÃO está coberto (explícito)
+
+- **`obterNegocio` — o resto do shape além do que os testes de isolamento/motivo de perda
+  já exercitam** (`currency`, `paxAdults`/`paxChildren`, `departureOn`/`returnOn`/
+  `expectedCloseOn`, a lista `activities` completa da timeline com mais de uma entrada e
+  ordenação "mais recente primeiro"). Só toquei nesses campos de raspão (`valueCents` do
+  canário no teste de isolamento); não há teste dedicado para "a timeline vem ordenada
+  certo com 3+ activities de tipos diferentes".
+- **`criarNegocio` — validações de campo que não sejam o caminho de isolamento**: datas
+  (`departureOn`/`returnOn`, incluindo o `deals_dates_check`/"volta antes da ida"),
+  `paxAdults`/`paxChildren` fora do intervalo, `currency` com formato errado, moeda BRL
+  default quando omitida. Zero teste dedicado a `criarNegocio` fora do caso de isolamento
+  (que passa `departureOn`/`returnOn`/`expectedCloseOn: undefined` só para satisfazer o
+  tipo do zod).
+- **`obterResumoDoPipeline` — o recorte de mês (UTC) em si**: não testei um negócio `ganho`
+  com `closedAt` no mês PASSADO (deveria ficar fora de `fechadoNoMesCents`) nem no início/fim
+  exato da fronteira UTC do mês (`[1º dia 00:00, 1º dia do mês seguinte 00:00)`) — só testei
+  que o resumo de B não inclui o canário de A, que prova isolamento mas não prova o recorte
+  de tempo em si.
+- **O bug de `obterContato` (`src/server/contacts.ts`, `totalViajantes`/`totalNegocios`)
+  que a Rafa corrigiu "de carona" nesta rodada não tem teste aqui** — é outro arquivo
+  (`contacts.ts`, não `deals.ts`), fora do pedido do PO para esta entrega. Merece teste
+  próprio em `tests/contacts/` numa rodada futura (a Rafa já registrou que
+  `grep totalViajantes tests/` não encontra nada hoje).
+- **Concorrência de `moverEstagioDoNegocio` entre DUAS transições diferentes** (ex.:
+  `Promise.all([mover para 'ganho', mover para 'perdido'])` no mesmo negócio, ao mesmo
+  tempo) não foi testada — só testei concorrência entre duas chamadas para o MESMO
+  `novoEstagio`, que é o cenário literal do "clique duplo" pedido. Duas transições
+  diferentes ao mesmo tempo é uma corrida real mas de outra natureza (qual das duas
+  "vence" não tem resposta certa definida no contrato) — registrado, não testado.
+
+---
+
+## Rodada anterior: S9 (follow-up) — concorrência real em `gerarParcelasDaVenda`
 
 Fecha o gap que eu mesmo documentei na rodada anterior ("O que NÃO está coberto" —
 "Concorrência em `gerarParcelasDaVenda` não foi testada"). O Rafa corrigiu
