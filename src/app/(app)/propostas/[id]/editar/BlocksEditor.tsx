@@ -78,9 +78,19 @@ export function BlocksEditor({
   const [addOpen, setAddOpen] = React.useState(false);
   const [reordering, setReordering] = React.useState(false);
 
-  const scoped = proposta.blocks
-    .filter((b) => b.optionId === scope)
-    .sort((a, b) => a.position - b.position);
+  // A ordem do ARRAY `proposta.blocks` é a verdade local: o servidor entrega
+  // `orderBy(asc(position))` e nada aqui reordena por ela de novo. O sort por
+  // `position` que existia aqui era o bug do arrasto (achado do PO): o update
+  // otimista reordenava o array sem reescrever `position` nos objetos, e o
+  // sort devolvia cada bloco ao lugar antigo já no render seguinte — arrastar
+  // parecia não fazer nada. (O caminho das opções em PropostaEditorScreen não
+  // tem esse problema porque o otimista de lá reescreve `position`.)
+  const scoped = proposta.blocks.filter((b) => b.optionId === scope);
+
+  // Trocas DURANTE o arrasto viram só estado local; a rede acontece uma vez,
+  // no fim do gesto (onDragEnd). Persistir a cada troca disparava N requests
+  // com posições intermediárias correndo em paralelo contra o servidor.
+  const ordemPendenteRef = React.useRef<BlocoEdicao[] | null>(null);
 
   function handleUpdated(updated: BlocoEdicao) {
     setBlocks((current) => current.map((b) => (b.id === updated.id ? updated : b)));
@@ -95,11 +105,14 @@ export function BlocksEditor({
     setAddOpen(false);
   }
 
-  async function persistOrder(next: BlocoEdicao[]) {
+  function aplicarOrdem(next: BlocoEdicao[]) {
     setBlocks((current) => {
       const others = current.filter((b) => b.optionId !== scope);
       return [...others, ...next];
     });
+  }
+
+  async function persistirOrdem(next: BlocoEdicao[]) {
     setReordering(true);
     const result = await reordenarBlocos(
       proposta.id,
@@ -154,7 +167,8 @@ export function BlocksEditor({
                   if (target < 0 || target >= next.length) return;
                   const [item] = next.splice(index, 1);
                   next.splice(target, 0, item!);
-                  void persistOrder(next);
+                  aplicarOrdem(next);
+                  void persistirOrdem(next);
                 }}
                 onUpdated={handleUpdated}
                 onRemoved={() => handleRemoved(block.id)}
@@ -165,7 +179,10 @@ export function BlocksEditor({
           <Reorder.Group
             axis="y"
             values={scoped}
-            onReorder={(next) => void persistOrder(next)}
+            onReorder={(next) => {
+              aplicarOrdem(next);
+              ordemPendenteRef.current = next;
+            }}
             className="flex flex-col gap-2"
           >
             {scoped.map((block, index) => (
@@ -175,6 +192,11 @@ export function BlocksEditor({
                 proposta={proposta}
                 index={index}
                 total={scoped.length}
+                onDragEnd={() => {
+                  const pendente = ordemPendenteRef.current;
+                  ordemPendenteRef.current = null;
+                  if (pendente) void persistirOrdem(pendente);
+                }}
                 onUpdated={handleUpdated}
                 onRemoved={() => handleRemoved(block.id)}
               />
@@ -234,6 +256,7 @@ function DraggableBlockCard({
   proposta,
   index,
   total,
+  onDragEnd,
   onUpdated,
   onRemoved,
 }: {
@@ -241,6 +264,7 @@ function DraggableBlockCard({
   proposta: PropostaEdicao;
   index: number;
   total: number;
+  onDragEnd: () => void;
   onUpdated: (block: BlocoEdicao) => void;
   onRemoved: () => void;
 }) {
@@ -250,6 +274,7 @@ function DraggableBlockCard({
       value={block}
       dragListener={false}
       dragControls={controls}
+      onDragEnd={onDragEnd}
       className="list-none"
     >
       <BlockCard
