@@ -77,6 +77,15 @@ const NAV: NavItem[] = [
 const WIDE_ROUTES = ["/funil"];
 
 /**
+ * Rotas wide casam EXATO — nunca por prefixo. `/funil/[id]` (ficha do negócio)
+ * é leitura vertical como Hoje/Clientes: herdar o regime do quadro por causa do
+ * `startsWith` dava `main` com `overflow-hidden` no desktop + ficha sem scroll
+ * interno nenhum = conteúdo cortado e página que não rola (achado ao vivo do
+ * PO em `/funil/[id]`). O quadro é só `/funil` exato; o editor de proposta
+ * permanece wide pelo pattern regex abaixo, que é quadro de verdade.
+ */
+
+/**
  * O construtor de proposta (S5/S6) entra na mesma exceção, mas só a TELA DE
  * EDIÇÃO — a lista de propostas continua com medida de linha, como Clientes.
  * O editor precisa da largura da janela porque no desktop ele é DOIS
@@ -90,9 +99,8 @@ function useWideRoute(): boolean {
   const pathname = usePathname();
   return React.useMemo(
     () =>
-      WIDE_ROUTES.some(
-        (route) => pathname === route || pathname.startsWith(`${route}/`),
-      ) || WIDE_PATH_PATTERNS.some((pattern) => pattern.test(pathname)),
+      WIDE_ROUTES.some((route) => pathname === route) ||
+      WIDE_PATH_PATTERNS.some((pattern) => pattern.test(pathname)),
     [pathname],
   );
 }
