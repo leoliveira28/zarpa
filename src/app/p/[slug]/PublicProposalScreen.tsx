@@ -98,7 +98,7 @@ export function PublicProposalScreen({
     options.length > 0 ? Math.max(...options.map((option) => option.priceCents)) : undefined;
 
   return (
-    <main className="enter mx-auto flex max-w-[42rem] flex-col gap-12 px-6 pt-10 pb-20 sm:px-10 sm:pt-16">
+    <main className="enter mx-auto flex w-full max-w-[42rem] flex-col gap-12 px-6 pt-10 pb-20 sm:px-10 sm:pt-16 lg:max-w-[68rem] lg:gap-16 lg:px-12 lg:pt-20">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           {brand.logoUrl ? (
@@ -131,7 +131,7 @@ export function PublicProposalScreen({
         <img
           src={proposal.coverImageUrl ?? undefined}
           alt=""
-          className="aspect-[16/10] w-full rounded-sm object-cover"
+          className="aspect-[16/10] w-full rounded-sm object-cover lg:aspect-[21/9]"
         />
       ) : null}
 
@@ -147,9 +147,14 @@ export function PublicProposalScreen({
           />
         ) : null}
         <p className="text-13 tracking-[0.08em] text-muted uppercase">Proposta de viagem</p>
-        <h1 className="display text-32 text-ink">{proposal.title}</h1>
+        {/* Capa: no desktop a tipografia é IMAGEM — a escala da interface
+            termina em 32, e a capa é a exceção editorial (CLAUDE.md: display
+            grande é peso 800 sobre leading 0.94, nunca itálico). */}
+        <h1 className="display text-32 text-ink lg:text-[56px]">{proposal.title}</h1>
         {proposal.summary ? (
-          <p className="max-w-[34rem] text-17 leading-[1.5] text-muted">{proposal.summary}</p>
+          <p className="max-w-[34rem] text-17 leading-[1.5] text-muted lg:text-20">
+            {proposal.summary}
+          </p>
         ) : null}
         <div className="flex flex-wrap items-center gap-2 text-13 text-muted">
           {proposal.validUntil ? (
@@ -160,7 +165,7 @@ export function PublicProposalScreen({
       </header>
 
       {sharedBlocks.length > 0 ? (
-        <section className="flex flex-col gap-6">
+        <section className="flex flex-col gap-6 lg:max-w-[44rem]">
           {sharedBlocks.map((block) => (
             <BlockSection key={block.id} block={block} />
           ))}
@@ -180,8 +185,15 @@ export function PublicProposalScreen({
             </h2>
           </div>
 
+          {/* Comparação de opções pede largura (mesma doutrina do funil
+              wide): o grid só abre no desktop — em 640px três colunas são
+              200px espremidos. Uma opção única volta à medida de leitura. */}
           <div
-            className={cn("flex flex-col gap-6", options.length > 1 && "sm:grid sm:items-stretch")}
+            className={cn(
+              "flex flex-col gap-6",
+              options.length > 1 && "lg:grid lg:items-stretch",
+              options.length === 1 && "lg:max-w-[44rem]",
+            )}
             style={
               options.length > 1
                 ? { gridTemplateColumns: `repeat(${Math.min(options.length, 3)}, minmax(0, 1fr))` }
@@ -209,13 +221,13 @@ export function PublicProposalScreen({
       )}
 
       {proposal.terms ? (
-        <section className="flex flex-col">
+        <section className="flex flex-col lg:max-w-[44rem]">
           <Rule loose />
           <p className="text-13 leading-[1.5] whitespace-pre-line text-muted">{proposal.terms}</p>
         </section>
       ) : null}
 
-      <footer className="flex flex-col">
+      <footer className="flex flex-col lg:max-w-[44rem]">
         <Rule loose />
         <p className="text-center text-13 text-subtle">Feito com {APP_NAME}</p>
       </footer>
@@ -291,7 +303,7 @@ function OptionCard({
     <div
       ref={registerRef}
       data-option-id={option.id}
-      className="flex flex-col gap-5 rounded-sm bg-surface-2 p-6"
+      className="flex flex-col gap-5 rounded-sm bg-surface-2 p-6 lg:p-8"
     >
       <div className="flex flex-col gap-3">
         <div className="flex items-start justify-between gap-3">
