@@ -116,6 +116,8 @@ function conta(overrides: Partial<CriarContaInput> = {}): CriarContaInput {
     email: `${unico('qa-signup')}@exemplo-zarpa.test`,
     senha: SENHA,
     nomeAgencia: `Agência ${unico('Mare Alta')}`,
+    // S13b: o consentimento é obrigatório no contrato — teste de recusa sobrescreve com false.
+    aceitouTermos: true,
     ...overrides,
   }
 }
