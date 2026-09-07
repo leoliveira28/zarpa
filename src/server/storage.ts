@@ -93,6 +93,11 @@ async function comoDataUrlDeDev(arquivo: File): Promise<string> {
  * Nome genérico (`enviarImagem`, não `enviarImagemDaProposta`) porque a Server Action com
  * esse segundo nome mora em `src/server/proposals.ts` — arquivo `'use server'`, que só
  * pode exportar função async. Este módulo não é `'use server'` de propósito.
+ *
+ * SEM `BLOB_READ_WRITE_TOKEN` em PRODUÇÃO: recusa com erro claro — gravar base64
+ * dentro do Postgres (data URL de até 5 MB por imagem) é bomba-relógio: resposta
+ * pública pesada, linha gigante, backup inchado (achado do PO: "não está fazendo
+ * upload e mostra base64 no terminal"). O fallback data URL continua só no dev.
  */
 export async function enviarImagem(
   arquivo: File,
@@ -103,9 +108,21 @@ export async function enviarImagem(
 
   const caminho = `propostas/${pastaTenant}/${Date.now()}-${nomeSeguro(arquivo.name)}`;
 
-  const url = process.env.BLOB_READ_WRITE_TOKEN
-    ? await enviarParaBlobDeVerdade(arquivo, caminho)
-    : await comoDataUrlDeDev(arquivo);
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    const url = await enviarParaBlobDeVerdade(arquivo, caminho);
+    return { ok: true, url };
+  }
 
+  if (process.env.NODE_ENV === 'production') {
+    return {
+      ok: false,
+      codigo: 'ARQUIVO_INVALIDO',
+      mensagem:
+        'O upload de imagem está indisponível: falta a credencial do armazenamento.',
+      correcao: 'Configurar BLOB_READ_WRITE_TOKEN (Vercel Blob) no projeto',
+    };
+  }
+
+  const url = await comoDataUrlDeDev(arquivo);
   return { ok: true, url };
 }
