@@ -111,3 +111,88 @@ via migration como superuser), mas o comentário diverge do comportamento.
 Se a intenção era negar escrita, a policy deveria ser `FOR SELECT` ou ter
 `WITH CHECK (false)`. Se a intenção era permitir (e o comentário está errado),
 tudo bem como está. Sugiro alinhar o comentário com a realidade.
+
+---
+
+# Téo para Rafa — tradução do 23505 em `criarTenant` é código morto (S13a)
+
+Achado da rodada de testes S13a (`tests/signup/criarconta.test.ts`). Não corrigi —
+é fronteira sua (`src/server/**`). Passo de reprodução abaixo.
+
+## Resumo
+
+`criarTenant` (`src/server/tenants.ts`) promete no comentário que "a violação que
+escapar daqui [do pré-cheque] é traduzida logo abaixo". Não é. O catch chama
+`ehViolacaoDeUnicidade(error)`, que faz:
+
+```ts
+const codigo: unknown = (error as { code?: unknown }).code;
+return codigo === '23505';
+```
+
+Mas com drizzle-orm **0.45.2** (versão atual do `package.json`), toda falha de query
+vem embrulhada em `DrizzleQueryError` — mensagem `Failed query: insert into "tenants"...`
+— e o `PostgresError` original (que sim, tem `.code === '23505'`) está em
+`error.cause`, não no próprio erro. `DrizzleQueryError` não tem `.code`. Resultado:
+
+- **Pré-cheque via `authDb` (o fix do S13a): funciona** — colisão sequencial devolve
+  `CONFLITO` amigável. Teste cobre e passa.
+- **Corrida (dois cadastros simultâneos, o cenário que o catch existe para cobrir):**
+  o perdedor do INSERT recebe o erro CRU do drizzle, não o `CONFLITO`.
+
+## Passo de reprodução
+
+```
+npx vitest run tests/signup/criarconta.test.ts -t "duas criarTenant simultâneas"
+```
+
+É o teste que eu tinha escrito afirmando o contrato "perdedor recebe CONFLITO
+traduzido" — ele falhou com:
+
+```
+AssertionError: expected Error: Failed query: insert into "tenants… { …(2) }
+to be an instance of ServiceError
+```
+
+Ajustei o teste para o comportamento atual (afirma só o que é determinístico: 1
+vencedora, 1 perdedora, exatamente 1 tenant com o slug no banco) e deixei o comentário
+apontando para cá. **Quando você consertar, aquele teste deve voltar a afirmar o
+CONFLITO** — troque a asserção condicional por uma fixa.
+
+## Impacto
+
+- Caminho `criarTenant` direto: erro cru sobe.
+- Caminho `criarConta` (o real do produto): o erro não-`CONFLITO` escapa do laço de
+  sufixos (`aindaTemSlug === false` → `throw error`) e `comoResultado` converte para
+  `DADOS_INVALIDOS` / "Não consegui completar essa ação agora." — o usuário vê erro
+  genérico em vez de "Esse endereço já está em uso.", e o `console.error` loga a query
+  inteira de INSERT.
+- Estado do banco: íntegro (o INSERT que falhou rolou sozinho, nenhum órfão). O problema
+  é só a mensagem — mas é exatamente a mensagem que o catch foi escrito para dar.
+
+## Correção sugerida (decisão sua)
+
+Percorrer a cadeia de `cause` em `ehViolacaoDeUnicidade`:
+
+```ts
+function ehViolacaoDeUnicidade(error: unknown): boolean {
+  let atual: unknown = error;
+  while (atual instanceof Error) {
+    if ((atual as { code?: unknown }).code === '23505') return true;
+    atual = (atual as { cause?: unknown }).cause;
+  }
+  return false;
+}
+```
+
+## Observação do mesmo tipo (menor, sem teste próprio)
+
+O catch de `criarConta` identifica duplicidade de e-mail por
+`/already exists|já existe/i.test(mensagem)`. O erro do `signUpEmail` em corrida também
+vem embrulhado pelo drizzle (a mensagem vira `Failed query: insert into "user"...`),
+então o sniff não casa e o perdedor da corrida de e-mail recebe o `CONFLITO` genérico
+("Não consegui criar sua conta agora.") em vez de "Já existe uma conta com esse e-mail."
+O mesmo `cause`-walking resolveria os dois se você preferir extrair a checagem para
+`errors.ts`. Os testes de corrida de e-mail que escrevi são contrato-level
+(`code === 'CONFLITO'`, estado final do banco) e passam nos dois desfechos — não
+travam a correção, mas ela melhora a mensagem real que o usuário vê.
