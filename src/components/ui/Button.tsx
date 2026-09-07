@@ -207,8 +207,17 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         }}
         {...props}
       >
-        {children}
-        {loading ? <BusyRule /> : null}
+        {/* O Slot (asChild) exige UM filho elemento — children + régua dá
+            "Slot failed to slot onto its children" em toda tela que usa
+            Button asChild (achado do PO ao clicar: banner de assinatura e
+            CTAs de estado vazio). Sem asChild, button próprio: children +
+            régua. Nenhum uso atual combina asChild com loading. */}
+        {asChild ? children : (
+          <>
+            {children}
+            {loading ? <BusyRule /> : null}
+          </>
+        )}
       </Comp>
     );
   },
