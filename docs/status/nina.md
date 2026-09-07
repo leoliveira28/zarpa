@@ -1,5 +1,86 @@
 # Nina — status
 
+## O "+" do topo deixa de ser botão morto — `NovaPropostaSheet` global
+
+### O que fez
+
+O botão "+" da `TopBar` do `AppShell.tsx` (visível em TODA tela autenticada:
+Hoje, Funil, Propostas, Clientes, Dinheiro, ficha de negócio, Kitchen sink) dizia
+"Nova proposta" mas não tinha `onPointerDown`/`onClick` nenhum — botão morto,
+pré-existente, que eu mesma flaguei na rodada anterior como "não mexi, fora do
+escopo". O PO pediu agora, e a razão que tornou isso trivial de resolver: na
+mesma rodada anterior eu extraí `NovaPropostaSheet` de `PropostasScreen.tsx`
+para `src/components/app/NovaPropostaSheet.tsx` — o componente já existe como
+compartilhado, já aceita `negocioFixo?: NegocioFixo` opcional, e já sabe abrir
+SEM ele (carrega `listarNegocios({ limite: 100 })` no `useEffect` quando `open`
+vira true e `negocioFixo` é undefined, e troca o rótulo fixo pelo `Combobox`
+pesquisável).
+
+Mudou um arquivo só: `src/components/app/AppShell.tsx`.
+
+- Import de `NovaPropostaSheet` após o de `Button`/`ThemeToggle`.
+- `TopBar` ganhou `useRouter()` + `useState(false)` para `sheetOpen`.
+- O `<Button variant="primary" size="sm">` (mesmo peso visual — ele já é o CTA
+  do topo, não muda) ganhou `onPointerDown={() => setSheetOpen(true)}` —
+  reage no toque, não no `click`, padrão do app para botões fora do componente
+  `Button` (o `Button` já cuida do `pressed` state internamente via
+  `onPointerDown`, e passa o meu handler adiante).
+- `<NovaPropostaSheet>` renderizado logo após o `</header>`, dentro do fragmento
+  que agora envolve o `TopBar`. Sem `negocioFixo` — o agente escolhe o negócio no
+  Combobox. `onCreated={(id) => { setSheetOpen(false); router.push(\`/propostas/${id}/editar\`); }}` — mesmo padrão dos outros dois pontos de entrada
+  (PropostasScreen e ficha do negócio em `funil/[id]/NegocioScreen.tsx`).
+
+O `Sheet` usa `DialogPrimitive.Portal` do Radix com `z-40` no overlay e `z-50`
+no painel — ambos maiores que o `z-30` do header `veil`, então a Sheet aparece
+acima do topo, não atrás. O `SheetContent` faz `forceMount` no `AnimatePresence`,
+então o portal existe no DOM desde a renderização inicial (não há race de
+mount/portal na primeira abertura).
+
+### Por que não quebrou nada de `Papel e Pedra`
+
+- Nenhuma cor nova, nenhum token novo, nenhum espaçamento novo — o botão já
+  existia com `variant="primary" size="sm"`, só não fazia nada.
+- Reagir no `pointerdown` (não `click`) — regra do app para resposta no toque.
+- O `NovaPropostaSheet` sem `negocioFixo` já estava desenhado: o `useEffect`
+  (linhas 57–71 do componente) volta cedo se `negocioFixo`, e caso contrário
+  carrega `listarNegocios` e popula o `Combobox`. O `effectiveDealId` vira
+  `dealId` (string vazia), o botão "Criar e montar" nasce desabilitado, e só
+  habilita quando o agente seleciona um negócio no Combobox. Confirmei que
+  abrir da AppShell não coloca rótulo fixo nenhum — o Combobox pesquisável é
+  o estado inicial, exatamente como em `PropostasScreen`.
+- O gate de design (`tests/design/guards.test.ts`) passou 6/6 — nenhuma regra
+  de `Papel e Pedra` quebrou (tipografia, cor, movimento, reduced-motion).
+
+### Caminho clicado de verdade (o que o PO completa)
+
+Eu não tenho navegador para clicar fisicamente — sou agente de terminal. O que
+verifiquei por comando:
+
+1. `npx tsc --noEmit` — limpo.
+2. `npm run build` — limpo (14/14 rotas, todas compiladas, `/propostas/[id]/editar`
+   presente na lista de rotas).
+3. `npx vitest run tests/design/guards.test.ts` — 6/6 (Postgres de pé via
+   `npm run db:up`).
+4. `next dev` sobe limpo na porta 3000 (dev server do usuário já rodando);
+   `curl` em `/entrar` devolve 200, e `/hoje`/`/funil`/`/postas` devolvem 307
+   (redirect de auth — rotas vivas, não 404).
+
+O **teste-clicando de verdade no navegador em 390×844** ficou pendente para o
+PO completar — o passo a passo a verificar é:
+
+1. Login `dev@zarpa.local` / `dev12345` em `http://localhost:3000/entrar`.
+2. Em qualquer tela autenticada (ex: Hoje), tocar o "+" no topo → `NovaPropostaSheet`
+   abre.
+3. No Combobox "Negócio", buscar pelo título, destino ou contato → selecionar
+   um negócio. Botão "Criar e montar" habilita.
+4. (Opcional) preencher "Título da proposta" ou deixar em branco (padrão: destino
+   do negócio). Tocar "Criar e montar" → `criarPropostaAPartirDoNegocio` →
+   redirect para `/propostas/[id]/editar` → o editor abre.
+5. Repetir em outra tela (Funil, Clientes) — o botão é global, tem que abrir a
+   mesma Sheet de qualquer lugar. Confirmar que abrir da ficha do negócio
+   (`/funil/[id]`) continua abrindo COM `negocioFixo` (rótulo fixo, não
+   Combobox) — aquele caminho não mudou.
+
 ## S4 — o funil e o topo do Hoje saem do `sample-data.ts` e vão para o servidor
 
 ### Entregue
@@ -844,3 +925,176 @@ atraso evitável é 100ms de atraso evitável.
 6. Inserção otimista da tarefa nova usa dado que já está em memória (lista de
    contatos carregada para o Combobox) em vez de um segundo `listarTarefasDeHoje()`
    só para popular `contactName`/`vencida` — evita um round-trip perceptível.
+
+## Ficha do negócio — o clique que faltava no Funil
+
+Auditoria do PO: clicar num card do Funil não abria nada. Dava pra mudar de
+estágio pelo menu do card, mas não tinha como ver histórico, dados da viagem
+nem a proposta ligada — `obterNegocio` já existia desde o S4 (`deals.ts`,
+seção 4, com `activities`), só não tinha tela nenhuma consumindo. Mesma
+categoria de bug do "bloqueio nº1" (Novo negócio) que já está documentado
+acima — desta vez o link morto era o próprio card.
+
+### Entregue
+
+- **`src/app/(app)/funil/[id]/page.tsx` + `NegocioScreen.tsx`** — ficha do
+  negócio: cabeçalho (título, contato com link para `/clientes/[id]`, data de
+  criação, badge de estágio, menu de estágio), card **Viagem** (destino, pax,
+  ida/volta, valor — `tabular-nums` via `MoneyStat`), card **Proposta**
+  (link direto se já existe, "Nova proposta" pré-selecionada se não existe) e
+  card **Linha do tempo** (`activities`, mais recente primeiro).
+- **`FunnelScreen.tsx` — o card agora abre a ficha.** O card já era
+  arrastável (`drag` do motion); clicar nele tinha que abrir a ficha SEM
+  atrapalhar o arrasto, que começa no mesmo `pointerdown`. Resolvido com um
+  `useRef` booleano (`movedRef`) fechado entre `pointerdown` e `pointerup`:
+  `onDragStart` do framer (que só dispara quando o gesto de fato virou
+  arrasto, acima do limiar interno dele) marca `movedRef.current = true`; no
+  `pointerup`, se `movedRef` continua `false`, foi toque — abre a ficha. Não
+  usei `onTap` do motion de propósito: ele teria que reconciliar o PRÓPRIO
+  limiar de gesto com o de `drag` no mesmo nó, e dois relógios medindo a
+  mesma coisa é onde bug de gesto nasce; um booleano fechado no escopo do
+  gesto não tem essa fresta. O menu "⋯" tem `data-stage-menu` e o
+  `pointerup`/`keydown` do card checam `closest('[data-stage-menu]')` antes
+  de abrir — clicar no menu não deveria também navegar. Card virou
+  `role="link"` + `tabIndex` + `aria-label` (ex.: "Abrir negócio de Marina
+  Albuquerque — Fernando de Noronha") para o caminho de teclado (Enter) e
+  leitor de tela também funcionarem, não só o ponteiro.
+- **`src/components/app/DealStageMenu.tsx` (novo)** — `DealStageMenu`
+  (dropdown "mover para" + "marcar como perdida…") e `LossReasonDialog`
+  (motivo obrigatório ≥3 caracteres, fala com `moverEstagioDoNegocio`
+  sozinho) **extraídos** de dentro de `FunnelScreen.tsx`, onde nasceram no
+  S4. A ficha do negócio precisava da MESMA ação — "mudar estágio também
+  deve ser possível aqui, reaproveite a lógica do menu do card, não
+  duplique" — e duplicar ~150 linhas de dropdown+validação de motivo em dois
+  arquivos é exatamente o tipo de coisa que diverge no primeiro ajuste.
+  `FunnelScreen.tsx` ficou ~80 linhas mais curto e sem nenhuma mudança de
+  comportamento (confirmado clicando: arrastar, mover pelo menu, marcar como
+  perdida e desfazer continuam idênticos ao S4).
+  - `DealStageMenu` ganhou `revealOnHover` (default `false`). O kebab do
+    card do Funil só aparece no hover/foco do `.group/card` mais próximo —
+    correto ali, denso demais para ficar sempre visível. Reusar a MESMA
+    classe fora do card (na ficha, sem `.group/card` ancestral) deixaria o
+    botão invisível pra sempre em ponteiro fino — bug que só um clique de
+    verdade no navegador teria revelado; `tsc`/`build` não acusam "elemento
+    permanentemente `opacity-0`". `FunnelScreen` passa `revealOnHover`
+    explicitamente; a ficha do negócio usa o padrão (sempre visível).
+- **`src/components/app/NovaPropostaSheet.tsx` (novo)** — mesma extração,
+  para o outro pedido do PO: "atalho para Nova proposta já com este negócio
+  pré-selecionado, reaproveitando o fluxo de `NovaPropostaSheet`". Saiu de
+  dentro de `PropostasScreen.tsx` (onde só ela usava `Combobox`/
+  `listarNegocios`/`criarPropostaAPartirDoNegocio`) para cá, ganhando
+  `negocioFixo?: { id, title, contactName, destination }` — mesmo desenho de
+  `contatoFixo` em `NovoNegocioSheet` (que já existia): com `negocioFixo`, a
+  busca (`listarNegocios`) nem roda e o Combobox vira um rótulo fixo.
+  `PropostasScreen.tsx` importa a mesma Sheet sem `negocioFixo` — fluxo
+  antigo intacto, testado clicando (busca por negócio, criação, redirect
+  para o editor).
+- **Card Proposta — link ou atalho, sem `obterPropostaDoNegocio(dealId)` no
+  servidor.** `obterNegocio` não devolve propostas (não é dado do negócio).
+  Não existe ainda uma função de servidor que filtre proposta por `dealId`
+  — só `listarPropostas()` (sem filtro de negócio) e `listarNegocios()` (do
+  lado da proposta, não o inverso). Busquei `listarPropostas({
+  incluirArquivadas: true, limite: 200 })` e filtrei por `dealId` no
+  cliente — mesma doutrina que `deals.ts` já documenta para
+  `listarNegociosDoFunil`/`listarNegociosParados` (somar/filtrar em JS
+  depois de buscar, seguro no volume esperado — 10-15 vendas/mês por
+  tenant). Registrei em `docs/handoffs/nina-para-rafa.md` o pedido de um
+  filtro de verdade (`obterPropostaDoNegocio` ou `listarPropostas({
+  dealId })`) para quando isso deixar de ser trivial.
+- **Linha do tempo com rótulo, não enum cru.** `moverEstagioDoNegocio`
+  (deals.ts) grava `body` com o valor de BANCO — "Movido de proposta_enviada
+  para novo." — porque aquele arquivo não importa `COLUNAS_DO_FUNIL` (copy de
+  interface, não dele). Vi isso só na captura de tela em tema escuro
+  (`prefers-color-scheme: dark` + `reduced-motion` via Playwright) — no tema
+  claro o olho passa direto, mas em qualquer tema aquilo lido por uma agente
+  de verdade soa técnico demais para o produto todo (que trata "Enviada",
+  "Novo contato" etc. como o vocabulário oficial em toda outra tela).
+  `activityLabel()` reconstrói a frase a partir de `metadata.de`/`para`
+  (sempre presente nesse tipo de atividade) com `STAGE_LABEL` — o MESMO mapa
+  que o badge do cabeçalho usa — em vez de pedir ao Rafa pra mudar o que o
+  servidor grava (o `body` cru continua existindo, só não é o que a tela
+  mostra). `body` só entra como fallback se a metadata vier em formato
+  inesperado.
+- **Otimista com a MESMA física do Funil.** Mudar de estágio na ficha
+  atualiza `stage` e adiciona uma entrada sintética na linha do tempo NA
+  HORA (mesmo texto que um F5 traria de volta — `stageActivityBody` espelha
+  literalmente o que `moverEstagioDoNegocio` grava), sem esperar a resposta
+  do servidor; se o servidor recusar, tudo volta (`setNegocio(previous)`,
+  que reverte `stage` E a entrada sintética juntos, por serem o mesmo
+  objeto). Sucesso reconcilia com os campos que o servidor devolveu
+  (`stage`, `lostReason`, `closedAt`, `updatedAt` — não confio que o
+  otimista bateu 100% com o que o banco decidiu). "Marcar como perdida" e o
+  desfazer de QUALQUER movimento (inclusive reabrir um negócio que já estava
+  perdido, escolhendo outro estágio no menu) passam pela mesma `reopenTo` —
+  achei essa borda **testando de verdade**, não lendo o código: reabrir um
+  negócio perdido e depois clicar "Desfazer" precisa voltar para `perdido`
+  de novo, e isso exige motivo (regra do servidor) — `reopenTo` usa
+  `previous.lostReason` (que a ficha já tinha guardado) como motivo do
+  reabrir-desfeito, com "reaberto por engano" só como rede de segurança se o
+  motivo alguma hora vier nulo.
+- **Card do motivo da perda usa `tone="warn"`, não um vermelho mais forte.**
+  `Card` (`src/components/ui/Card.tsx`) não tem tom "danger" — só
+  `default/raised/inset/accent/warn`. O badge do cabeçalho usa `tone="danger"`
+  (Badge tem essa opção); o card explicativo abaixo dele usa `warn` de
+  propósito: é a diferença entre o SELO do estado (pode ser mais forte,
+  ocupa pouco espaço) e a SUPERFÍCIE que carrega uma frase inteira (mais
+  branda, para não gritar numa tela que a agente pode reabrir várias vezes
+  conferindo o motivo). Decisão consciente, não limitação não notada.
+
+### O que fica de fora, de propósito
+
+1. **Campos da viagem são leitura, não edição.** Não existe `atualizarNegocio`
+   no servidor (só `criarNegocio`/`moverEstagioDoNegocio`) — destino, pax,
+   datas e valor aparecem, mas não têm `TextAutoField`/`CentsAutoField`. Pedir
+   escrita é handoff para o Rafa, não algo que eu deveria inventar client-side
+   sem contrato de servidor.
+2. **Achei, não mexi:** o "+" da `TopBar` global (`AppShell.tsx`, visível em
+   TODA página autenticada) diz "Nova proposta" mas não tem `onClick`/
+   `onPointerDown` nenhum — botão morto, pré-existente, fora do que o PO
+   pediu nesta entrega. Achei durante o teste no navegador (dois botões
+   "Nova proposta" na mesma tela, um deles sem reação nenhuma ao toque) — é
+   exatamente o tipo de "clique que não faz nada" que motivou esta tarefa
+   toda, só que num lugar diferente. Reportado ao PO; não abri escopo pra
+   consertar sem pedido, já que decidir PARA ONDE aquele atalho global deveria
+   levar (sheet de negócio pré-selecionado? redirecionar pra `/propostas`?)
+   é decisão de produto, não só de fiação.
+
+### Verificação
+
+- `npx tsc --noEmit` — limpo.
+- `npx vitest run tests/design/guards.test.ts` — 6/6 verde.
+- `npm run build` — limpo, 17 rotas geram normalmente (`/funil/[id]` nova na
+  lista).
+- **Testado clicando de verdade**, Playwright contra `next dev` em `:3000`
+  (login `dev@zarpa.local`/`dev12345`, seed reaplicado com `npm run
+  db:migrate && npm run db:seed`, viewport 390×844 — os scripts eram
+  temporários, apagados do disco ao final, não fazem parte do repositório):
+  1. Funil → cliquei num card (`pointerdown`+`pointerup` sem arrastar, sem
+     usar `.click()` bruto pra confirmar que não conflita com o `drag`) →
+     abriu `/funil/[id]` com dado real: título, contato, Viagem, Proposta e
+     Linha do tempo presentes.
+  2. Negócio que JÁ tinha proposta → link abriu `/propostas/[id]/editar`
+     direto.
+  3. Negócio SEM proposta → "Nova proposta" abriu a Sheet com o negócio
+     FIXO (sem Combobox de busca) → "Criar e montar" → editor abriu → voltei
+     para a ficha → o link agora existe, sem precisar recarregar a página.
+  4. Mudei de estágio pelo menu da ficha → badge mudou na hora, toast
+     "Movido para X — Desfazer" apareceu, a linha do tempo ganhou uma
+     entrada nova sem F5.
+  5. "Marcar como perdida" pela ficha → motivo obrigatório → negócio some
+     do Funil (confirmado: o mesmo negócio buscado direto pela URL depois
+     continua acessível, só não aparece mais nas colunas) → reabri
+     escolhendo outro estágio no menu → cliquei "Desfazer" no toast →
+     voltou para "Perdida" com o MESMO motivo original → dei F5 de verdade
+     (não só estado do cliente) → o servidor concordava com tudo.
+  6. Conferi tema escuro + `prefers-reduced-motion: reduce` juntos
+     (`colorScheme`/`reducedMotion` do Playwright) — foi essa captura que
+     revelou o "proposta_enviada" cru na linha do tempo (item da seção
+     acima).
+
+Arquivos: `src/app/(app)/funil/[id]/page.tsx`,
+`src/app/(app)/funil/[id]/NegocioScreen.tsx`,
+`src/components/app/DealStageMenu.tsx`,
+`src/components/app/NovaPropostaSheet.tsx`,
+`src/app/(app)/funil/FunnelScreen.tsx` (editado),
+`src/app/(app)/propostas/PropostasScreen.tsx` (editado).

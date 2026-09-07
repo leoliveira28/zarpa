@@ -9,6 +9,7 @@ import { APP_NAME } from "@/lib/ui/brand";
 import { useTransitionPreset } from "@/lib/ui/motion";
 import { signOut } from "@/lib/auth/client";
 import { Button } from "@/components/ui/Button";
+import { NovaPropostaSheet } from "./NovaPropostaSheet";
 import { ThemeToggle } from "./ThemeToggle";
 import {
   ClientsIcon,
@@ -251,33 +252,60 @@ function SignOutButton() {
 
 /* -------------------------------------------------------------------- topo */
 
+/**
+ * O "+" do topo é o único CTA global do app — mesmo botão em toda tela
+ * autenticada. Abre `NovaPropostaSheet` SEM `negocioFixo`: o agente está
+ * em qualquer lugar (Hoje, Funil, Clientes) e precisa escolher o negócio
+ * de origem no Combobox (`listarNegocios`). Os outros dois pontos de
+ * entrada da mesma Sheet (PropostasScreen sem `negocioFixo`; ficha do
+ * negócio COM `negocioFixo`) são o mesmo desenho, só variando se a busca
+ * do negócio já está decidida ou não.
+ */
 function TopBar({ title }: { title: string }) {
+  const router = useRouter();
+  const [sheetOpen, setSheetOpen] = React.useState(false);
+
   return (
-    <header
-      className={cn(
-        "veil sticky top-0 z-30 border-b border-hairline",
-        "flex h-14 shrink-0 items-center gap-3 px-4 sm:px-6 lg:px-8",
-      )}
-    >
-      <span className="lg:hidden">
-        <Wordmark compact />
-      </span>
-
-      <h1 className="hidden truncate text-17 font-semibold text-ink lg:block">
-        {title}
-      </h1>
-
-      <div className="ml-auto flex items-center gap-2">
+    <>
+      <header
+        className={cn(
+          "veil sticky top-0 z-30 border-b border-hairline",
+          "flex h-14 shrink-0 items-center gap-3 px-4 sm:px-6 lg:px-8",
+        )}
+      >
         <span className="lg:hidden">
-          <ThemeToggle />
+          <Wordmark compact />
         </span>
-        <Button variant="primary" size="sm">
-          <PlusIcon className="size-4" />
-          <span className="hidden sm:inline">Nova proposta</span>
-          <span className="sr-only sm:hidden">Nova proposta</span>
-        </Button>
-      </div>
-    </header>
+
+        <h1 className="hidden truncate text-17 font-semibold text-ink lg:block">
+          {title}
+        </h1>
+
+        <div className="ml-auto flex items-center gap-2">
+          <span className="lg:hidden">
+            <ThemeToggle />
+          </span>
+          <Button
+            variant="primary"
+            size="sm"
+            onPointerDown={() => setSheetOpen(true)}
+          >
+            <PlusIcon className="size-4" />
+            <span className="hidden sm:inline">Nova proposta</span>
+            <span className="sr-only sm:hidden">Nova proposta</span>
+          </Button>
+        </div>
+      </header>
+
+      <NovaPropostaSheet
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        onCreated={(id) => {
+          setSheetOpen(false);
+          router.push(`/propostas/${id}/editar`);
+        }}
+      />
+    </>
   );
 }
 
