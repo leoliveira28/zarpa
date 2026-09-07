@@ -140,6 +140,25 @@ export {
   type FiltroAberturas,
 } from './aberturas';
 export {
+  listarNegociosDoFunil,
+  moverEstagioDoNegocio,
+  criarNegocio,
+  obterNegocio,
+  listarNegociosParados,
+  obterResumoDoPipeline,
+  COLUNAS_DO_FUNIL,
+  type DealStage,
+  type EstagioDeFunil,
+  type NegocioDoFunil,
+  type NegocioMovido,
+  type CriarNegocioInput,
+  type AtividadeDoNegocio,
+  type NegocioDetalhe,
+  type NegocioParado,
+  type ResumoDeParados,
+  type ResumoDoPipeline,
+} from './deals';
+export {
   converterPropostaEmVenda,
   listarVendas,
   obterVenda,
