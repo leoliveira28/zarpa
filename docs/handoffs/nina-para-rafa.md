@@ -1,5 +1,44 @@
 # Nina → Rafa
 
+## 0. BLOQUEIO DE BUILD (urgente) — `src/server/deals.ts` quebra `npm run build`
+
+Isto não é meu — não toquei em `src/server/**` — mas bloqueia a verificação
+que o PO pede no fim de toda tarefa (`npm run build` limpo), então registro
+aqui antes de mais nada. Reproduz na `main` de hoje, ANTES de qualquer edição
+minha (confirmei com `git stash` + `npm run build`, depois `git stash pop`):
+
+```
+Error: Failed to collect configuration for /p/[slug]
+  [cause]: Error: A "use server" file can only export async functions, found object.
+      at module evaluation (src/server/deals.ts:714:1)
+      at module evaluation (src/server/index.ts:142:1)
+      at module evaluation (src/app/p/[slug]/page.tsx:53:1)
+```
+
+Causa: `deals.ts` tem `'use server'` no topo do arquivo (linha 1) e exporta
+`COLUNAS_DO_FUNIL` como `const` — um array de objetos, não uma função. O
+Next.js valida em BUILD (não em `tsc --noEmit`, que passa limpo — só apareceu
+rodando `npm run build`) que todo export de um módulo `'use server'` seja
+`async function`; qualquer outra coisa (const, type, objeto) quebra a
+"Server Reference Manifest". `/p/[slug]/page.tsx` só quebra porque é a
+primeira rota que a coleta de páginas do Next atravessa importando `@/server`
+até `deals.ts` — mas o problema está no módulo, não naquela rota: qualquer
+página que importasse `@/server` reproduziria.
+
+`listarNegociosDoFunil`/`moverEstagioDoNegocio`/etc. (as seis actions, todas
+`async function`) não têm problema nenhum — é só a constante.
+
+Sugestão de correção (não fiz — é `src/server/**`, sua fronteira): mover
+`COLUNAS_DO_FUNIL` (e o tipo `EstagioDeFunil`, se quiser deixar tudo junto)
+para um arquivo SEM `'use server'` — por exemplo `src/server/dealsConstants.ts`
+— e reexportar de lá em `deals.ts`/`index.ts`. Como é só um array de 5 objetos
+literais sem lógica de servidor, não perde nada saindo do arquivo de actions.
+
+Até isso ser corrigido, `npm run build` não fica limpo para ninguém que tocar
+em `@/server` — reportei ao PO nas duas entregas do S4
+(`FunnelScreen.tsx`/`TodayScreen.tsx`) que dependem exatamente de
+`COLUNAS_DO_FUNIL`.
+
 ## 1. Falta a action de "aceitar opção" na proposta pública (S7)
 
 Montei `/p/[slug]` (`src/app/p/[slug]/`) inteira em cima do contrato de

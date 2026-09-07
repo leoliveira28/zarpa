@@ -1,5 +1,132 @@
 # Nina — status
 
+## S4 — o funil e o topo do Hoje saem do `sample-data.ts` e vão para o servidor
+
+### Entregue
+
+- **`src/app/(app)/funil/FunnelScreen.tsx`** — `listarNegociosDoFunil()` no
+  lugar de `PROPOSALS`, `COLUNAS_DO_FUNIL` no lugar de `STAGES` (fonte única
+  de vocabulário de estágio, importada de `@/server` — não mantive uma
+  segunda lista local, que era exatamente o problema que o comentário de
+  `deals.ts` documenta). Três estados de tela: skeleton (armação de coluna
+  igual à real, `Skeleton`/`SkeletonRow`, nunca spinner), erro (`Card` +
+  `FieldError` + botão com o texto de `correcao` do servidor) e o quadro
+  pronto.
+- **Motivo de perda, obrigatório.** `perdido` não é alvo de arrasto — o
+  contrato deixa isso explícito ("não existe drop target para perdido") e
+  fisicamente um `drop` não coleta texto no meio do gesto. A saída vive no
+  menu do card: "Marcar como perdida…" abre um `Dialog` (não `Sheet`) pedindo
+  o motivo. Escolhi `Dialog` porque a doutrina do próprio componente é
+  literal aqui — "modal fica para o que exige informação nova do usuário
+  antes de continuar", que é exatamente o caso, e não uma confirmação de
+  "tem certeza?" (isso seria proibido pelo CLAUDE.md). O botão de confirmar
+  fica desabilitado com menos de 3 caracteres (mesmo mínimo do servidor,
+  então a tela recusa antes de gastar uma chamada de rede), mas a validação
+  de verdade continua no servidor — se ele recusar por outro motivo, o erro
+  aparece dentro do próprio diálogo (`FieldError`, sem fechar), com o botão
+  de reenviar continuando ali do lado.
+- **A parte destrutiva de "perdida" segue a regra normal.** Depois que o
+  servidor confirma, o card some do quadro (não tem coluna para ele) e vira
+  um toast com **desfazer de 8s**, `tone="warn"` (para diferenciar visualmente
+  de um "movida com sucesso" comum, que usa `tone="ok"`) — só a CAPTAÇÃO do
+  motivo pediu modal; o resultado ainda é "aconteceu, e dá pra desfazer", não
+  "tem certeza?".
+- **Toda chamada ao servidor é otimista e reversível.** Arrastar ou usar o
+  menu atualiza a tela imediatamente (o toque não espera rede — é o critério
+  de aceite do sprint, "30 cards seguidos sem perder posição ao soltar") e só
+  confirma depois. Três caminhos de falha tratados sem deixar UI e banco
+  divergirem:
+  1. o `moverEstagioDoNegocio` inicial falha → o card volta sozinho para o
+     estágio anterior (mesmo `setItems` de reversão), toast de erro com o
+     `correcao` do servidor virando o botão da própria régua de aviso
+     (`toast.show({ action: { label: correcao, onClick: reload } } )` —
+     "erro diz o que aconteceu E oferece a correção, com o botão junto",
+     literalmente usando o slot de ação do Toast para isso);
+  2. o "Desfazer" de um movimento normal ou de uma perda chama o servidor de
+     novo para voltar ao estágio anterior; se ESSA chamada falhar (raro — rede
+     caiu duas vezes seguidas), a tela não tenta adivinhar o estado: chama
+     `reload()` e busca o quadro inteiro de novo, current sempre vence a
+     otimismo;
+  3. `criarNegocio`/detalhe de negócio não entraram nesta tela — não fazem
+     parte das duas entregas pedidas, e o produto ainda não tem um seletor de
+     contato em lugar nenhum para alimentar `criarNegocio(contactId, ...)`
+     (verifiquei: não existe hoje). Não inventei essa UI para não abrir
+     escopo por conta própria; fica registrado para quando alguém pedir.
+- **O selo "abriu o link" saiu do card do funil.** `NegocioDoFunil` não
+  carrega `opens`/`lastOpenHours` — é sinal de PROPOSTA, e `contactId` não é
+  1:1 com `dealId` (um contato pode ter negócios diferentes com propostas
+  diferentes). Cruzar por contato arriscava colar o selo de abertura de uma
+  proposta no card de OUTRO negócio do mesmo cliente — pior que não ter selo
+  nenhum, porque mentiria com convicção. `Signal` ficou só com "parada há N
+  dias" / "hoje".
+- **Teto de largura do valor do card é dinâmico agora**, não uma constante
+  tirada do maior valor de exemplo (`CARD_MONEY_CEILING = 5_940_000` da v2).
+  `cardMoneyCeiling = Math.max(piso, ...valores reais)` — mesmo raciocínio que
+  já existia para a soma de coluna, só que por card. Sem isso, o primeiro
+  negócio real acima de R$ 59.400 quebraria o alinhamento da coluna de
+  dígitos, que é a coisa que este produto MENOS pode deixar acontecer.
+- **`src/app/(app)/hoje/TodayScreen.tsx`** — os dois números do topo agora
+  vêm de `obterResumoDoPipeline()` e a seção "Paradas há mais de 7 dias" de
+  `listarNegociosParados()`, cada um com seu próprio ciclo loading/ready/error
+  (não reaproveitei o `loading` combinado de tarefas+aberturas que a v1 usava
+  para gatilhar o skeleton da seção de paradas — era um acoplamento
+  acidental de três fontes de dado que não têm nada a ver umas com as
+  outras). Erro no card de número não derruba a tela inteira: virou um
+  componente próprio (`PipelineStat`) que troca o valor pela mensagem +
+  botão de correção SÓ naquele cartão, os outros três blocos da tela seguem
+  vivos.
+  - O texto "· nunca aberta" da linha de parada saiu — lia
+    `proposal.opens === 0` de um dado de exemplo; `NegocioParado` não carrega
+    esse número (mesmo motivo do selo do funil).
+- **`src/lib/ui/sample-data.ts` apagado.** Depois de tirar os dois últimos
+  consumidores (`PROPOSALS`/`STAGES`/`stalled`/`sumCents`, só usados por estas
+  duas telas), rodei uma busca por todo `src/` e não sobrou NENHUM import do
+  arquivo — `ContatoAmostra`/`CONTATOS`/`ViajanteAmostra`/etc. também já não
+  tinham consumidor (a tela de Clientes migrou para `@/server` numa sessão
+  anterior e ninguém tirou o arquivo). O próprio comentário de topo do
+  arquivo já dizia o que fazer nesse dia: "Quando o backend chegar, isto sai
+  inteiro. Nenhum componente importa daqui." — cumpri a própria instrução
+  dele.
+
+### Decisão que exigiu argumentar com o próprio Dialog
+
+Cogitei usar `CardAction` (texto) para as duas ações do rodapé do diálogo de
+perda, seguindo a doutrina do Card ("duas ações, a segunda vira texto"). Mas
+o `KitchenSink.tsx` já registra o padrão real para `Dialog` (diferente de
+`Card`): ação principal em `Button`, cancelar em `CardAction` — copiei
+exatamente isso (`DialogClose asChild` envolvendo `CardAction`) em vez de
+inventar um terceiro padrão com `Button variant="ghost"`. `variant="danger"`
+no botão de confirmar, não `primary`: é a única cor não-accent reservada para
+ação que tira algo do fluxo normal, e bate com o próprio rótulo ("Marcar como
+perdida").
+
+### Bloqueio de fora da minha fronteira
+
+`npm run build` **não fica limpo** — falha em `/p/[slug]` porque
+`src/server/deals.ts` tem `'use server'` no topo e exporta `COLUNAS_DO_FUNIL`
+como `const` (não função `async`), o que o Next.js rejeita em build (não em
+`tsc --noEmit`, que passa limpo). Confirmei com `git stash` que o erro já
+existia ANTES de qualquer edição minha — não é regressão desta tarefa. Não é
+`src/server/**`, não toquei; registrei o diagnóstico completo e a correção
+sugerida (mover a constante para um arquivo sem `'use server'`) em
+`docs/handoffs/nina-para-rafa.md`, item 0.
+
+### Verificação
+
+- `npx tsc --noEmit` — limpo.
+- `npm run build` — **não limpo**, ver bloqueio acima (fora da minha
+  fronteira, reportado).
+- `npx vitest run tests/design/guards.test.ts` — 6/6 verde.
+- `npx eslint` nos dois arquivos: 5 erros de `react-hooks/set-state-in-effect`
+  (chamar `setStatus` de sincronicamente dentro do `useEffect` antes do
+  `.then`). Não é regressão — o MESMO padrão já reprovava no arquivo antes da
+  minha edição (`tasksStatus`/`openedStatus`, 2 erros pré-existentes,
+  confirmado com `git stash`); segui a convenção já estabelecida no arquivo
+  em vez de inventar uma terceira forma de disparar o fetch. `eslint` não
+  está na lista de verificação obrigatória desta tarefa — registro para quem
+  decidir se vale abrir uma limpeza maior (afetaria também `VendaScreen.tsx`
+  e outras telas com o mesmo formato).
+
 ## S9 — o dinheiro: `/vendas`, `/financeiro`, e o botão que liga as duas
 
 ### Entregue

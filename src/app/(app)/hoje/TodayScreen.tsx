@@ -5,15 +5,18 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   concluirTarefa,
   listarAberturasRecentes,
+  listarNegociosParados,
   listarTarefasDeHoje,
+  obterResumoDoPipeline,
   type AberturaProposta,
+  type ResumoDeParados,
+  type ResumoDoPipeline,
   type TarefaDeHoje,
 } from "@/server";
 import { cn } from "@/lib/ui/cn";
 import { useTransitionPreset } from "@/lib/ui/motion";
 import { useDeferredDelete } from "@/lib/ui/useDeferredDelete";
 import { formatRelativeShort, formatTime } from "@/lib/ui/format";
-import { PROPOSALS, stalled, sumCents } from "@/lib/ui/sample-data";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, SectionHeading } from "@/components/ui/Card";
@@ -46,10 +49,18 @@ import {
    conteúdo e a ordem são os mesmos: quem trabalha no celular não recebe uma
    versão pior.
 
-   "Tarefas de hoje" e "Abriram sua proposta" já são dado real
-   (`listarTarefasDeHoje` / `listarAberturasRecentes`, S8). "Paradas há mais
-   de 7 dias" e os dois números do topo continuam com o exemplo em memória —
-   o serviço de pipeline/deals ainda não existe do lado do servidor.
+   As quatro seções são dado real: "Tarefas de hoje" e "Abriram sua proposta"
+   desde o S8 (`listarTarefasDeHoje` / `listarAberturasRecentes`); "Paradas há
+   mais de 7 dias" e os dois números do topo desde o S4
+   (`listarNegociosParados` / `obterResumoDoPipeline`, `src/server/deals.ts`).
+   Nenhuma tela mais importa de `src/lib/ui/sample-data.ts`.
+
+   O selo "· nunca aberta" que a v1 mostrava na linha de "Paradas" saiu: ele
+   lia `proposal.opens === 0` de um dado de exemplo. `NegocioParado` (a forma
+   real) não carrega esse número — abertura é sinal de PROPOSTA, e um negócio
+   pode ter zero, uma ou várias propostas ao longo da vida; não haveria um
+   "abriu"/"não abriu" único para o card mostrar sem escolher qual proposta
+   ele representa. Documentado em docs/status/nina.md.
    ========================================================================== */
 
 type Status = "loading" | "ready" | "error";
@@ -118,16 +129,65 @@ export function TodayScreen() {
     };
   }, [openedReload]);
 
-  const parked = React.useMemo(() => stalled(), []);
-  const pipelineCents = React.useMemo(
-    () => sumCents(PROPOSALS.filter((p) => p.stage !== "fechada")),
+  const [pipelineStatus, setPipelineStatus] = React.useState<Status>("loading");
+  const [pipeline, setPipeline] = React.useState<ResumoDoPipeline | null>(null);
+  const [pipelineError, setPipelineError] = React.useState<{
+    mensagem: string;
+    correcao?: string;
+  } | null>(null);
+  const [pipelineReload, setPipelineReload] = React.useState(0);
+  const retryPipeline = React.useCallback(
+    () => setPipelineReload((n) => n + 1),
     [],
   );
-  const closedCents = React.useMemo(
-    () => sumCents(PROPOSALS.filter((p) => p.stage === "fechada")),
+
+  React.useEffect(() => {
+    let active = true;
+    setPipelineStatus((current) => (current === "ready" ? current : "loading"));
+    void obterResumoDoPipeline().then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setPipelineStatus("error");
+        setPipelineError({ mensagem: result.mensagem, correcao: result.correcao });
+        return;
+      }
+      setPipeline(result.data);
+      setPipelineStatus("ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, [pipelineReload]);
+
+  const [parkedStatus, setParkedStatus] = React.useState<Status>("loading");
+  const [parked, setParked] = React.useState<ResumoDeParados | null>(null);
+  const [parkedError, setParkedError] = React.useState<{
+    mensagem: string;
+    correcao?: string;
+  } | null>(null);
+  const [parkedReload, setParkedReload] = React.useState(0);
+  const retryParked = React.useCallback(
+    () => setParkedReload((n) => n + 1),
     [],
   );
-  const loading = tasksStatus === "loading" && openedStatus === "loading";
+
+  React.useEffect(() => {
+    let active = true;
+    setParkedStatus((current) => (current === "ready" ? current : "loading"));
+    void listarNegociosParados().then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setParkedStatus("error");
+        setParkedError({ mensagem: result.mensagem, correcao: result.correcao });
+        return;
+      }
+      setParked(result.data);
+      setParkedStatus("ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, [parkedReload]);
 
   // `concluirTarefa` não tem par de reabertura no servidor — a tarefa some da
   // tela na hora (parece instantâneo) e só é marcada concluída de verdade se
@@ -177,9 +237,10 @@ export function TodayScreen() {
   return (
     <div className="flex flex-col gap-8">
       <Greeting
-        pipelineCents={pipelineCents}
-        closedCents={closedCents}
-        loading={loading}
+        pipeline={pipeline}
+        status={pipelineStatus}
+        error={pipelineError}
+        onRetry={retryPipeline}
       />
 
       <section aria-labelledby="hoje-tarefas">
@@ -339,55 +400,63 @@ export function TodayScreen() {
       <section aria-labelledby="hoje-paradas">
         <SectionHeading
           action={
-            <span className="flex items-baseline gap-1 text-13 text-muted">
-              <Money
-                cents={parked.length > 0 ? sumCents(parked) : 0}
-                size="13"
-                tone="muted"
-                reserveFor={30_000_000}
-              />
-              parados
-            </span>
+            parkedStatus === "ready" ? (
+              <span className="flex items-baseline gap-1 text-13 text-muted">
+                <Money
+                  cents={parked?.totalCents ?? 0}
+                  size="13"
+                  tone="muted"
+                  reserveFor={30_000_000}
+                />
+                parados
+              </span>
+            ) : null
           }
         >
           <span id="hoje-paradas">Paradas há mais de 7 dias</span>
         </SectionHeading>
 
-        {loading ? (
+        {parkedStatus === "loading" ? (
           <Card className="flex flex-col gap-4 p-4">
             {[0, 1].map((row) => (
               <SkeletonRow key={row} />
             ))}
           </Card>
-        ) : parked.length === 0 ? (
+        ) : parkedStatus === "error" ? (
+          <Card className="flex flex-col items-start gap-3 p-4">
+            <FieldError>{parkedError?.mensagem}</FieldError>
+            <Button variant="secondary" size="sm" onClick={retryParked}>
+              {parkedError?.correcao ?? "Tentar de novo"}
+            </Button>
+          </Card>
+        ) : !parked || parked.itens.length === 0 ? (
           <EmptyState
             compact
-            title="Nenhuma proposta esquecida"
-            description="Toda proposta sem resposta há 7 dias aparece aqui, com o botão de cobrar junto."
+            title="Nenhum negócio esquecido"
+            description="Todo negócio sem movimentação há 7 dias aparece aqui, com o botão de cobrar junto."
           />
         ) : (
           <Card tone="warn" className="overflow-hidden">
             <ul className="divide-y divide-warn/20">
-              {parked.map((proposal) => (
+              {parked.itens.map((deal) => (
                 <li
-                  key={proposal.id}
+                  key={deal.id}
                   className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3"
                 >
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-15 font-medium text-ink">
-                      {proposal.client}
+                      {deal.contactName}
                     </span>
                     <span className="flex items-center gap-1.5 text-13 text-warn-soft-ink">
                       <ClockIcon className="size-3.5 shrink-0" />
-                      parada há {proposal.idleDays} dias
-                      {proposal.opens === 0 ? " · nunca aberta" : null}
+                      parada há {deal.diasParado} dias
                     </span>
                   </span>
 
                   <Money
-                    cents={proposal.cents}
+                    cents={deal.valueCents}
                     size="15"
-                    reserveFor={5_940_000}
+                    reserveFor={parked.totalCents}
                   />
 
                   <Button
@@ -396,7 +465,7 @@ export function TodayScreen() {
                     onClick={() =>
                       toast.show({
                         title: "Mensagem preparada",
-                        description: `Follow-up de ${proposal.client} pronto para enviar no WhatsApp.`,
+                        description: `Follow-up de ${deal.contactName} pronto para enviar no WhatsApp.`,
                         tone: "ok",
                       })
                     }
@@ -447,13 +516,15 @@ function TaskSourceIcon({
 }
 
 function Greeting({
-  pipelineCents,
-  closedCents,
-  loading,
+  pipeline,
+  status,
+  error,
+  onRetry,
 }: {
-  pipelineCents: number;
-  closedCents: number;
-  loading: boolean;
+  pipeline: ResumoDoPipeline | null;
+  status: Status;
+  error: { mensagem: string; correcao?: string } | null;
+  onRetry: () => void;
 }) {
   const now = new Date();
   const hour = now.getHours();
@@ -487,27 +558,67 @@ function Greeting({
 
       {/* Dois números, não seis. Painel com muita métrica não informa, decora. */}
       <div className="grid grid-cols-2 gap-3">
-        <Card className="p-4">
-          <p className="text-13 font-medium text-muted">Em negociação</p>
-          <Money
-            cents={loading ? null : pipelineCents}
-            size="20"
-            reserveFor={30_000_000}
-            className="mt-1"
-          />
-        </Card>
-        <Card className="p-4">
-          <p className="text-13 font-medium text-muted">Fechado no mês</p>
-          <Money
-            cents={loading ? null : closedCents}
-            size="20"
-            tone="ok"
-            reserveFor={30_000_000}
-            className="mt-1"
-          />
-        </Card>
+        <PipelineStat
+          label="Em negociação"
+          cents={pipeline?.pipelineAbertoCents ?? null}
+          status={status}
+          error={error}
+          onRetry={onRetry}
+        />
+        <PipelineStat
+          label="Fechado no mês"
+          cents={pipeline?.fechadoNoMesCents ?? null}
+          tone="ok"
+          status={status}
+          error={error}
+          onRetry={onRetry}
+        />
       </div>
     </header>
+  );
+}
+
+/**
+ * Um dos "dois números do topo". Erro aqui não vira uma tela de erro à
+ * parte — o valor deste cartão especificamente é substituído pela mensagem +
+ * o botão de correção, sem derrubar o resto do Hoje (tarefas e aberturas têm
+ * seu próprio ciclo de carregamento, independente deste).
+ */
+function PipelineStat({
+  label,
+  cents,
+  tone = "default",
+  status,
+  error,
+  onRetry,
+}: {
+  label: string;
+  cents: number | null;
+  tone?: "default" | "ok";
+  status: Status;
+  error: { mensagem: string; correcao?: string } | null;
+  onRetry: () => void;
+}) {
+  return (
+    <Card className="p-4">
+      <p className="text-13 font-medium text-muted">{label}</p>
+      {status === "error" ? (
+        <div className="mt-1 flex flex-col items-start gap-1.5">
+          <p className="text-13 text-danger">{error?.mensagem}</p>
+          <Button variant="quiet" size="sm" onClick={onRetry} className="-ml-2.5">
+            {error?.correcao ?? "Tentar de novo"}
+          </Button>
+        </div>
+      ) : (
+        <Money
+          cents={status === "ready" ? cents : null}
+          size="20"
+          tone={tone}
+          reserveFor={30_000_000}
+          className="mt-1"
+        />
+      )}
+    </Card>
   );
 }
 
