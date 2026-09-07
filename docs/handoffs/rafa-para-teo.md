@@ -587,3 +587,63 @@ ou teste a lógica importando `processarWebhookAsaas` direto (sem a rota).
 - Sem trial/dunning — decisão de produto em aberto.
 - Sem integração de checkout real (cartão/Pix/boleto via Asaas) — pós-v1; em dev o
   `billingType` só grava intenção.
+
+---
+
+## S12 — Testes de integrações de fornecedor (Wooba + Infotravel, cotação só)
+
+Tabela nova: `integrations` (migration `drizzle/0011_integracoes.sql`, idx 11 no
+`_journal.json`). RLS na mesma migration — `ENABLE` + `FORCE` + policy
+`integrations_isolation` `USING`/`WITH CHECK` contra
+`nullif(current_setting('app.tenant_id', true), '')::uuid`. Mesmo padrão de
+`sales_isolation` (`0007`) e `deals_isolation` (`0000`).
+
+### O que testar
+
+1. **RLS de `integrations`** — um tenant não vê as integrações de outro. A
+   varredura por catálogo (se você tiver uma que lista tabelas com `tenant_id`)
+   deve pegar `integrations`. Se não, confira que `tenant-isolation.test.ts`
+   vê a tabela. Crie duas tenants, cada uma com uma `integrations` row,
+   faça `listarIntegracoes()` em cada e confira que só vê a sua.
+2. **Credenciais encriptadas** — `credentialsCiphertext` é AES-256-GCM
+   (`encryptPII` de `src/lib/crypto/pii.ts`). Teste que lê a coluna direto no
+   banco (via `unsafeSqlWithoutTenant` ou psql) volta o envelope
+   `zp1.<key_id>....`, **não** o plaintext. O plaintext nunca aparece em log
+   nem na resposta de `listarIntegracoes` (`IntegracaoResumo` não tem
+   `credentials`).
+3. **`keyId` gravado** — a coluna `key_id` tem o `activeKeyId()` do momento
+   da escrita. Confira que `criarIntegracao` grava `keyId` != null e != ''.
+4. **Modo dev sem credencial** — `buscarHoteis`/`obterCotacao` sem
+   integração ativa devolvem `{ exemplo: true, hoteis: [...] }` /
+   `{ exemplo: true, cotacao: {...} }`. Os dados de exemplo são 3 hotéis
+   fake (`ex-wooba-*` / `ex-infotravel-*`). Confira que `exemplo: true`.
+5. **Modo real com credencial** — com uma integração ativa, `buscarHoteis`
+   chama a API. Como não há credencial real provisionada (sem
+   `WOOBA_API_KEY`/`INFOTRAVEL_API_KEY` no env, e a API real não está
+   disponível), teste que o adapter lança `ServiceError` com `correcao` ao
+   falhar (timeout/401). Pode mockar o `fetch` ou usar uma credencial fake
+   que vai falhar — o adapter trata 401 e timeout como `ServiceError`.
+6. **Idempotência de cotação** — `obterCotacao` chamada duas vezes com o
+   mesmo input devolve a mesma cotação (não é cache — é que o adapter é
+   stateless e determinístico em modo exemplo). Em modo real, cada chamada
+   vai à API; idempotência é da API, não nossa.
+7. **`criarIntegracao` valida** — `provider` fora do enum
+   (`'wooba'`/`'infotravel'`) → `DADOS_INVALIDOS`. `label` < 2 ou > 100 →
+   `DADOS_INVALIDOS`. `credentials` vazio `{}` → `DADOS_INVALIDOS`.
+8. **`removerIntegracao` de outro tenant** — tentar remover a integração
+   de outro tenant → `NAO_ENCONTRADO` (a query filtra por `tenantId`, e a
+   policy de RLS barra anyway). Confira que não deleta a row do outro tenant.
+9. **`integracaoId` inexistente** — `buscarHoteis({ integracaoId: <uuid
+   inexistente> })` → `NAO_ENCONTRADO` ("Essa integração não existe ou está
+   desativada").
+10. **`integracaoId` de outro tenant** — passar o id de uma integração de
+    outro tenant → `NAO_ENCONTRADO` (RLS barra; a query devolve zero).
+
+### O que NÃO tem (não teste o que não existe)
+
+- **Sem reserva real** — cotação só. Nenhum teste de booking/cancelamento.
+- **Sem toggle de `isActive`** — não há action de ativar/desativar.
+- **Sem webhook** — Wooba/Infotravel não têm webhook (só cotação, pull).
+- **A credencial nunca volta** — `listarIntegracoes` não devolve
+  `credentials`. Não teste que o ciphertext aparece na resposta — não
+  aparece. Teste que NÃO aparece.

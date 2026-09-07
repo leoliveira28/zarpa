@@ -1054,3 +1054,122 @@ const propostas: PropostaResumo[] = r.data;
   (`zarpa-db`, porta 5432) estava de pé.
 - Não toquei em `src/components`, `src/styles`, `tests/`, `package.json` — fronteira
   respeitada.
+
+---
+
+## 2026-09-07 — S12: Integrações de fornecedor (Wooba + Infotravel), cotação só
+
+### Pronto
+
+- **Migration `drizzle/0011_integracoes.sql`** (idx 11 no `_journal.json`):
+  tabela `integrations` com `tenant_id`, `provider` (CHECK `in ('wooba',
+  'infotravel')`), `label`, `credentials_ciphertext`, `key_id`, `is_active`,
+  `created_at`, `updated_at`. RLS `ENABLE` + `FORCE` + policy
+  `integrations_isolation` `USING`/`WITH CHECK` contra
+  `nullif(current_setting('app.tenant_id', true), '')::uuid` — mesmo padrão
+  de `sales_isolation` (`0007`). Índices: `(tenant_id, provider)`,
+  `(tenant_id, is_active) WHERE is_active`, `(tenant_id, created_at desc)`.
+- **Schema `src/db/schema/integrations.ts`** — Drizzle `pgTable` com `text()`
+  + `check()` para `provider` (mesmo padrão de `plans.slug`/`subscriptions.status`).
+  Exportado de `src/db/schema/index.ts`.
+- **Adapters `src/lib/integrations/{types,wooba,infotravel,index}.ts`** —
+  interface `FornecedorAdapter` com `buscarHoteis`/`obterCotacao` que recebem
+  `credencial: Credencial | null`. `null` → dados de exemplo (3 hotéis fake
+  determinísticos por destino). Credencial presente → fetch à API real com
+  timeout de 12s; 401/timeout/erro vira `ServiceError` com `correcao`. Factory
+  `obterAdapter(provider)` devolve o adapter singleton.
+- **Actions `src/server/integrations.ts`** — `listarIntegracoes()`,
+  `criarIntegracao({provider,label,credentials})`, `removerIntegracao(id)`,
+  `buscarHoteis(...)`, `obterCotacao(...)`. Todas `'use server'`, `async
+  function`, `requireAuthContext()` para tenantId, `withTenant` para queries,
+  zod para validar, `comoResultado` para envelope.
+- **`.env.example`** — `WOOBA_API_URL`, `WOOBA_API_KEY`, `INFOTRAVEL_API_URL`,
+  `INFOTRAVEL_API_KEY` (URLs do produto; API keys no env só como
+  fallback/documento — o adapter usa a credencial do banco, não do env).
+- **Exports em `src/server/index.ts`** — actions + tipos
+  (`Provider`, `IntegracaoResumo`, `HotelBusca`, `Cotacao`, `BuscarHoteisInput`,
+  `CotacaoInput`, `ResultadoBuscaHoteis`, `ResultadoCotacao`,
+  `CriarIntegracaoInput`, `Credencial`).
+
+### Decisões que tomei sozinha
+
+1. **Encriptação de credenciais**: `encryptPII(JSON.stringify(credentials),
+   { context: 'integrations:${tenantId}' })` — reutiliza `src/lib/crypto/pii.ts`
+   (AES-256-GCM, mesma infra de CPF/passaporte). O `context` amarra o ciphertext
+   ao tenant no AAD: copiar o ciphertext para outro tenant não descriptografa.
+   `keyId` da coluna é `activeKeyId()` no momento da escrita (redundante com o
+   `key_id` embutido no envelope, mas facilita rotação sem parsear o
+   envelope). Decripta com `decryptPII(envelope, { context: 'integrations:
+   ${tenantId}' })` — o `context` precisa bater ou falha.
+
+2. **Modo dev "exemplo vs real"**: o adapter recebe `credencial: Credencial |
+   null`. `null` → dados de exemplo (determinísticos por destino/hotelId, para
+   UI de teste estável). A action decide: sem `integracaoId` e sem integração
+   ativa → `null` (exemplo). Com `integracaoId` ou integração ativa → decripta
+   e passa a credencial real. O resultado vem envolto em
+   `ResultadoBuscaHoteis`/`ResultadoCotacao` com `exemplo: boolean` — a UI
+   sinaliza "cotação de exemplo" quando `true`. Nunca mistura: se a credencial
+   existe mas a API falha, é `ServiceError` (não vira exemplo silencioso).
+
+3. **Fetch fora de `withTenant`**: a credencial é lida/decriptada dentro de
+   `withTenant` (RLS precisa de `app.tenant_id`), mas o fetch à API externa fica
+   FORA da transação — `withTenant` devolve `{ credencial, provider }` e o
+   adapter é chamado depois. Não segurar conexão do pool durante I/O externo.
+
+4. **`integracaoId` opcional em `buscarHoteis`/`obterCotacao`**: se ausente, a
+   action usa a primeira integração ativa do tenant. Se nenhuma ativa, modo
+   exemplo. Se fornecido, resolve aquela específica (lança `NAO_ENCONTRADO` se
+   não existe ou está inativa). Isso cobre o caso dev (sem cadastro, UI chama
+   sem `integracaoId` e recebe exemplo) e o caso prod (com cadastro, UI passa
+   o id da integração escolhida).
+
+5. **`removerIntegracao` é delete físico** — cotação é efêmera, não há FK que
+   referencie `integrations`. Se um dia persistirmos cotação como row, vira
+   `ON DELETE SET NULL` (documentado no SQL).
+
+6. **`provider` como text + CHECK**, não pgEnum — mesmo padrão de `plans.slug`
+   (`0009`) e `subscriptions.status` (`0000`). O enum vive no SQL e no zod das
+   actions, não no gerador do Drizzle.
+
+### Riscos
+
+- **Shape da API real Wooba/Infotravel não verificado**: não há credencial
+  provisionada nem doc oficial em mãos. O adapter tem um shape plausível
+  (`GET /v1/hotels/search` com query params + header `Authorization: Bearer`
+  para Wooba, `X-API-Key` para Infotravel). Quando a doc real chegar, ajustar
+  path/headers em `wooba.ts`/`infotravel.ts` — o resto (encriptação, RLS,
+  action) não mexe. **Risco baixo**: em dev/CI sem credencial, só o modo
+  exemplo roda.
+- **`Credencial` é `Record<string, string>`** — genérico porque cada provider
+  tem o seu shape. O adapter faz o cast (`apiKey`/`agencyId` para Wooba,
+  `apiKey`/`clientId` para Infotravel). Se o agente cadastrar a credencial
+  com a chave errada (ex.: `token` em vez de `apiKey`), o adapter tenta
+  `apiKey`/`api_key`/`token` — tolerante, mas não infalível. A UI da Nina
+  precisa dos campos certos por provider (documentado no handoff).
+- **`Cotacao.custoCents` é custo, não preço** — `HotelBusca.precoCents` é um
+  preço de referência da busca, mas a `Cotacao` detalhada tem `custoCents` (o
+  custo). O `priceCents` que o agente cobra é decisão dele. A Nina precisa
+  saber disso para não preencher `priceCents` com `custoCents` (documentado no
+  handoff).
+
+### Verificação
+
+- `npx tsc --noEmit`: limpo.
+- `npm run build`: limpo. Nenhuma rota nova (a UI `/integracoes` é a Nina).
+- `npm run db:migrate`: 23 tabelas em public (antes 22), todas com RLS
+  ENABLE + FORCE. A migration `0011` aplicou limpa.
+- `npx tsx scripts/check/known-failures.ts`: 409 testes, allowlist com 0
+  vermelhos, "Portão ok". Sem regressão no isolamento multi-tenant (S1).
+- Não toquei em `src/components`, `src/styles`, `src/app`, `tests/`,
+  `package.json` — fronteira respeitada. Handoffs para nina + teo escritos.
+
+### O que precisa dos outros
+
+- **Nina**: UI de `/integracoes` (cadastrar contas, label + credenciais password-
+  type, nunca mostrar a credencial de volta) e o fluxo "Buscar cotação" no
+  construtor de proposta (botão que abre seletor de integração + busca por
+  destino/datas/pax, preenche `costCents` da opção com `Cotacao.custoCents`).
+  Handoff em `docs/handoffs/rafa-para-nina.md`.
+- **Téo**: testes de RLS de `integrations`, credenciais encriptadas (ciphertext
+  não em log nem texto plano), modo dev sem credencial, idempotência de
+  cotação. Handoff em `docs/handoffs/rafa-para-teo.md`.

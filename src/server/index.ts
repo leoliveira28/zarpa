@@ -212,3 +212,20 @@ export {
   type TrocarPlanoInput,
 } from './billing';
 export { verificarWebhookAsaas } from '@/lib/asaas/client';
+export {
+  listarIntegracoes,
+  criarIntegracao,
+  removerIntegracao,
+  buscarHoteis,
+  obterCotacao,
+  type Provider,
+  type Credencial,
+  type BuscarHoteisInput,
+  type HotelBusca,
+  type CotacaoInput,
+  type Cotacao,
+  type ResultadoBuscaHoteis,
+  type ResultadoCotacao,
+  type IntegracaoResumo,
+  type CriarIntegracaoInput,
+} from './integrations';

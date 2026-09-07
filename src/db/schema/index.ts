@@ -26,3 +26,4 @@ export * from './money';
 export * from './platform';
 export * from './imports';
 export * from './sales';
+export * from './integrations';

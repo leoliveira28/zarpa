@@ -1104,3 +1104,136 @@ A agente precisa ver e gerenciar sua assinatura. Sugestão de rota: `/cobranca` 
    (`npm run db:up`).
 4. **NÃO teste clicando** — o PO (Leandro) clica. Reporte o passo a passo em
    `docs/status/nina.md`.
+
+---
+
+## S12 — UI de integrações (Wooba + Infotravel, cotação só)
+
+O agente cadastra a SUA conta de Wooba/Infotravel e, dentro do construtor de
+proposta, **busca** hotéis/pacotes reais em vez de digitar o custo/preço à mão.
+Cotação só — sem reserva real (booking é o "motor de reservas", fora do v1).
+
+### Actions (assinaturas exatas, importáveis de `@/server`)
+
+```ts
+import {
+  listarIntegracoes,
+  criarIntegracao,
+  removerIntegracao,
+  buscarHoteis,
+  obterCotacao,
+  type Provider,
+  type IntegracaoResumo,
+  type HotelBusca,
+  type Cotacao,
+  type BuscarHoteisInput,
+  type CotacaoInput,
+  type ResultadoBuscaHoteis,
+  type ResultadoCotacao,
+  type CriarIntegracaoInput,
+} from '@/server';
+```
+
+- `listarIntegracoes(): Promise<ServiceResult<IntegracaoResumo[]>>` — lista as
+  contas do tenant (ativas + inativas), **sem ciphertext**.
+- `criarIntegracao({ provider, label, credentials }): Promise<ServiceResult<IntegracaoResumo>>`
+  — `provider: 'wooba' | 'infotravel'`, `label: string` (2–100),
+  `credentials: Record<string, string>` (ex.: `{ apiKey: '...' }`). Encripta e
+  grava. Devolve resumo sem credencial.
+- `removerIntegracao(id: string): Promise<ServiceResult<null>>` — delete físico.
+- `buscarHoteis({ integracaoId?, destino, checkIn, checkOut, paxAdults, paxChildren? }): Promise<ServiceResult<ResultadoBuscaHoteis>>`
+- `obterCotacao({ integracaoId?, hotelId, checkIn, checkOut, paxAdults, paxChildren? }): Promise<ServiceResult<ResultadoCotacao>>`
+
+### Shapes
+
+```ts
+type IntegracaoResumo = {
+  id: string;
+  provider: 'wooba' | 'infotravel';
+  label: string;
+  isActive: boolean;
+  createdAt: Date;
+};
+
+type HotelBusca = {
+  id: string;
+  nome: string;
+  destino: string;
+  categoriaEstrelas?: number;
+  thumbnailUrl?: string;
+  precoCents: number;   // em centavos
+  moeda: string;        // 'BRL'
+  disponivel: boolean;
+};
+
+type Cotacao = {
+  hotelId: string;
+  nome: string;
+  custoCents: number;   // em centavos — é o COST, não o price
+  moeda: string;
+  checkIn: string;
+  checkOut: string;
+  detalhes?: string;
+};
+
+// Wrapper do resultado — `exemplo: true` quando veio do modo dev:
+type ResultadoBuscaHoteis = { hoteis: HotelBusca[]; exemplo: boolean };
+type ResultadoCotacao = { cotacao: Cotacao; exemplo: boolean };
+```
+
+### Tela `/integracoes` (cadastrar contas)
+
+- Listar as integrações do tenant com `listarIntegracoes()`.
+- Formulário de cadastro: select de `provider` ('wooba' | 'infotravel'), campo
+  `label` (2–100), campos de `credentials` (depende do provider — para Wooba:
+  `apiKey`; para Infotravel: `apiKey` + `clientId`). Os campos de credencial
+  são **password-type** e **nunca são devolvidos** na listagem
+  (`IntegracaoResumo` não tem `credentials`).
+- Remover com `removerIntegracao(id)` — delete físico, com toast de desfazer
+  de 8s (padrão destrutivo do design system).
+- Toggle `isActive` — **NÃO existe action de toggle** ainda. Se precisar, peça
+  em handoff. Por ora, remover é o caminho.
+
+### Fluxo "Buscar hotel" no construtor de proposta
+
+Hoje a agente digita `costCents`/`priceCents`/`fornecedor` à mão em cada opção
+(`OpcaoInput` em `src/server/proposals.ts`). O S12 adiciona um caminho de
+**busca** que preenche esses campos:
+
+1. Na opção do construtor, um botão "Buscar cotação" (ou similar — você decide
+   a UI) abre um seletor de integração ativa + campos de destino/datas/pax.
+2. Chama `buscarHoteis({ integracaoId, destino, checkIn, checkOut, paxAdults, paxChildren })`.
+3. A lista de `HotelBusca[]` aparece; o agente escolhe um hotel.
+4. Chama `obterCotacao({ integracaoId, hotelId, checkIn, checkOut, paxAdults, paxChildren })`.
+5. A `Cotacao` devolvida tem `custoCents` (o custo) — preenche `costCents` da
+   opção. O `priceCents` (preço de venda) continua sendo o agente quem define
+   (margem dele). O `fornecedor` texto da opção pode ser preenchido com o
+   `nome` do hotel ou o `provider` ('wooba'/'infotravel').
+
+**Importante**: `Cotacao.custoCents` é o CUSTO, não o preço. `HotelBusca.precoCents`
+é um preço de referência da busca, mas a cotação detalhada (`Cotacao`) é a
+fonte de verdade para o custo. O `priceCents` que o agente cobra do cliente é
+decisão dele — o backend não calcula margem.
+
+### Modo dev (dados de exemplo)
+
+Sem integração ativa cadastrada, `buscarHoteis`/`obterCotacao` devolvem dados
+de **exemplo** com `exemplo: true` no wrapper (`ResultadoBuscaHoteis.exemplo` /
+`ResultadoCotacao.exemplo`). A UI deve sinalizar "cotação de exemplo" quando
+`exemplo === true` — um aviso discreto, não bloqueador. Com integração ativa,
+chama a API real; se falhar (timeout/401), `ServiceError` com `correcao` e
+`mensagem` pronta para mostrar (o `comoResultado` envelopa).
+
+**Não misture**: se `exemplo: true`, os dados NÃO são reais — mostre isso. Se
+`exemplo: false`, são da API do fornecedor.
+
+### O que NÃO existe (não invente)
+
+- **Sem reserva real** — cotação só. Nenhum botão de "reservar", "cancelar
+  reserva", "pagar". O S12 é pull de preço/availability.
+- **Sem toggle de `isActive`** — por ora, remover é o caminho. Se o agente
+  precisar desativar sem remover, peça em handoff.
+- **A credencial nunca volta** — `listarIntegracoes` não devolve `credentials`.
+  Não tente ler `credentialsCiphertext` (não está no `IntegracaoResumo`).
+- **`Cotacao.custoCents` é custo, não preço** — não preencha `priceCents` com
+  ele. O preço é o agente quem define.
