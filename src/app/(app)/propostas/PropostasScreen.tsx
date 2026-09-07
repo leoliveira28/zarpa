@@ -56,9 +56,10 @@ const STATUS_TONE: Record<string, "neutral" | "accent" | "ok" | "warn" | "danger
   expired: "warn",
 };
 
-export function PropostasScreen() {
+export function PropostasScreen({ initialIds }: { initialIds?: string[] }) {
   const router = useRouter();
   const toast = useToast();
+  const hasInitialIds = Boolean(initialIds && initialIds.length > 0);
 
   const [status, setStatus] = React.useState<Status>("loading");
   const [propostas, setPropostas] = React.useState<PropostaResumo[]>([]);
@@ -85,6 +86,7 @@ export function PropostasScreen() {
     void listarPropostas({
       busca: debouncedQuery || undefined,
       incluirArquivadas: includeArchived,
+      ids: initialIds,
     }).then((result) => {
       if (!active) return;
       hasLoadedOnce.current = true;
@@ -101,7 +103,7 @@ export function PropostasScreen() {
     return () => {
       active = false;
     };
-  }, [debouncedQuery, includeArchived, reloadToken]);
+  }, [debouncedQuery, includeArchived, reloadToken, initialIds]);
 
   async function handleRestore(proposta: PropostaResumo) {
     const result = await restaurarProposta(proposta.id);
@@ -136,6 +138,24 @@ export function PropostasScreen() {
           prefix={<SearchIcon className="size-4" />}
         />
       </header>
+
+      {hasInitialIds ? (
+        <div className="flex items-center justify-between gap-3 rounded-md bg-inset px-3 py-2">
+          <span className="text-13 text-muted">
+            {initialIds!.length}{" "}
+            {initialIds!.length === 1
+              ? "proposta destacada"
+              : "propostas destacadas"}
+          </span>
+          <Button
+            variant="quiet"
+            size="sm"
+            onPointerDown={() => router.push("/propostas")}
+          >
+            Ver todas
+          </Button>
+        </div>
+      ) : null}
 
       <div className={cn("transition-opacity duration-150", isPending && "opacity-60")}>
         {status === "loading" ? (

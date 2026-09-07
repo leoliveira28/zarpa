@@ -1,18 +1,21 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import {
   concluirTarefa,
   criarTarefa,
+  exportarResumoDoMesCsv,
   listarAberturasRecentes,
   listarContatos,
-  listarNegociosParados,
   listarTarefasDeHoje,
+  obterResumoDoMes,
   obterResumoDoPipeline,
   type AberturaProposta,
   type ContatoResumo,
-  type ResumoDeParados,
+  type PropostaParada,
+  type ResumoDoMes,
   type ResumoDoPipeline,
   type TarefaDeHoje,
 } from "@/server";
@@ -45,6 +48,7 @@ import {
   ChevronRightIcon,
   ClockIcon,
   CopyIcon,
+  DownloadIcon,
   OpenedIcon,
   PassportIcon,
   PlusIcon,
@@ -53,33 +57,55 @@ import {
 /* =============================================================================
    Hoje
    -----------------------------------------------------------------------------
-   A tela que abre. Responde três perguntas, nessa ordem:
+   A tela que abre. Responde quatro perguntas, nessa ordem:
 
      1. o que eu preciso fazer agora
      2. quem mexeu na minha proposta (abriu o link) — é o sinal de compra
-     3. o que está morrendo parado
+     3. o que está morrendo parado (propostas sem resposta há mais de 7 dias)
+     4. como está o mês (vendas, comissão, conversão — e o botão de exportar)
 
    Desenhada para 390px primeiro. No desktop ela vira duas colunas, mas o
    conteúdo e a ordem são os mesmos: quem trabalha no celular não recebe uma
    versão pior.
 
-   As quatro seções são dado real: "Tarefas de hoje" e "Abriram sua proposta"
-   desde o S8 (`listarTarefasDeHoje` / `listarAberturasRecentes`); "Paradas há
-   mais de 7 dias" e os dois números do topo desde o S4
-   (`listarNegociosParados` / `obterResumoDoPipeline`, `src/server/deals.ts`).
-   Nenhuma tela mais importa de `src/lib/ui/sample-data.ts`.
+   Cada seção é dado real: "Tarefas de hoje" e "Abriram sua proposta" desde o
+   S8 (`listarTarefasDeHoje` / `listarAberturasRecentes`); os dois números do
+   topo desde o S4 (`obterResumoDoPipeline`, `src/server/deals.ts`); "Propostas
+   paradas" e "Este mês" desde o S10 (`obterResumoDoMes` /
+   `exportarResumoDoMesCsv`, `src/server/dashboard.ts`). Nenhuma tela importa
+   de `src/lib/ui/sample-data.ts`.
 
-   O selo "· nunca aberta" que a v1 mostrava na linha de "Paradas" saiu: ele
-   lia `proposal.opens === 0` de um dado de exemplo. `NegocioParado` (a forma
-   real) não carrega esse número — abertura é sinal de PROPOSTA, e um negócio
-   pode ter zero, uma ou várias propostas ao longo da vida; não haveria um
-   "abriu"/"não abriu" único para o card mostrar sem escolher qual proposta
-   ele representa. Documentado em docs/status/nina.md.
+   A seção "Propostas paradas" substituiu "Paradas há mais de 7 dias" (S4,
+   `listarNegociosParados`, dado de NEGÓCIOS) — mesma urgência (parado há mais
+   de 7 dias), mas a PROPOSTA é a que tem o link e o valor, e é a que o
+   follow-up atinge. Ver a decisão completa em docs/status/nina.md (S10).
    ========================================================================== */
 
 type Status = "loading" | "ready" | "error";
 
+const MONTHS_SHORT = [
+  "jan",
+  "fev",
+  "mar",
+  "abr",
+  "mai",
+  "jun",
+  "jul",
+  "ago",
+  "set",
+  "out",
+  "nov",
+  "dez",
+];
+
+/** `"2026-09"` → `"set 2026"`. Para o rótulo do mês no `SectionHeading`. */
+function formatMonthYear(mes: string): string {
+  const [year, month] = mes.split("-");
+  return `${MONTHS_SHORT[Number(month) - 1]} ${year}`;
+}
+
 export function TodayScreen() {
+  const router = useRouter();
   const toast = useToast();
   const transition = useTransitionPreset();
 
@@ -177,35 +203,76 @@ export function TodayScreen() {
     };
   }, [pipelineReload]);
 
-  const [parkedStatus, setParkedStatus] = React.useState<Status>("loading");
-  const [parked, setParked] = React.useState<ResumoDeParados | null>(null);
-  const [parkedError, setParkedError] = React.useState<{
+  // O mês — uma chamada só (`obterResumoDoMes`) alimenta duas seções: a lista
+  // inline de "Propostas paradas" (`month.paradas.itens`) e os 4 cards de
+  // "Este mês" (vendas/comissão/conversão/paradas). Se a chamada falha, as duas
+  // falham juntas (mesmo erro, mesmo botão de tentar de novo) — é uma só fonte.
+  const [monthStatus, setMonthStatus] = React.useState<Status>("loading");
+  const [month, setMonth] = React.useState<ResumoDoMes | null>(null);
+  const [monthError, setMonthError] = React.useState<{
     mensagem: string;
     correcao?: string;
   } | null>(null);
-  const [parkedReload, setParkedReload] = React.useState(0);
-  const retryParked = React.useCallback(
-    () => setParkedReload((n) => n + 1),
+  const [monthReload, setMonthReload] = React.useState(0);
+  const retryMonth = React.useCallback(
+    () => setMonthReload((n) => n + 1),
     [],
   );
 
   React.useEffect(() => {
     let active = true;
-    setParkedStatus((current) => (current === "ready" ? current : "loading"));
-    void listarNegociosParados().then((result) => {
+    setMonthStatus((current) => (current === "ready" ? current : "loading"));
+    void obterResumoDoMes().then((result) => {
       if (!active) return;
       if (!result.ok) {
-        setParkedStatus("error");
-        setParkedError({ mensagem: result.mensagem, correcao: result.correcao });
+        setMonthStatus("error");
+        setMonthError({ mensagem: result.mensagem, correcao: result.correcao });
         return;
       }
-      setParked(result.data);
-      setParkedStatus("ready");
+      setMonth(result.data);
+      setMonthStatus("ready");
     });
     return () => {
       active = false;
     };
-  }, [parkedReload]);
+  }, [monthReload]);
+
+  // Exportar CSV — blob no cliente, sem rota de servidor. O `conteudo` já vem
+  // com BOM UTF-8 e `;` como delimitador (Excel pt-BR abre direto); só montar o
+  // Blob, disparar o download e revoke. Erro vira toast com a correção do
+  // servidor no botão (re-tentar), não modal "tem certeza?".
+  const [exporting, setExporting] = React.useState(false);
+
+  async function handleExport() {
+    setExporting(true);
+    const result = await exportarResumoDoMesCsv();
+    setExporting(false);
+    if (!result.ok) {
+      toast.show({
+        title: "Não consegui exportar",
+        description: result.mensagem,
+        tone: "danger",
+        action: result.correcao
+          ? { label: result.correcao, onClick: () => void handleExport() }
+          : undefined,
+      });
+      return;
+    }
+    const blob = new Blob([result.data.conteudo], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = result.data.nomeArquivo;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.show({
+      title: "Resumo exportado",
+      description: result.data.nomeArquivo,
+      tone: "ok",
+    });
+  }
 
   // `concluirTarefa` não tem par de reabertura no servidor — a tarefa some da
   // tela na hora (parece instantâneo) e só é marcada concluída de verdade se
@@ -438,83 +505,180 @@ export function TodayScreen() {
       <section aria-labelledby="hoje-paradas">
         <SectionHeading
           action={
-            parkedStatus === "ready" ? (
+            monthStatus === "ready" && month ? (
               <span className="flex items-baseline gap-1 text-13 text-muted">
                 <Money
-                  cents={parked?.totalCents ?? 0}
+                  cents={month.paradas.totalCents}
                   size="13"
                   tone="muted"
-                  reserveFor={30_000_000}
+                  reserveFor={5_000_000}
                 />
                 parados
               </span>
             ) : null
           }
         >
-          <span id="hoje-paradas">Paradas há mais de 7 dias</span>
+          <span id="hoje-paradas">Propostas paradas</span>
         </SectionHeading>
 
-        {parkedStatus === "loading" ? (
+        {monthStatus === "loading" ? (
           <Card className="flex flex-col gap-4 p-4">
             {[0, 1].map((row) => (
               <SkeletonRow key={row} />
             ))}
           </Card>
-        ) : parkedStatus === "error" ? (
+        ) : monthStatus === "error" ? (
           <Card className="flex flex-col items-start gap-3 p-4">
-            <FieldError>{parkedError?.mensagem}</FieldError>
-            <Button variant="secondary" size="sm" onClick={retryParked}>
-              {parkedError?.correcao ?? "Tentar de novo"}
+            <FieldError>{monthError?.mensagem}</FieldError>
+            <Button variant="secondary" size="sm" onClick={retryMonth}>
+              {monthError?.correcao ?? "Tentar de novo"}
             </Button>
           </Card>
-        ) : !parked || parked.itens.length === 0 ? (
+        ) : !month || month.paradas.itens.length === 0 ? (
           <EmptyState
             compact
-            title="Nenhum negócio esquecido"
-            description="Todo negócio sem movimentação há 7 dias aparece aqui, com o botão de cobrar junto."
+            title="Nenhuma proposta parada"
+            description="Toda proposta enviada há mais de 7 dias sem resposta do cliente aparece aqui, com o botão de cobrar junto."
           />
         ) : (
           <Card tone="warn" className="overflow-hidden">
             <ul className="divide-y divide-warn/20">
-              {parked.itens.map((deal) => (
-                <li
-                  key={deal.id}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3"
-                >
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-15 font-medium text-ink">
-                      {deal.contactName}
-                    </span>
-                    <span className="flex items-center gap-1.5 text-13 text-warn-soft-ink">
-                      <ClockIcon className="size-3.5 shrink-0" />
-                      parada há {deal.diasParado} dias
-                    </span>
-                  </span>
-
-                  <Money
-                    cents={deal.valueCents}
-                    size="15"
-                    reserveFor={parked.totalCents}
-                  />
-
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() =>
-                      toast.show({
-                        title: "Mensagem preparada",
-                        description: `Follow-up de ${deal.contactName} pronto para enviar no WhatsApp.`,
-                        tone: "ok",
-                      })
-                    }
-                  >
-                    Cobrar
-                    <ChevronRightIcon className="size-3.5" />
-                  </Button>
-                </li>
+              {month.paradas.itens.map((item) => (
+                <ParkedProposalRow key={item.id} item={item} />
               ))}
             </ul>
           </Card>
+        )}
+      </section>
+
+      <section aria-labelledby="hoje-mes">
+        <SectionHeading
+          action={
+            <div className="flex items-center gap-3">
+              {monthStatus === "ready" && month ? (
+                <span className="text-13 tabular-nums text-muted">
+                  {formatMonthYear(month.mes)}
+                </span>
+              ) : null}
+              <Button
+                variant="quiet"
+                size="sm"
+                loading={exporting}
+                disabled={monthStatus !== "ready"}
+                onPointerDown={() => void handleExport()}
+              >
+                <DownloadIcon className="size-3.5" />
+                Exportar
+              </Button>
+            </div>
+          }
+        >
+          <span id="hoje-mes">Este mês</span>
+        </SectionHeading>
+
+        {monthStatus === "loading" ? (
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-[6.5rem] rounded-lg" />
+            ))}
+          </div>
+        ) : monthStatus === "error" ? (
+          <Card className="flex flex-col items-start gap-3 p-4">
+            <FieldError>{monthError?.mensagem}</FieldError>
+            <Button variant="secondary" size="sm" onClick={retryMonth}>
+              {monthError?.correcao ?? "Tentar de novo"}
+            </Button>
+          </Card>
+        ) : !month ? null : (
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <MonthCard href="/vendas" ariaLabel="Ver vendas do mês">
+              <p className="text-13 font-medium text-muted">Vendas</p>
+              <Money
+                cents={month.vendas.faturamentoBrutoCents}
+                size="20"
+                align="left"
+                reserveFor={10_000_000}
+                className="mt-1"
+              />
+              <p className="mt-1 text-13 text-muted">
+                <span className="tabular-nums">
+                  {month.vendas.totalVendas}
+                </span>{" "}
+                {month.vendas.totalVendas === 1 ? "venda" : "vendas"}
+              </p>
+            </MonthCard>
+
+            <MonthCard href="/financeiro" ariaLabel="Ver comissão do mês">
+              <p className="text-13 font-medium text-muted">Comissão</p>
+              <Money
+                cents={month.comissao.aReceberCents}
+                size="20"
+                align="left"
+                reserveFor={2_000_000}
+                className="mt-1"
+              />
+              <p className="mt-1 text-13 text-muted">
+                <Money
+                  cents={month.comissao.recebidaCents}
+                  size="13"
+                  tone="muted"
+                  align="left"
+                  reserveFor={2_000_000}
+                />{" "}
+                recebida
+              </p>
+            </MonthCard>
+
+            <MonthCard href="/propostas" ariaLabel="Ver propostas do mês">
+              <p className="text-13 font-medium text-muted">Conversão</p>
+              {month.conversao.enviadas === 0 ? (
+                <p className="mt-1 text-20 tabular-nums text-ink">—</p>
+              ) : (
+                <p className="mt-1 text-20 tabular-nums text-ink">
+                  {(month.conversao.taxa * 100)
+                    .toFixed(1)
+                    .replace(".", ",")}
+                  %
+                </p>
+              )}
+              <p className="mt-1 text-13 text-muted">
+                <span className="tabular-nums">
+                  {month.conversao.enviadas}
+                </span>{" "}
+                enviadas ·{" "}
+                <span className="tabular-nums">
+                  {month.conversao.aceitas}
+                </span>{" "}
+                aceitas
+              </p>
+            </MonthCard>
+
+            <MonthCard
+              href={
+                month.paradas.itens.length > 0
+                  ? `/propostas?ids=${month.paradas.itens.map((p) => p.id).join(",")}`
+                  : "/propostas"
+              }
+              ariaLabel="Ver propostas paradas"
+            >
+              <p className="text-13 font-medium text-muted">
+                Propostas paradas
+              </p>
+              <p className="mt-1 text-20 tabular-nums text-ink">
+                {month.paradas.itens.length}
+              </p>
+              <p className="mt-1 text-13 text-muted">
+                <Money
+                  cents={month.paradas.totalCents}
+                  size="13"
+                  tone="muted"
+                  align="left"
+                  reserveFor={5_000_000}
+                />{" "}
+                em aberto
+              </p>
+            </MonthCard>
+          </div>
         )}
       </section>
 
@@ -686,6 +850,92 @@ function OpenedPreview() {
         <span className="text-13 text-muted">abriu 6 vezes · há 3h</span>
       </span>
     </div>
+  );
+}
+
+/**
+ * Linha de "Propostas paradas" — uma proposta `sent`/`viewed` sem resposta há
+ * mais de 7 dias. O `valueCents` é do NEGÓCIO associado (a proposta não tem
+ * valor próprio), o `diasParado` é medido do último evento entre `sentAt` e
+ * `lastViewedAt` (o que o cliente fez por último), e o botão "Cobrar" prepara
+ * o follow-up no WhatsApp — mesmo placeholder do S4, agora sobre a proposta
+ * certa.
+ */
+function ParkedProposalRow({ item }: { item: PropostaParada }) {
+  const toast = useToast();
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-15 font-medium text-ink">
+          {item.contactName}
+          {item.destination ? (
+            <span className="text-muted font-normal">
+              {" · "}
+              {item.destination}
+            </span>
+          ) : null}
+        </span>
+        <span className="flex items-center gap-1.5 text-13 text-warn-soft-ink">
+          <ClockIcon className="size-3.5 shrink-0" />
+          parada há {item.diasParado} dias
+        </span>
+      </span>
+
+      <Money cents={item.valueCents} size="15" align="right" />
+
+      <Button
+        size="sm"
+        variant="secondary"
+        onPointerDown={() =>
+          toast.show({
+            title: "Mensagem preparada",
+            description: `Follow-up de ${item.contactName} pronto para enviar no WhatsApp.`,
+            tone: "ok",
+          })
+        }
+      >
+        Cobrar
+        <ChevronRightIcon className="size-3.5" />
+      </Button>
+    </li>
+  );
+}
+
+/**
+ * Card de "Este mês" — um dos quatro (vendas/comissão/conversão/paradas). É
+ * papel clicável: `interactive` dá hover/pressão, `role="link"` + `tabIndex`
+ * + `onKeyDown` (Enter) garantem o caminho de teclado e leitor de tela, não
+ * só o ponteiro. Navegação no `onClick` (não `pointerdown`): para abrir outra
+ * página, o atraso de 100ms do `click` não é perceptível — a regra do
+ * `pointerdown` é para feedback tátil de botões, não para navegação.
+ */
+function MonthCard({
+  href,
+  ariaLabel,
+  children,
+}: {
+  href: string;
+  ariaLabel: string;
+  children: React.ReactNode;
+}) {
+  const router = useRouter();
+  return (
+    <Card
+      interactive
+      role="link"
+      tabIndex={0}
+      aria-label={ariaLabel}
+      onClick={() => router.push(href)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          router.push(href);
+        }
+      }}
+      className="min-h-[6.5rem] p-4"
+    >
+      {children}
+    </Card>
   );
 }
 

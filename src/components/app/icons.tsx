@@ -190,6 +190,16 @@ export function UploadIcon(props: IconProps) {
   );
 }
 
+/** Exportar — seta descendo para uma bandeja, para baixar CSV/relatório. */
+export function DownloadIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M8 2.25v7.25M5.25 6.75 8 9.5l2.75-2.75" />
+      <path d="M2.75 10.75v1.5a1 1 0 0 0 1 1h8.5a1 1 0 0 0 1-1v-1.5" />
+    </Icon>
+  );
+}
+
 /** Olho fechado — mostrar/esconder documento sensível (CPF, passaporte). */
 export function EyeIcon(props: IconProps) {
   return (

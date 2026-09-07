@@ -1,6 +1,197 @@
 # Nina — status
 
-## O "+" do topo deixa de ser botão morto — `NovaPropostaSheet` global
+## S10 — dashboard do mês no `/hoje` religado
+
+### O buraco
+
+O S10 (`commit 60f4420`) entregou backend completo e testado —
+`obterResumoDoMes`/`exportarResumoDoMesCsv` em `src/server/dashboard.ts`,
+exportados de `@/server` — mas **nenhuma tela consumia**. O `TodayScreen.tsx`
+continuava chamando só `obterResumoDoPipeline` (S4) + `listarTarefasDeHoje` +
+`listarAberturasRecentes` (S8) + `listarNegociosParados` (S4, negócios). O
+dashboard do mês não aparecia em tela nenhuma. Religamento era tarefa de
+interface — minha fronteira.
+
+### O que fiz
+
+**`src/app/(app)/hoje/TodayScreen.tsx`** — duas seções novas, uma substituída:
+
+1. **"Propostas paradas"** (SUBSTITUI "Paradas há mais de 7 dias" do S4). A
+   seção antiga lia `listarNegociosParados` (`deals.ts`), dado de **negócios**
+   abertos sem `updatedAt` há >7 dias. A nova lê `month.paradas.itens` do
+   `obterResumoDoMes` (`dashboard.ts`), dado de **propostas** `sent`/`viewed`
+   não arquivadas cujo último evento entre `sentAt`/`lastViewedAt` tem >7
+   dias. Cada `PropostaParada` traz `id` (da proposta), `title`, `contactName`,
+   `destination`, `valueCents` (do negócio associado), `diasParado` — o mesmo
+   conteúdo visual da antiga, mais o `id` que linka e o `title` da proposta. O
+   botão "Cobrar" permanece placeholder (mesma ação do S4 — toast "Mensagem
+   preparada"), agora sobre a proposta certa.
+
+2. **"Este mês"** (NOVA). Quatro cards em `grid-cols-2 lg:grid-cols-4`, cada
+   um um `Card interactive` clicável com `role="link"` + `tabIndex` +
+   `onKeyDown` (Enter) + `aria-label` (caminho de teclado e leitor de tela,
+   não só ponteiro):
+   - **Vendas** → `/vendas`: `faturamentoBrutoCents` em `Money size="20"`
+     + "`N` vendas" de apoio.
+   - **Comissão** → `/financeiro`: `aReceberCents` em `Money size="20"` +
+     "`R$ X` recebida" de apoio (`recebidaCents` em `Money size="13"`).
+   - **Conversão** → `/propostas`: `taxa` em `%` (`text-20 tabular-nums`,
+     `—` quando `enviadas === 0` — mais honesto que "0%", que implicaria
+     que houve envios) + "`N` enviadas · `M` aceitas" de apoio.
+   - **Propostas paradas** → `/propostas?ids=<id1>,<id2>,...`: contagem
+     (`text-20 tabular-nums`) + `totalCents` em `Money size="13"` "em
+     aberto" de apoio. Se `paradas.itens.length === 0`, clica para
+     `/propostas` (ver todas) em vez de `/propostas?ids=` vazio.
+
+   O `SectionHeading` de "Este mês" carrega o rótulo do mês
+   (`formatMonthYear(month.mes)` → "set 2026") em `text-13 tabular-nums
+   text-muted` + botão `Exportar` (`variant="quiet" size="sm"` com
+   `DownloadIcon`, novo em `icons.tsx` — mesmo traço do `UploadIcon`,
+   seta invertida). O botão chama `exportarResumoDoMesCsv()`, monta um
+   `Blob` com `type: "text/csv;charset=utf-8"`, dispara o download via
+   `URL.createObjectURL` + `<a>.click()` + `revokeObjectURL`. O
+   `conteudo` já vem com BOM UTF-8 e `;` como delimitador (Excel pt-BR
+   abre direto — decisão do Rafa em `dashboard.ts`). Erro vira toast com
+   `action: { label: correcao, onClick: re-tentar }` — a correção do
+   servidor vira o botão do próprio toast, não modal.
+
+   Os dois estados (`loading`/`error`) são compartilhados: UMA chamada
+   `obterResumoDoMes` alimenta as duas seções. Se falha, as duas falham
+   juntas (mesmo `FieldError` + "Tentar de novo"); se carrega, as duas
+   mostram dados. O `month` não vira `null` no retry (o
+   `setMonthStatus((current) => current === "ready" ? current : ...)`
+   mantém "ready" e o `month` antigo fica visível até o novo chegar — sem
+   tela pisca).
+
+**`src/app/(app)/propostas/page.tsx`** — Server Component agora lê
+`searchParams.ids` (Next 15: `searchParams` é `Promise`), faz
+`.split(",").filter(Boolean)`, passa `initialIds` para a tela.
+
+**`src/app/(app)/propostas/PropostasScreen.tsx`** — aceita `initialIds?:
+string[]`, passa `ids: initialIds` para `listarPropostas` (filtro `ids` no
+`FiltroPropostas` já existe desde o `60f4420` — `inArray(proposals.id, ids)`
+no servidor). Aviso "Mostrando N propostas destacadas" + botão "Ver
+todas" (`variant="quiet"`, navega para `/propostas` sem `ids`) aparece
+quando `initialIds` está presente. O `initialIds` entrou na lista de deps
+do `useEffect` do fetch — navegar de `/propostas?ids=a,b` para
+`/propostas` re-dispara a busca sem `ids` (sem remontar o componente,
+só re-renderiza com a nova prop).
+
+**`src/components/app/icons.tsx`** — `DownloadIcon` novo (seta descendo
+para bandeja, mesmo traço 1.5 / grade 16 do `UploadIcon`, só espelhada).
+
+### Decisão de paradas — por que substituí negócios por propostas
+
+A seção antiga "Paradas há mais de 7 dias" (S4, `listarNegociosParados`,
+`deals.ts`) listava **negócios** abertos sem `updatedAt` há >7 dias. O S10
+traz **propostas** `sent`/`viewed` sem `sentAt`/`lastViewedAt` há >7 dias
+(`paradas.itens`). São duas fontes diferentes com mesmo limiar de 7 dias,
+mesma urgência ("parado"), mas:
+
+- A **proposta** é o que o cliente recebeu — o follow-up atinge ela
+  diretamente ("viu sua proposta?"). O negócio é mais abstrato: pode ter
+  proposta ativa em outro estágio, ou nenhuma proposta ainda.
+- `PropostaParada` traz `id` (da proposta) que linka para
+  `/propostas/${id}/editar` e para `/propostas?ids=...`. `NegocioParado`
+  traz `id` do negócio — sem link de proposta.
+- `PropostaParada` traz `valueCents` do negócio associado (a proposta não
+  tem valor próprio) — mesmo dado de valor da antiga, mais o `title` da
+  proposta e o `status` (`sent`/`viewed`).
+- Ter as duas na mesma tela com o mesmo rótulo "paradas" confunde: a
+  agente não consegue distinguir "parada de negócio" de "parada de
+  proposta" sem um segundo rótulo. Uma só, mais útil, vira a fonte.
+
+Substituí. A seção antiga saiu inteira (estado `parked`/`parkedError`/
+`retryParked` + `useEffect` de `listarNegociosParados` removidos); a nova
+usa `month.paradas.itens` da mesma chamada que alimenta "Este mês" — uma
+só fonte, não duas. O `listarNegociosParados` continua exportado de
+`@/server` (o Rafa pode querer em outra tela), só não tem mais consumidor
+no `/hoje`.
+
+### Placement — por que o mês abaixo das paradas, não no topo
+
+A agente abre o `/hoje` 15x/dia pra ver o que fazer **hoje** (tarefas), não
+o mês inteiro. A hierarquia da tela é urgência decrescente:
+
+1. **Greeting** (pipeline: em negociação / fechado no mês) — os dois
+   números do S4, no topo.
+2. **Tarefas de hoje** (S8) — o que fazer agora.
+3. **Abriram sua proposta** (S8) — o sinal de compra.
+4. **Propostas paradas** (S10) — o que está morrendo (esta semana).
+5. **Este mês** (S10) — como está o mês (vendas/comissão/conversão).
+
+O mês **não pode empurrar as tarefas pra baixo da dobra** — é a visão que
+fica de pé quando o dia já está despachado, o "último olhar" antes de
+fechar o app. Registro silencioso: uma cor só, zero ilustração, `Money`
+com `tabular-nums` e `align="left"` dentro de cada card (regra do `Money`:
+"`left` é o certo dentro de um CARD, onde o valor é um campo e não uma
+coluna"). `reserveFor` com teto por card (R$ 100k faturamento, R$ 20k
+comissão, R$ 50k paradas) — o número não pula de largura ao carregar nem
+ao trocar de mês.
+
+### Passo a passo do fluxo para o PO clicar
+
+Login `dev@zarpa.local` / `dev12345` em `http://localhost:3000/entrar`,
+viewport 390×844 (iPhone 14):
+
+1. **`/hoje`** — desce a tela. Ordem: Greeting (2 números do pipeline),
+   "Tarefas de hoje", "Abriram sua proposta", "Propostas paradas",
+   "Este mês" (4 cards + "Exportar").
+2. **"Propostas paradas"** — se houver propostas `sent`/`viewed` sem
+   resposta há >7 dias (o seed tem), a lista mostra cada uma com nome do
+   contato, destino, "parada há N dias" em âmbar, valor do negócio em
+   `Money` e botão "Cobrar". Se não houver, estado vazio "Nenhuma proposta
+   parada". O total "`R$ X` parados" aparece no `SectionHeading`.
+3. **"Este mês"** — 4 cards em grid 2×2 (mobile) / 4×1 (desktop ≥1024px):
+   - **Vendas**: `faturamentoBrutoCents` + "`N` vendas". Clicar → `/vendas`.
+   - **Comissão**: `aReceberCents` + "`R$ X` recebida". Clicar → `/financeiro`.
+   - **Conversão**: `taxa`% + "`N` enviadas · `M` aceitas" (ou "—" se zero
+     enviadas). Clicar → `/propostas`.
+   - **Propostas paradas**: contagem + "`R$ X` em aberto". Clicar →
+     `/propostas?ids=<id1>,<id2>,...` (a rota de propostas filtrada).
+4. **`/propostas?ids=...`** — a página de propostas abre com o aviso
+   "Mostrando N propostas destacadas" + botão "Ver todas" (navega para
+   `/propostas` sem `ids`). A lista mostra só as propostas dos `ids` da
+   URL (filtro `inArray(proposals.id, ids)` no servidor, commit `60f4420`).
+   A busca por texto continua funcionando (filtra dentro dos `ids`).
+5. **Exportar CSV** — tocar "Exportar" no `SectionHeading` de "Este mês".
+   O botão fica carregando (régua correndo) enquanto `exportarResumoDoMesCsv`
+   roda. Sucesso: toast "Resumo exportado" + nome do arquivo
+   (`resumo-2026-09.csv`) + download disparado (Blob, sem rota de
+   servidor). Erro: toast "Não consegui exportar" com a mensagem do
+   servidor + o botão de correção no próprio toast (re-tentar). Abrir o
+   arquivo no Excel/Sheets: BOM UTF-8, `;` como delimitador, acento
+   correto, colunas alinhadas.
+6. **Tentar de novo** no erro — se o `obterResumoDoMes` falhar (ex.: banco
+   caiu), as duas seções ("Propostas paradas" e "Este mês") mostram
+   `FieldError` + "Tentar de novo" juntas. Tocar "Tentar de novo"
+   re-dispara a chamada.
+
+### Verificação (o que rodei)
+
+- `npx tsc --noEmit` — **limpo**.
+- `npm run build` — **limpo**, 18 rotas geram (`/hoje` e `/propostas`
+  continuam dinâmicas, `/propostas?ids=...` é a mesma rota com
+  `searchParams` diferente).
+- `npx vitest run tests/design/guards.test.ts` — **6/6 verde** (Postgres
+  de pé via `zarpa-db` container, `zarpa_test` schema recriado pelas
+  migrations). Tipografia, cor por contexto, paridade de tema, movimento
+  (CSS e JS), `prefers-reduced-motion` — nenhum desvio não registrado.
+- **Não testei clicando no navegador** — sou agente de terminal, não
+  tenho navegador. O passo a passo acima é para o PO (Leandro) clicar e
+  julgar a tela em 390×844. Prestar atenção especial a: (a) o grid 2×2
+  dos cards do mês em 390px (cada card ~170px — o `Money` com `size="20"`
+  cabe?); (b) o `Money` de apoio (`size="13"`) dentro dos cards — o
+  `inline-grid` flui com o texto "recebida"/"em aberto"?; (c) o botão
+  "Exportar" no `SectionHeading` — o `DownloadIcon` + rótulo alinham com
+  o rótulo do mês?; (d) o aviso "Mostrando N propostas destacadas" em
+  `/propostas?ids=...` — o `bg-inset` + botão "Ver todas" alinham com a
+  busca acima?; (e) o download do CSV dispara de verdade no Safari
+  (`<a>.click()` com `download` atribuído — testar no Chrome e Safari).
+
+---
+
+
 
 ### O que fez
 
