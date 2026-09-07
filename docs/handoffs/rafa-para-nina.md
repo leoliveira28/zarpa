@@ -981,3 +981,36 @@ Testado contra Postgres de verdade (não só `tsc`) com dois tenants — confirm
 isolamento, `.groupBy` + `count(*)::int` batendo, e que uma proposta "parada" de um mês
 anterior aparece em `paradas.itens` mesmo fora do recorte de `conversao`. Detalhe
 completo em `docs/status/rafa.md`.
+
+## Propostas de um negócio — `listarPropostas({ dealId })` (destrava o provisório da ficha)
+
+Você pediu em `docs/handoffs/nina-para-rafa.md` item 4.1: a ficha do negócio
+(`/funil/[id]`) fazia `listarPropostas({ incluirArquivadas: true, limite: 200 })` e
+filtrava `p.dealId === dealId` no cliente — no volume declarado funciona, mas é varrer o
+tenant inteiro pra abrir a ficha de UM negócio.
+
+Pronto: `FiltroPropostas` ganhou `dealId?: string`. A chamada que troca o provisório é
+
+```ts
+import { listarPropostas } from '@/server';
+
+const r = await listarPropostas({ dealId, incluirArquivadas: true });
+if (!r.ok) { /* r.mensagem / r.correcao */ return; }
+const propostas: PropostaResumo[] = r.data;
+```
+
+- O retorno continua sendo `PropostaResumo[]` (mesmo shape de sempre — só adicionei o
+  filtro no `WHERE`, não mudei coluna nenhuma). `proposals.deal_id` é FK com índice
+  não-único, então pode haver mais de uma proposta por negócio — por isso é lista, não
+  single.
+- `incluirArquivadas` continua valendo: se a proposta vinculada estiver arquivada, some
+  da lista a menos que você também peça `incluirArquivadas: true` (mesma regra de sempre).
+- O corte de tenant vem do RLS (`withTenant` + `requireAuthContext`), como toda action de
+  `proposals.ts`. Um `dealId` de outro tenant simplesmente devolve zero propostas — nem
+  aparece que existia.
+- `dealId` combina com os outros filtros: `listarPropostas({ dealId, busca, ids,
+  incluirArquivadas })` faz `AND` de todos, como você esperaria.
+
+É só trocar a chamada no `NegocioScreen.tsx` quando for conveniente — o provisório
+(`listarPropostas({ limite: 200 })` + filtro no cliente) continua funcionando, só não
+escala. Sem pressa, não bloqueia nada.

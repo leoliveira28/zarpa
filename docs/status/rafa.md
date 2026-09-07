@@ -931,3 +931,76 @@ revisão + documentação — não reescrevi nada do que já existia.
   regressão.
 - Não toquei em `src/components`, `src/styles`, `tests/`, `package.json` — fronteira
   respeitada.
+
+---
+
+## 2026-09-07 — `listarPropostas({ dealId })` — destrava o provisório da ficha de negócio
+
+### O que ficou pronto
+
+A Nina pediu em `docs/handoffs/nina-para-rafa.md` item 4.1: a ficha do negócio
+(`/funil/[id]`) buscava `listarPropostas({ incluirArquivadas: true, limite: 200 })` e
+filtrava `p.dealId === dealId` no cliente. No volume declarado (10–15 vendas/mês)
+funciona, mas é varrer o tenant inteiro pra abrir a ficha de UM negócio — e o produto já
+tem S10 com dashboard, então o volume só cresce.
+
+Adicionei `dealId?: string` ao `FiltroPropostas` em `src/server/proposals.ts`. A action
+`listarPropostas` agora faz `eq(proposals.dealId, filtro.dealId)` no `WHERE` quando o
+campo vem preenchido. Decidi por estender o filtro em vez de criar uma action dedicada
+(`obterPropostaDoNegocio`) porque:
+
+- `FiltroPropostas` já tem `ids?: string[]` no mesmo padrão (restringir a um conjunto
+  conhecido) — `dealId` é o mesmo raciocínio, só que escalar.
+- A Nina pediu explicitamente `listarPropostas({ dealId })` no handoff (a action
+  dedicada foi a alternativa "se preferir").
+- Menos superfície para manter: uma action só, mesmo retorno `PropostaResumo[]`.
+
+### Assinatura exata (para a Nina consumir)
+
+```ts
+import { listarPropostas, type PropostaResumo, type FiltroPropostas } from '@/server';
+
+const r = await listarPropostas({ dealId, incluirArquivadas: true });
+if (!r.ok) { /* r.mensagem / r.correcao */ return; }
+const propostas: PropostaResumo[] = r.data;
+```
+
+- `dealId?: string` — FK de `proposals.deal_id`, índice não-único
+  (`proposals_deal_id_idx`). Pode haver mais de uma proposta por negócio, por isso o
+  retorno é `PropostaResumo[]` (lista), não single.
+- `incluirArquivadas` continua valendo: proposta arquivada vinculada ao `dealId` some da
+  lista a menos que o chamador também peça `incluirArquivadas: true`.
+- O corte de tenant vem do RLS (`withTenant` + `requireAuthContext`), como toda action de
+  `proposals.ts`. Um `dealId` de outro tenant devolve zero propostas — nem aparece que
+  existia.
+- Combina com os outros filtros (`busca`, `ids`, `incluirArquivadas`) por `AND`.
+- O shape de `PropostaResumo` não mudou — só adicionei o filtro no `WHERE`, nenhuma
+  coluna nova. `costCents`/`commissionCents` continuam fora do resumo (só aparecem em
+  `OpcaoEdicao` do construtor autenticado, nunca na lista).
+
+### Não ficou pronto (e não era pedido desta rodada)
+
+- `atualizarNegocio` (item 4.2 do handoff da Nina) — a Nina marcou como "não urgente,
+  outra rodada". Não criei.
+- O consumidor `NegocioScreen.tsx` continua com o provisório (`limite: 200` + filtro no
+  cliente). É fronteira da Nina — ela troca quando for conveniente. O provisório funciona,
+  só não escala.
+
+### Decisões que tomei sozinha
+
+- Estender `FiltroPropostas` em vez de criar `obterPropostaDoNegocio(dealId)`. A Nina
+  pediu os dois como alternativas e disse "você é o dono do server, decide a forma";
+  estender o filtro é menos superfície e bate com o padrão do `ids` que já existia.
+- Não mudei `src/server/index.ts` — `FiltroPropostas` já é exportado de lá (é `type`,
+  já no bloco de exports de `proposals`). Nenhum export novo necessário.
+
+### Verificação
+
+- `npx tsc --noEmit`: limpo.
+- `npm run build`: limpo. `/funil/[id]` continua gerando (ƒ dinâmica, server-rendered
+  on demand).
+- `npx tsx scripts/check/known-failures.ts`: 378 testes, allowlist com 0 vermelhos,
+  "Portão ok" — isolamento multi-tenant (S1) íntegro, sem regressão. Postgres de teste
+  (`zarpa-db`, porta 5432) estava de pé.
+- Não toquei em `src/components`, `src/styles`, `tests/`, `package.json` — fronteira
+  respeitada.

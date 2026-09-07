@@ -252,6 +252,16 @@ export type FiltroPropostas = {
    * `incluirArquivadas: true`.
    */
   ids?: string[];
+  /**
+   * Restringe a lista às propostas vinculadas a este negócio. `proposals.deal_id` é FK
+   * com índice não-único (`proposals_deal_id_idx`) — pode haver mais de uma proposta por
+   * negócio, por isso o retorno continua sendo `PropostaResumo[]`. O corte de tenant vem
+   * do RLS (`withTenant` + `requireAuthContext`), o de arquivadas continua valendo
+   * `incluirArquivadas`. Antes deste campo a ficha de um negócio (`/funil/[id]`) fazia
+   * `listarPropostas({ limite: 200 })` e filtrava `p.dealId === dealId` no cliente — ver
+   * `docs/handoffs/nina-para-rafa.md` item 4.1.
+   */
+  dealId?: string;
 };
 
 /**
@@ -325,6 +335,7 @@ export async function listarPropostas(
       const condicoes = [];
       if (!filtro?.incluirArquivadas) condicoes.push(isNull(proposals.archivedAt));
       if (filtro?.ids && filtro.ids.length > 0) condicoes.push(inArray(proposals.id, filtro.ids));
+      if (filtro?.dealId) condicoes.push(eq(proposals.dealId, filtro.dealId));
       if (busca && busca.length > 0) {
         condicoes.push(
           or(
