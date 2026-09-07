@@ -6,6 +6,7 @@ import { libraryItems } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
+import { exigirContaAtiva } from './subscriptionGate';
 
 /**
  * Acervo reutilizável do construtor de proposta (`library_items`).
@@ -162,6 +163,8 @@ export async function criarItemNaBiblioteca(
     const dados = validar(input, false);
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [criado] = await tx
         .insert(libraryItems)
         .values({
@@ -217,6 +220,8 @@ export async function atualizarItemDaBiblioteca(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       // Sem `and(isGlobal = false)` explícito: a policy de UPDATE já recusa qualquer linha
       // com `is_global = true` (ver a migration). Um item global aqui dá 0 linhas, igual a
       // um id de outro tenant — mesma resposta, de propósito.
@@ -242,6 +247,8 @@ export async function excluirItemDaBiblioteca(itemId: string): Promise<ServiceRe
     const { tenantId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const afetadas = await tx
         .delete(libraryItems)
         .where(eq(libraryItems.id, itemId))

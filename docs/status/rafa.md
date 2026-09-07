@@ -1,5 +1,133 @@
 # Status — Rafa (backend / plataforma)
 
+## 2026-09-07 — S13a: cadastro público + trial 14 dias + gate de dunning
+
+### O que ficou pronto
+
+1. **`criarConta(input)`** (`src/server/signup.ts`, novo) — a action pública do
+   `/cadastrar`. Cria tenant (`status: 'trialing'`, `trialEndsAt = agora+14d`) +
+   assinatura trial (plano `solo`, `amountCents` do catálogo `plans` com fallback 4900,
+   `planId` preenchido) + usuário Better Auth (`signUpEmail` via `withPendingTenant`) na
+   mesma chamada. Input zod: `nomeAgente`, `email`, `senha` (min 8), `nomeAgencia`.
+   `audit_log 'account.created'`. Exportada no barril `@/server` com
+   `CriarContaInput`/`ContaCriada`. **Sem login automático dentro da action** — a UI
+   chama `authClient.signIn.email` depois (decisão e justificativa no handoff da Nina).
+2. **Gate de dunning** (`src/server/subscriptionGate.ts`, novo) —
+   `exigirContaAtiva(tx, tenantId)` como primeira linha do `withTenant` de **44 Server
+   Actions de escrita**: contatos (5), viajantes (3), negócios (3), propostas/opções/
+   blocos (15 + upload de imagem), vendas/parcelas (8), biblioteca (3), integrações (2),
+   `criarTarefa` + `concluirTarefa`, `confirmarImportacao`, `atualizarMarca`. Recusa com
+   **`ASSINATURA_INATIVA`** (código novo em `errors.ts`), mensagem pronta e
+   `correcao: 'Ir para Cobrança'` (`/cobranca`). Função pura `vereditoDaAssinatura`
+   exportada para teste sem banco.
+3. **Trial vencido → `expired`**: quando o gate encontra `trialing` com
+   `trialEndsAt` no passado, promove a assinatura para `'expired'` (idempotente, guarda
+   `WHERE status = 'trialing'`, com audit `subscription.expired`) **numa transação
+   própria** — porque a transação da action faz rollback quando o gate recusa, e a
+   promoção dentro dela morreria no rollback. Provei ao vivo que persiste. Nada de
+   promoção em leitura (gate só roda em escrita). `tenants.status` NÃO é promovido — o
+   CHECK do banco não tem `'expired'` no enum de `tenants` (registrado como limite).
+4. **`criarTenant` (`tenants.ts`) ajustado** para ser o berço único do cadastro: preço
+   do catálogo `plans` (fallback 4900), `planId` preenchido, `trialEndsAt` idêntico em
+   `tenants` e `subscriptions`, audit `account.created`, slug via `slugificar()`
+   (nova em `normalize.ts`), e colisão de slug virando `CONFLITO` **de verdade** (achado
+   abaixo). `criarConta` trata colisão com sufixo `-2`…`-10`.
+5. **Nenhuma migration** — `subscriptions.trialEndsAt`, `tenants.trialEndsAt` e o valor
+   `'expired'` já existiam (`money.ts`/`tenants.ts` desde `0000`/`0009`). O portão
+   aplicou 12 migrations sem nenhuma nova.
+
+### Achado real do teste ao vivo (bug latente, corrigido)
+
+O pré-cheque de slug de `criarTenant` usava o cliente cru (`unsafeDbWithoutTenant`) —
+mas `tenants` está sob **FORCE RLS** e o cliente cru, sem GUC nenhum, devolve ZERO
+linhas em `tenants` sempre (o seed documenta exatamente isso em `limparDemo`). Ou seja: o
+`CONFLITO` "endereço em uso" era código morto, e a colisão real estourava como erro
+23505 cru — só virou alcançável agora que o cadastro público passa por ali. Corrigi com
+`authDb` (policy `tenants_auth_service`, o mesmo canal do login) + tradução da
+violabilidade de unicidade no `catch` do INSERT para o caso de corrida. Foi o teste ao
+vivo que pegou — `tsc` e build passavam limpos com o bug dentro.
+
+### Decisões que tomei sozinha
+
+- **Sem login automático na action de cadastro**: parse manual de `Set-Cookie` dentro de
+  Server Action é superfície de falha de sessão de graça; a UI chama
+  `signIn.email` logo depois. Justificado no handoff da Nina.
+- **Atomicidade do signup tem uma exceção honesta**: tenant+assinatura+audit nascem na
+  mesma transação; o usuário Better Auth NÃO (ele escreve pelo pool `authDb` dele e não
+  aceita transação externa). Compensação: se `signUpEmail` falha, apago o tenant
+  (CASCADE leva o resto) — não existe "tenant órfão sem usuário". Documentado no código.
+- **`trialing` sem `trialEndsAt` PASSA no gate** (fail-open): `trocarPlano` em modo dev
+  cria assinatura `trialing` sem `trialEndsAt`; punir a agente por dado faltando é
+  punição errada. Fail-closed aqui seria custo para quem não deve nada.
+- **Quem NÃO recebe o gate**: `billing.ts` inteiro (é a saída de quem está bloqueado),
+  `criarTenant` (cria a assinatura que o gate avalia), runners de sistema
+  (`rodarFilaDeFollowups`, `gerarAlertas*` — a régua de follow-up não é ação da agente)
+  e a proposta pública (quem lê é o cliente da agente). Tudo documentado no handoff do
+  Téo como pontos de teste.
+- **Gate também em `criarItemNaBiblioteca`/`atualizar`/`excluir` e
+  `confirmarImportacao`** — não estavam na lista literal do pedido, mas são escrita da
+  agente ("o app fica READ-ONLY" é a regra, não a lista).
+- **`subscriptionGate` não é reexportado pelo barril `@/server`**: módulo sem
+  `'use server'` que importa o cliente do Postgres, reexportado pelo barril, arrasta o
+  driver para o grafo de Client Components — **o `npm run build` quebrou por isso durante
+  a rodada**; deixei comentário no `index.ts` e o gate se importa direto
+  (`@/server/subscriptionGate`).
+- **`concluirTarefa` recebe gate** (é escrita em `tasks`); os runners de régua, não.
+
+### O que NÃO fiz
+
+- **UI** (`/cadastrar`, banner de bloqueio, badge de trial) — nina. Handoff com contrato
+  completo.
+- **Testes permanentes** — teo. Handoff com 7 pontos + o bug de slug como regressão.
+- **Rota HTTP de cadastro** — não precisou: Server Action basta; o PO decide se quer
+  rota dedicada depois.
+- **Não promovi `tenants.status` para `expired`** — o CHECK `tenants_status_check` não
+  tem o valor; se produto quiser os dois em sinc, é migration + decisão dele.
+
+### Verificação (números reais)
+
+- `npx tsc --noEmit` — limpo.
+- `npm run build` — limpo (20 rotas).
+- `npx tsx scripts/check/known-failures.ts` — **440 testes, allowlist 0, "Portão ok"**,
+  12 migrations aplicadas (`zarpa_test` recriado do zero).
+- **Script descartável (apagado, não versionado) contra `zarpa_dev`** — 31 asserções,
+  todas verdes: tabela de veredito pura (8 casos), `criarConta` happy path (tenant +
+  assinatura + trial ≈ +14d com drift 0s + `amountCents` 4900 do catálogo + `planId`
+  preenchido + audit), colisão de slug → `-2`, gate passa com trial futuro, `past_due`
+  recusa sem promover, trial vencido recusa E promove para `expired` sobrevivendo ao
+  rollback com audit 1x, idempotência da segunda passada, sem assinatura passa, e-mail
+  duplicado → `CONFLITO`.
+- **Não testei clicando** — o PO clica.
+- Fronteira respeitada (só `src/server/**`, handoffs e status). NADA commitado.
+
+### Riscos
+
+- **A compensação do signup (`desfazerTenant`) não foi exercida ao vivo** — forçar
+  falha de `signUpEmail` no meio do fluxo exigiria corrida controlada; o caminho é
+  defensivo (try/catch + delete CASCADE) e o cenário de e-mail duplicado é coberto pelo
+  pré-cheque. Risco baixo, mas é o único caminho novo sem prova de runtime.
+- **Colisão de slug esgotada (10 tentativas)** → `CONFLITO` para a UI — nunca vou ver
+  isso em produção com MEIs, mas o caso existe.
+- **Banner de bloqueio depende da Nina tratar `ASSINATURA_INATIVA` centralizadamente** —
+  autosave espalhado vai devolver esse código de vários lugares; se ela tratar caso a
+  caso, algum vai escapar como erro genérico.
+- GUCs forjáveis por SQL arbitrário continuam o risco estrutural de sempre — nenhum GUC
+  novo nesta rodada.
+
+### O que precisa dos outros
+
+- **Nina**: tela `/cadastrar` (contrato em `rafa-para-nina.md` §S13a, incluindo a
+  decisão de login pós-cadastro) + helper central de banner para `ASSINATURA_INATIVA`
+  apontando `/cobranca` + badge de trial via `obterAssinaturaAtual()`.
+- **Téo**: os 7 pontos de `rafa-para-teo.md` §S13a, em especial o teste de que a
+  promoção para `expired` sobrevive ao rollback e o de regressão do slug
+  (`criarTenant` direto → `CONFLITO`).
+- **PO**: se quiser `tenants.status='expired'` (hoje só `subscriptions` promove), é
+  decisão + migration de CHECK. E o clichê de sempre: credencial Asaas quando existir —
+  nada do gate muda, só o que alimenta `past_due`.
+
+---
+
 ## 2026-09-07 — `marcarPropostaComoAceita` + confirmação de aceite público independente de WhatsApp
 
 ### O que ficou pronto

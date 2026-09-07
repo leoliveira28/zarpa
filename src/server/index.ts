@@ -47,6 +47,15 @@ export {
   type TenantAtual,
 } from './tenants';
 export {
+  criarConta,
+  type CriarContaInput,
+  type ContaCriada,
+} from './signup';
+// ATENÇÃO: `subscriptionGate.ts` NÃO é reexportado aqui de propósito. Não é arquivo
+// `'use server'` e importa o cliente do Postgres — reexportar pelo barril arrasta o
+// driver para dentro do grafo de Client Components (o build quebra). Quem precisa do
+// gate ou de `vereditoDaAssinatura` importa de '@/server/subscriptionGate' direto.
+export {
   pravisualizarImportacao,
   confirmarImportacao,
   listarImportacoes,

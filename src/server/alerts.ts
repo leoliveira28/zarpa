@@ -6,6 +6,7 @@ import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { authDb } from '@/lib/auth/db';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
+import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 
 /**
@@ -322,6 +323,8 @@ export async function concluirTarefa(tarefaId: string): Promise<ServiceResult<nu
     const { tenantId, userId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const afetadas = await tx
         .update(tasks)
         .set({ doneAt: new Date(), updatedAt: new Date() })

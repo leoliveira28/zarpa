@@ -171,3 +171,24 @@ export function mesEDiaDe(iso: string | null | undefined): string | null {
   if (!m) return null;
   return `${m[2]}-${m[3]}`;
 }
+
+/**
+ * Nome em slug de endereço de conta (`tenants.slug`): "Maré Alta Turismo" →
+ * `mare-alta-turismo`. Usado no cadastro público (S13a), onde a agente NÃO escolhe
+ * slug — o endereço é derivado do nome da agência e a unicidade fica por conta do
+ * sufixo numérico aplicado por quem chama (`criarConta`, em `signup.ts`) e do índice
+ * único `tenants_slug_key`, que é a garantia real inclusive sob corrida.
+ *
+ * Acentos caem antes da troca por hífen (NFD decompõe e a faixa de diacríticos
+ * `U+0300–U+036F` é removida) — o mesmo comportamento que `criarTenant` já tinha
+ * inline, agora num lugar só para os dois caminhos não divergirem.
+ */
+export function slugificar(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}

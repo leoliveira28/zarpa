@@ -5,6 +5,7 @@ import { contacts, importBatches } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
+import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 import { cpfValido, ehVazio, normalizarEmail, normalizarTexto, parseDataFlexivel } from './normalize';
 import { camposDocumentoDoContato, camposNascimento } from './piiFields';
@@ -371,6 +372,8 @@ export async function confirmarImportacao(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const itens: ItemRelatorio[] = [...itensIgnorados];
       let criados = 0;
       let atualizados = 0;

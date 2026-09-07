@@ -1362,3 +1362,105 @@ casos. O aceite grava sem WhatsApp; o WhatsApp é só um `wa.me` link extra.
 - **Testes** — fronteira do Téo.
 - **Não criei "Nova venda" manual** — continua proibido (você travou em S9;
   vendas só nascem de proposta `accepted` via `converterPropostaEmVenda`).
+
+## S13a — Cadastro público + trial 14 dias + banner de conta bloqueada (dunning)
+
+### 1. `/cadastrar` — a action `criarConta` está pronta
+
+Import do barril de sempre:
+
+```ts
+import { criarConta, type CriarContaInput, type ContaCriada } from '@/server';
+```
+
+Input (zod do lado do servidor — erros voltam como `DADOS_INVALIDOS` com `campo` preenchido):
+
+```ts
+{
+  nomeAgente: string;   // 2–120
+  email: string;        // e-mail válido, max 200
+  senha: string;        // min 8 (piso do Better Auth)
+  nomeAgencia: string;  // 2–120
+}
+```
+
+Retorno OK (`ContaCriada`) — a UI **não precisa** de nada disso além de saber que deu
+certo, mas está lá para log/telemetria:
+
+```ts
+{ tenantId: string; userId: string | null; slug: string; nomeAgencia: string; email: string }
+```
+
+Erros possíveis:
+
+- `DADOS_INVALIDOS` com `campo` (`nomeAgente`/`email`/`senha`/`nomeAgencia`) — mostre
+  junto do campo.
+- `CONFLITO` com `campo: 'email'` — "Já existe uma conta com esse e-mail." Correção
+  sugerida: mandar para `/entrar`.
+- `CONFLITO` com `campo: 'nomeAgencia'` — só quando não deu para derivar um endereço
+  livre do nome (raríssimo; colisão normal é resolvida sozinha, ver abaixo).
+
+O que a tela NÃO pede: slug. O endereço da conta (`tenants.slug`) é derivado do nome da
+agência no servidor e, se já existir ("Agência Maré Norte" tomada → `agencia-mare-norte-2`,
+`-3`, ... até `-10`), o sufixo é automático. Uma decisão a menos na tela de cadastro.
+
+**Não faz login automático dentro da action — a UI chama o login logo depois:**
+
+```ts
+const result = await criarConta({ nomeAgente, email, senha, nomeAgencia });
+if (!result.ok) { /* mostrar result.mensagem / result.campo */ return; }
+await authClient.signIn.email({ email, password: senha, callbackURL: '/hoje' });
+```
+
+Decisão minha (rafa), justificada: transformar a resposta do Better Auth em cookie de
+sessão dentro de uma Server Action exigiria parse manual de `Set-Cookie`
+(Secure/HttpOnly/SameSite/prefixo `__Secure-`) — é o tipo de código onde um erro vira
+falha de sessão. O caminho de login normal já existe, já está testado em `/entrar`, e
+custa uma requisição a mais num fluxo que acontece uma vez na vida da conta. A senha já
+está no formulário; nada de redigir de novo.
+
+### 2. Gate de dunning — o que a UI faz com `ASSINATURA_INATIVA`
+
+Toda Server Action de ESCRITA agora passa pelo gate (`exigirContaAtiva` em
+`src/server/subscriptionGate.ts`): propostas, opções, blocos, negócios, contatos,
+viajantes, vendas, parcelas, tarefas (criar e concluir), integrações, marca, biblioteca,
+importação e o upload de imagem de proposta. Quando a conta está bloqueada, a action
+responde:
+
+```ts
+{ ok: false, code: 'ASSINATURA_INATIVA', mensagem: string, correcao: 'Ir para Cobrança' }
+```
+
+Mensagens que a UI vai receber (prontas, não traduza nem reescreva):
+
+- `'Sua assinatura está em atraso — o app está em modo somente leitura.'` (`past_due`)
+- `'Seu teste gratuito acabou.'` (trial vencido ou `expired`)
+- `'Sua assinatura está cancelada — o app está em modo somente leitura.'` (`canceled`)
+
+**Padrão de banner**: `code === 'ASSINATURA_INATIVA'` → banner de bloqueio com
+`mensagem` + botão com o rótulo de `correcao` linkando para `/cobranca` (a rota já
+existe). Recomendação: um único helper/toast-handler central que reconheça esse código
+(autosave espalhado por toda parte vai devolver isso de todos os lugares — tratar caso a
+caso na tela vai deixar um escapar).
+
+**Leituras NUNCA são bloqueadas.** `listar*`/`obter*`/dashboard/aberturas não passam pelo
+gate e continuam devolvendo dados normalmente quando a conta está bloqueada. Não existe
+estado "sem dados" em dunning — a agente vê tudo, só não consegue escrever.
+
+**Como distinguir leitura liberada vs. bloqueada para o banner permanente**: use
+`obterAssinaturaAtual()` (S11) no layout shell. Regra para renderizar o banner:
+
+- `status === 'active'` → nada.
+- `status === 'trialing'` com `trialEndsAt` no futuro → nada (ou badge de dias restantes).
+- `status === 'trialing'` com `trialEndsAt` no passado → banner "Seu teste gratuito
+  acabou." (na primeira escrita o servidor promove a linha para `expired` — o gate faz
+  isso sozinho; a UI não precisa promover nada).
+- `status === 'past_due'` / `'canceled'` / `'expired'` → banner com a mensagem
+  correspondente.
+
+### 3. O que NÃO é desta entrega
+
+- A tela `/cadastrar` em si e o banner de bloqueio — seus.
+- Nada muda no `/cobranca` do lado do servidor: `trocarPlano`/`cancelarAssinatura`/
+  `listarFaturas` NÃO recebem o gate de propósito (é justamente a saída de quem está
+  bloqueado).

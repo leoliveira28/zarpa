@@ -647,3 +647,94 @@ Tabela nova: `integrations` (migration `drizzle/0011_integracoes.sql`, idx 11 no
 - **A credencial nunca volta** — `listarIntegracoes` não devolve
   `credentials`. Não teste que o ciphertext aparece na resposta — não
   aparece. Teste que NÃO aparece.
+
+## S13a — Trial 14d + gate de dunning + cadastro público
+
+Tudo abaixo verificado por mim contra Postgres de verdade (script descartável contra
+`zarpa_dev`, 31 asserções, todas verdes) — sua parte é transformar isso em teste
+permanente. `tsc` limpo, `build` limpo (20 rotas), portão **440 testes, allowlist 0**.
+
+### 1. Gate de dunning — semântica exata
+
+Helper: `exigirContaAtiva(tx, tenantId)` em `src/server/subscriptionGate.ts`. É chamado
+como PRIMEIRA linha de dentro do `withTenant` de toda Server Action de ESCRITA (44
+inserções: contatos, viajantes, negócios, propostas/opções/blocos, vendas/parcelas,
+tarefas (`criarTarefa` + `concluirTarefa`), biblioteca, integrações, importação, marca
+(`atualizarMarca`) e o upload de imagem de proposta). **Importe de
+`@/server/subscriptionGate`, NÃO do barril `@/server`** — o barril não reexporta o
+módulo de propósito: ele não é `'use server'` e importa o cliente do Postgres; pelo
+barril, arrastaria o driver para o grafo de Client Components (o build quebrou por isso
+durante a rodada — deixei comentário no `index.ts`).
+
+Regra do veredito (função PURA `vereditoDaAssinatura(assinatura, agora)` no mesmo
+arquivo — teste a tabela sem banco):
+
+| assinatura | resultado |
+|---|---|
+| inexistente | PASSA |
+| `trialing`, `trialEndsAt` futuro | PASSA |
+| `trialing`, `trialEndsAt` **null** | PASSA (fail-open: punição não nasce de dado faltando) |
+| `trialing`, `trialEndsAt` no passado | RECUSA `trial_expirado` |
+| `active` | PASSA |
+| `past_due` / `canceled` / `expired` | RECUSA |
+
+Recusa = `ServiceError('ASSINATURA_INATIVA', mensagem, { correcao: 'Ir para Cobrança' })`.
+Mensagens: `past_due` → "Sua assinatura está em atraso — o app está em modo somente
+leitura."; trial vencido/`expired` → "Seu teste gratuito acabou."; `canceled` → "Sua
+assinatura está cancelada — o app está em modo somente leitura."
+
+Pontos que EU provei ao vivo e quero ver travados em teste:
+
+1. **Trial vencido promove para `expired` no DB e a promoção SOBREVIVE ao rollback** —
+   a parte não-óbvia: o gate roda dentro da transação da action, que faz rollback quando
+   o `ServiceError` sobe. A promoção roda numa transação PRÓPRIA aninhada
+   (`promoverParaExpirada`) exatamente por isso. Teste: `trialEndsAt` no passado → gate
+   lança → fora da transação, `subscriptions.status === 'expired'` + 1 linha de
+   `audit_log` com `action: 'subscription.expired'` (idempotente: segunda passagem não
+   duplica o audit — o `UPDATE` tem guarda `WHERE status = 'trialing'`).
+2. **`past_due` recusa SEM promover** — nada muda no DB.
+3. **Leitura nunca bloqueada** — com a conta bloqueada, `listarContatos` (ou qualquer
+   leitura) segue devolvendo dados. Só escrita recusa.
+4. **`billing.ts` NÃO tem o gate** — `trocarPlano`/`cancelarAssinatura`/`listarFaturas`
+   funcionam com a conta bloqueada (é a saída do dunning). Teste que `trocarPlano`
+   responde ok com assinatura `past_due`.
+5. **Proposta pública NUNCA bloqueada** — `obterPropostaPublica`/
+   `aceitarOpcaoPublica`/`registrarVisitaProposta` não passam pelo gate (cliente da
+   agente não paga a conta dela).
+6. **Runners de sistema sem gate** — `rodarFilaDeFollowups`/`gerarAlertas*` continuam
+   escrevendo com a conta bloqueada (régua de follow-up não é ação da agente). Decisão
+   registrada; se produto mudar, é aqui.
+7. **Isolamento padrão** — o gate não cria nenhuma policy/GUC novo; o teste de varredura
+   de `rls-enabled` não deve acusar nada novo (12 migrations, nenhuma nesta rodada).
+
+### 2. Cadastro (`criarConta`, `src/server/signup.ts`) — atomicidade e slug
+
+1. **Tenant + assinatura + audit na MESMA transação** (`withTenant` dentro de
+   `criarTenant`); o usuário Better Auth nasce logo depois via `signUpEmail` + 
+   `withPendingTenant` — FORA dessa transação, porque o Better Auth escreve pelo pool
+   dele (`authDb`) e não aceita transação de fora. **Compensação**: se `signUpEmail`
+   falha, o tenant é APAGADO (CASCADE leva assinatura + audit) — teste se conseguir
+   forçar a falha (ex.: ocupar o e-mail entre o pré-cheque e o `signUpEmail`); senão,
+   teste ao menos que não fica tenant sem usuário após um e-mail duplicado em corrida.
+2. **E-mail duplicado** → `CONFLITO` com `campo: 'email'` (pré-cheque via `authDb` + catch
+   do "already exists" do Better Auth).
+3. **Colisão de slug** → "Agência Maré Norte" duas vezes → segunda conta com slug
+   `agencia-mare-norte-2` (sufixo até `-10`; esgotado → `CONFLITO` `campo:
+   'nomeAgencia'`). Provei ao vivo.
+4. **Bug latente corrigido que merece regressão**: o pré-cheque de slug de `criarTenant`
+   usava o cliente cru — sob FORCE RLS, `SELECT` em `tenants` sem GUC devolve ZERO
+   linhas, então o `CONFLITO` nunca disparava e a colisão estourava como 23505 cru
+   (o teste ao vivo pegou). Agora usa `authDb` (policy `tenants_auth_service`) e a
+   violação de unicidade que escapar do pré-cheque é traduzida para `CONFLITO` no
+   `catch` do INSERT. Teste sugerido: `criarTenant` direto com slug existente →
+   `CONFLITO`, e `criarConta` com mesmo nome → sufixo.
+5. **Trial** — conta nova nasce com `tenants.status='trialing'` + `trialEndsAt` =
+   `subscriptions.trialEndsAt` = agora+14d, `subscriptions.amountCents` do catálogo
+   `plans` (4900 no seed atual), `planId` preenchido, e `audit_log` `account.created`.
+6. **PII** — senha nunca vai para log/audit/erro; `metadata` do audit é
+   `{ plano, trialDias }` (sem e-mail). Vale varredura de leak no retorno de
+   `criarConta` (não devolve hash nem token de sessão).
+7. **Isolamento** — `criarConta` é o único caminho sem sessão que CRIA tenant (nunca
+   escolhe): o `tenantId` do usuário entra por `withPendingTenant` (AsyncLocalStorage),
+   nunca do corpo. Um teste que tente criar conta com `tenantId` no corpo e caia em
+   outro tenant é bem-vindo (deve ser ignorado — o campo é `input: false` no Better Auth).

@@ -14,7 +14,17 @@ export type ServiceErrorCode =
   | 'DADOS_INVALIDOS'
   | 'CONFLITO'
   | 'LIMITE_DO_PLANO'
+  | 'ASSINATURA_INATIVA'
   | 'ASAAS_NAO_CONFIGURADO';
+
+/**
+ * `ASSINATURA_INATIVA` (S13a — gate de dunning): a conta está em `past_due`,
+ * cancelada ou com trial vencido. O app fica READ-ONLY — a agente VÊ tudo, mas
+ * não cria/edita/exclui nada. Leituras NUNCA passam pelo gate (decisão de
+ * produto: bloquear leitura é perder o cliente para sempre; bloquear escrita é
+ * cobrar). Toda recusa do gate usa `correcao: 'Ir para Cobrança'` e a interface
+ * aponta o botão para `/cobranca` — ver `src/server/subscriptionGate.ts`.
+ */
 
 export class ServiceError extends Error {
   code: ServiceErrorCode;

@@ -17,6 +17,7 @@ import {
   type IntegracaoResumo,
 } from '@/lib/integrations';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
+import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 
 /**
@@ -158,6 +159,8 @@ export async function criarIntegracao(
     const keyId = activeKeyId();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [criada] = await tx
         .insert(integrations)
         .values({
@@ -207,6 +210,8 @@ export async function removerIntegracao(id: string): Promise<ServiceResult<null>
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [deletada] = await tx
         .delete(integrations)
         .where(and(eq(integrations.id, id), eq(integrations.tenantId, tenantId)))

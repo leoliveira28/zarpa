@@ -7,6 +7,7 @@ import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { maskDocument } from '@/lib/crypto';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
+import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 import { cpfValido, parseDataFlexivel } from './normalize';
 import { camposCpfDoViajante, camposNascimento, hashesDeBusca, pareceCpf } from './piiFields';
@@ -213,6 +214,8 @@ export async function criarViajante(input: ViajanteInput): Promise<ServiceResult
     );
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       // O contato precisa existir NESTE tenant. Com RLS, um id de outro tenant
       // simplesmente não aparece aqui — a mensagem é a mesma de id inexistente, e é
       // assim que tem que ser: o chamador não descobre que o id existe em outro lugar.
@@ -344,6 +347,8 @@ export async function atualizarViajante(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const linhas = await tx
         .update(travelers)
         .set(valores)
@@ -376,6 +381,8 @@ export async function excluirViajante(viajanteId: string): Promise<ServiceResult
     const { tenantId, userId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const afetadas = await tx
         .delete(travelers)
         .where(eq(travelers.id, viajanteId))

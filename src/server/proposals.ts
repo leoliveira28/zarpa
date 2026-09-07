@@ -16,6 +16,7 @@ import {
 import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
+import { exigirContaAtivaForaDeTransacao, exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 import { sugerirComissaoCents, sugerirValorParcelaCents } from './pricing';
 import { enviarImagem } from './storage';
@@ -392,6 +393,8 @@ export async function criarPropostaAPartirDoNegocio(
     const dados = parsed.data;
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       // O negócio precisa existir NESTE tenant. Com RLS, um id de outro tenant simplesmente
       // não aparece aqui — mesma mensagem de "não existe", de propósito.
       const [negocio] = await tx
@@ -549,6 +552,8 @@ export async function atualizarProposta(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const linhas = await tx
         .update(proposals)
         .set(valores)
@@ -571,6 +576,8 @@ export async function arquivarProposta(propostaId: string): Promise<ServiceResul
     const { tenantId, userId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const afetadas = await tx
         .update(proposals)
         .set({ archivedAt: new Date(), updatedAt: new Date() })
@@ -602,6 +609,8 @@ export async function restaurarProposta(propostaId: string): Promise<ServiceResu
     const { tenantId, userId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const afetadas = await tx
         .update(proposals)
         .set({ archivedAt: null, updatedAt: new Date() })
@@ -647,6 +656,8 @@ export async function enviarProposta(propostaId: string): Promise<ServiceResult<
     const { tenantId, userId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [proposta] = await tx
         .select({
           id: proposals.id,
@@ -785,6 +796,8 @@ export async function marcarPropostaComoAceita(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [proposta] = await tx
         .select({
           id: proposals.id,
@@ -903,6 +916,8 @@ export async function criarOpcao(
     const dados = validarOpcao(input, false);
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       await exigirProposta(tx, propostaId);
 
       const existentes = await tx
@@ -1009,6 +1024,8 @@ export async function atualizarOpcao(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [existente] = await tx
         .select({ id: proposalOptions.id, proposalId: proposalOptions.proposalId })
         .from(proposalOptions)
@@ -1051,6 +1068,8 @@ export async function excluirOpcao(opcaoId: string): Promise<ServiceResult<null>
     const { tenantId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const afetadas = await tx
         .delete(proposalOptions)
         .where(eq(proposalOptions.id, opcaoId))
@@ -1086,6 +1105,8 @@ export async function reordenarOpcoes(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       await exigirProposta(tx, propostaId);
 
       let afetadas = 0;
@@ -1154,6 +1175,8 @@ export async function criarBloco(
     const dados = validarBloco(input, false);
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       await exigirProposta(tx, propostaId);
 
       const optionId = dados.optionId ?? null;
@@ -1226,6 +1249,8 @@ export async function atualizarBloco(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [existente] = await tx
         .select({ id: proposalBlocks.id, proposalId: proposalBlocks.proposalId })
         .from(proposalBlocks)
@@ -1259,6 +1284,8 @@ export async function excluirBloco(blocoId: string): Promise<ServiceResult<null>
     const { tenantId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const afetadas = await tx
         .delete(proposalBlocks)
         .where(eq(proposalBlocks.id, blocoId))
@@ -1294,6 +1321,8 @@ export async function reordenarBlocos(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       await exigirProposta(tx, propostaId);
 
       let afetadas = 0;
@@ -1332,6 +1361,8 @@ export async function inserirItemDaBibliotecaComoBloco(
     const alvoOpcao = optionId ?? null;
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       await exigirProposta(tx, propostaId);
       if (alvoOpcao) await exigirOpcaoDaProposta(tx, propostaId, alvoOpcao);
 
@@ -1396,6 +1427,8 @@ export async function enviarImagemDaProposta(
 ): Promise<ServiceResult<{ url: string }>> {
   return comoResultado(async () => {
     const { tenantId } = await requireAuthContext();
+    // S13a: gate de dunning — upload é etapa de edição, bloqueado também.
+    await exigirContaAtivaForaDeTransacao(tenantId);
     const resultado = await enviarImagem(arquivo, tenantId);
     if (!resultado.ok) {
       throw new ServiceError('DADOS_INVALIDOS', resultado.mensagem, {

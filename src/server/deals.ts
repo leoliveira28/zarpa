@@ -6,6 +6,7 @@ import { activities, contacts, deals, type Deal } from '@/db/schema';
 import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
+import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 import { parseDataFlexivel } from './normalize';
 
@@ -299,6 +300,8 @@ export async function moverEstagioDoNegocio(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [atual] = await tx
         .select({ id: deals.id, stage: deals.stage })
         .from(deals)
@@ -422,6 +425,8 @@ export async function criarNegocio(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [contato] = await tx
         .select({ id: contacts.id, name: contacts.name })
         .from(contacts)
@@ -645,6 +650,8 @@ export async function atualizarNegocio(
     const dados = parsed.data;
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [atual] = await tx
         .select({
           id: deals.id,

@@ -7,6 +7,7 @@ import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { maskDocument } from '@/lib/crypto';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
+import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 import { cpfValido, normalizarTelefone } from './normalize';
 import { camposDocumentoDoContato, camposNascimento, hashesDeBusca, pareceCpf } from './piiFields';
@@ -276,6 +277,8 @@ export async function criarContato(input: ContatoInput): Promise<ServiceResult<C
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       if (email) {
         // Índice único parcial em (tenant_id, lower(email)) já garante isso no banco.
         // A checagem aqui existe só para dar mensagem decente em vez de erro 23505.
@@ -408,6 +411,8 @@ export async function atualizarContato(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const linhas = await tx
         .update(contacts)
         .set(valores)
@@ -441,6 +446,8 @@ export async function arquivarContato(contatoId: string): Promise<ServiceResult<
     const { tenantId, userId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       // Sem `where tenant_id = ...`: o RLS já restringe. Se o id for de outro tenant, a
       // linha simplesmente não existe daqui — 0 linhas afetadas, não erro de permissão,
       // e o chamador não descobre se o id existe em outro lugar.
@@ -475,6 +482,8 @@ export async function restaurarContato(contatoId: string): Promise<ServiceResult
     const { tenantId, userId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const afetadas = await tx
         .update(contacts)
         .set({ archivedAt: null, updatedAt: new Date() })
@@ -513,6 +522,8 @@ export async function excluirContato(contatoId: string): Promise<ServiceResult<n
     const { tenantId, userId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [negocio] = await tx
         .select({ id: deals.id })
         .from(deals)

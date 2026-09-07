@@ -1,15 +1,21 @@
 'use server';
 
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { subscriptions, tenants } from '@/db/schema';
+import { plans, subscriptions, tenants } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
-import { unsafeDbWithoutTenant } from '@/db/client';
+import { authDb } from '@/lib/auth/db';
 import { uuidv7 } from '@/db/uuid';
 import { requireAuthContext } from '@/lib/auth/session';
+import { slugificar } from './normalize';
+import { registrarAuditoria } from './audit';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
+import { exigirContaAtiva } from './subscriptionGate';
 
 const PLAN_PRICE_CENTS = { solo: 4_900, pro: 9_900, studio: 19_900 } as const;
+
+/** Trial do cadastro público (S13a): 14 dias corridos desde o cadastro. */
+const DIAS_DE_TRIAL = 14;
 
 const marcaInput = z.object({
   brandName: z.string().trim().min(2).max(80).optional(),
@@ -87,6 +93,8 @@ export async function atualizarMarca(input: MarcaInput): Promise<ServiceResult<n
     }
 
     await withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       await tx
         .update(tenants)
         .set({ ...parsed.data, updatedAt: new Date() })
@@ -100,14 +108,23 @@ export async function atualizarMarca(input: MarcaInput): Promise<ServiceResult<n
 /**
  * Criação de tenant — o caminho de cadastro.
  *
- * NÃO é Server Action exposta: é função de serviço, chamada pelo fluxo de signup depois
- * de o Better Auth validar o e-mail. Está aqui porque só existe um lugar no sistema onde
- * um `tenant_id` novo nasce, e ele deve ser fácil de achar.
+ * NÃO é Server Action exposta para o usuário final: é função de serviço, chamada pelo
+ * fluxo de signup (`src/server/signup.ts`, S13a), que decide o `slug` e cria o usuário
+ * logo depois. Está aqui porque só existe um lugar no sistema onde um `tenant_id` novo
+ * nasce, e ele deve ser fácil de achar.
  *
  * O id é gerado antes do INSERT porque a policy de `tenants` compara `id` com
  * `app.tenant_id`: sem contexto aberto com o id novo, o próprio INSERT é recusado pelo
  * `WITH CHECK`. Não é obstáculo, é a garantia de que não existe tenant criado fora de
  * contexto.
+ *
+ * Nasce com assinatura trial (`status: 'trialing'`, `trialEndsAt = agora + 14 dias`) em
+ * `tenants` E em `subscriptions` — o gate de dunning (`src/server/subscriptionGate.ts`)
+ * avalia a de `subscriptions`; a de `tenants` é a fotografia de estado da conta.
+ * `amountCents` vem do catálogo `plans` (S11) e cai para a tabela fixa só se o catálogo
+ * estiver vazio — o fallback é rede de segurança, não fonte de verdade. Colisão de
+ * `slug` vira `CONFLITO`: quem chama decide se tenta sufixo (`criarConta` tenta) ou
+ * devolve o erro para a pessoa escolher outro nome.
  */
 export async function criarTenant(dados: {
   name: string;
@@ -115,13 +132,7 @@ export async function criarTenant(dados: {
   plan?: 'solo' | 'pro' | 'studio';
   contactEmail?: string;
 }): Promise<{ tenantId: string }> {
-  const slug = dados.slug
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+  const slug = slugificar(dados.slug);
 
   if (slug.length < 3) {
     throw new ServiceError('DADOS_INVALIDOS', 'O endereço da conta precisa de 3 letras ou mais.', {
@@ -130,10 +141,16 @@ export async function criarTenant(dados: {
   }
 
   // `slug` é único global e a checagem precisa enxergar TODOS os tenants — inclusive os
-  // que este usuário não pode ver. É um dos poucos usos legítimos do cliente cru: uma
-  // leitura de uma coluna não sensível, para dar mensagem melhor que "erro 23505".
-  // O índice único no banco continua sendo a garantia real, inclusive contra corrida.
-  const jaExiste = await unsafeDbWithoutTenant
+  // que este usuário ainda não tem contexto para ver. Usa `authDb`, NÃO o cliente cru:
+  // `tenants` está sob FORCE ROW LEVEL SECURITY e o cliente cru (sem nenhum GUC) devolve
+  // ZERO linhas em `tenants`, sempre — o pré-cheque antigo (cliente cru) era código
+  // morto, e a colisão só aparecia como erro 23505 cru no INSERT (achado do teste ao
+  // vivo desta rodada; o seed documenta o mesmo comportamento em `limparDemo`).
+  // `authDb` liga `app.auth_context=on`, que a policy `tenants_auth_service` aceita —
+  // é o mesmo canal do login, que também precisa resolver tenant antes de haver sessão.
+  // O índice único no banco continua sendo a garantia real contra corrida; a violação
+  // que escapar daqui é traduzida logo abaixo.
+  const jaExiste = await authDb
     .select({ slug: tenants.slug })
     .from(tenants)
     .where(eq(tenants.slug, slug))
@@ -148,28 +165,68 @@ export async function criarTenant(dados: {
 
   const tenantId = uuidv7();
   const plan = dados.plan ?? 'solo';
+  const trialEndsAt = new Date(Date.now() + DIAS_DE_TRIAL * 24 * 60 * 60 * 1000);
 
-  await withTenant(tenantId, async (tx) => {
-    await tx.insert(tenants).values({
-      id: tenantId,
-      name: dados.name.trim(),
-      slug,
-      plan,
-      status: 'trialing',
-      brandName: dados.name.trim(),
-      contactEmail: dados.contactEmail ?? null,
-      trialEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-    });
+  try {
+    await withTenant(tenantId, async (tx) => {
+      // Preço do catálogo (policy `plans_read USING(true)` — leitura liberada em
+      // qualquer contexto). Fallback à tabela fixa se o catálogo não tiver o plano.
+      const [plano] = await tx
+        .select({ id: plans.id, priceCents: plans.priceCents })
+        .from(plans)
+        .where(and(eq(plans.slug, plan), eq(plans.isActive, true)))
+        .limit(1);
+      const amountCents = plano?.priceCents ?? PLAN_PRICE_CENTS[plan];
 
-    await tx.insert(subscriptions).values({
-      tenantId,
-      plan,
-      status: 'trialing',
-      amountCents: PLAN_PRICE_CENTS[plan],
-      billingCycle: 'monthly',
-      trialEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+      await tx.insert(tenants).values({
+        id: tenantId,
+        name: dados.name.trim(),
+        slug,
+        plan,
+        status: 'trialing',
+        brandName: dados.name.trim(),
+        contactEmail: dados.contactEmail ?? null,
+        trialEndsAt,
+      });
+
+      await tx.insert(subscriptions).values({
+        tenantId,
+        plan,
+        planId: plano?.id ?? null,
+        status: 'trialing',
+        amountCents,
+        billingCycle: 'monthly',
+        trialEndsAt,
+      });
+
+      await registrarAuditoria(tx, {
+        tenantId,
+        actorUserId: null,
+        action: 'account.created',
+        entity: 'tenant',
+        entityId: tenantId,
+        metadata: { plano: plan, trialDias: DIAS_DE_TRIAL },
+      });
     });
-  });
+  } catch (error: unknown) {
+    // Corrida: dois cadastros simultâneos passam pelo pré-cheque e um perde o INSERT.
+    // Traduz a violação de `tenants_slug_key` para a mesma resposta do pré-cheque —
+    // quem chama (`criarConta`) trata as duas igualmente (sufixo numérico).
+    if (ehViolacaoDeUnicidade(error)) {
+      throw new ServiceError('CONFLITO', 'Esse endereço já está em uso.', {
+        campo: 'slug',
+        correcao: 'Escolher outro endereço',
+      });
+    }
+    throw error;
+  }
 
   return { tenantId };
+}
+
+/** Postgres 23505 = unique_violation. O driver expõe o código em `.code`. */
+function ehViolacaoDeUnicidade(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const codigo: unknown = (error as { code?: unknown }).code;
+  return codigo === '23505';
 }

@@ -6,6 +6,7 @@ import { proposalOptions, proposals, receivables, sales } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
+import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 import { parseDataFlexivel } from './normalize';
 
@@ -173,6 +174,8 @@ export async function converterPropostaEmVenda(
     const dados = parsed.data;
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [existente] = await tx
         .select(COLUNAS_VENDA)
         .from(sales)
@@ -363,6 +366,8 @@ export async function atualizarVenda(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const linhas = await tx
         .update(sales)
         .set(valores)
@@ -402,6 +407,8 @@ export async function atualizarStatusComissao(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const linhas = await tx
         .update(sales)
         .set({ comissaoStatus: parsed.data, updatedAt: new Date() })
@@ -439,6 +446,8 @@ export async function excluirVenda(vendaId: string): Promise<ServiceResult<null>
     const { tenantId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       await exigirVenda(tx, vendaId);
 
       const [comParcelaPaga] = await tx
@@ -507,6 +516,8 @@ export async function criarParcela(
     const dados = parsed.data;
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       await exigirVenda(tx, vendaId);
 
       const [criada] = await tx
@@ -565,6 +576,8 @@ export async function gerarParcelasDaVenda(
     const dados = parsed.data;
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const [venda] = await tx
         .select({ id: sales.id, valorBrutoCents: sales.valorBrutoCents })
         .from(sales)
@@ -677,6 +690,8 @@ export async function atualizarParcela(
     }
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const linhas = await tx
         .update(receivables)
         .set(valores)
@@ -703,6 +718,8 @@ export async function excluirParcela(parcelaId: string): Promise<ServiceResult<n
     const { tenantId } = await requireAuthContext();
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       const afetadas = await tx
         .delete(receivables)
         .where(eq(receivables.id, parcelaId))

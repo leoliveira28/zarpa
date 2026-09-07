@@ -7,6 +7,7 @@ import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { authDb } from '@/lib/auth/db';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
+import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 import {
   gerarAlertasDeAniversario,
@@ -457,6 +458,8 @@ export async function criarTarefa(input: CriarTarefaInput): Promise<ServiceResul
     const contactId = vazioParaNulo(dados.contactId);
 
     return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
+      await exigirContaAtiva(tx, tenantId);
       if (dealId) {
         const [negocio] = await tx.select({ id: deals.id }).from(deals).where(eq(deals.id, dealId)).limit(1);
         if (!negocio) {
