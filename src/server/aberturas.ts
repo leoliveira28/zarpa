@@ -80,6 +80,11 @@ async function obterAberturas(
   // Usa SQL direto porque o Drizzle não type-checks GROUP BY facilmente.
   // O tenant_id já está set via set_config dentro de withTenant, mas fazemos
   // a filtragem explícita de qualquer forma (camada extra de defesa).
+  //
+  // `dataLimite.toISOString()`, não o `Date` cru: `tx.execute(sql\`...\`)` passa o
+  // parâmetro direto ao driver sem a serialização automática que o `sql` tag do
+  // postgres.js faz — um `Date` bruto derruba com "Received an instance of Date"
+  // (ERR_INVALID_ARG_TYPE). String ISO com `timestamptz` faz o cast sozinho.
   const linhas = await tx.execute<{
     proposal_id: string;
     contact_name: string;
@@ -102,7 +107,7 @@ async function obterAberturas(
     where
       p.tenant_id = ${tenantId}
       and p.first_viewed_at is not null
-      and p.first_viewed_at >= ${dataLimite}
+      and p.first_viewed_at >= ${dataLimite.toISOString()}
     group by p.id, d.id, c.id
     order by p.first_viewed_at desc
     limit ${limite}
