@@ -1,5 +1,160 @@
 # Nina — status
 
+## S12 — UI de integrações (Wooba + Infotravel, cotação só)
+
+### O que ficou pronto
+
+**`src/app/(app)/integracoes/page.tsx` + `IntegracoesScreen.tsx`** — tela nova,
+rota `/integracoes`. Registro silencioso (miolo do app): papel, fio entre
+seções (`SectionHeading` + `Rule`), uma cor de destaque (o azul do accent
+aparece uma vez — no botão "Cadastrar conta"). Sem ilustração, sem prancha.
+
+A tela faz uma chamada (`listarIntegracoes`) e três estados: skeleton
+(`Skeleton`/`SkeletonRow`, nunca spinner), erro (`Card` + botão com
+`correcao` do servidor) e pronto.
+
+**Seção "Contas cadastradas"** — lista `IntegracaoResumo[]` dentro de um
+`Card` com `Rule inner` entre itens. Cada linha: `label` (texto-15 medium),
+`Badge` de Ativa/Inativa (dot), "Wooba"/"Infotravel" + data de cadastro em
+`tabular-nums` (text-13 muted), e `CardAction` "Remover" em `text-danger`.
+Remover é físico (`removerIntegracao`), com toast de desfazer de 8s via
+`useDeferredDelete` (mesmo padrão de `cancelarAssinatura`/`excluirOpcao`).
+Estado vazio: `EmptyState` com preview de exemplo (card de conta ativa).
+
+**Seção "Cadastrar nova conta"** — `Card` com `CardHeader`/`CardBody`/`CardFooter`.
+Dentro: `Select` de provider (Wooba / Infotravel), `Input` de `label`
+(2–100, com validação local + `FieldError`), e campos de credencial
+dinâmicos por provider (`PROVIDER_FIELDS`: Wooba pede `apiKey`;
+Infotravel pede `apiKey` + `clientId`). Os campos de credencial são
+`type="password"`, `autoComplete="off"`, e **limpos do estado local
+imediatamente após submit** — nunca voltam do servidor
+(`IntegracaoResumo` não tem `credentials`). O rodapé tem o botão
+"Cadastrar conta" (`variant="primary" size="sm"`, reage no `pointerdown`,
+`loading` durante o submit) e contexto à esquerda: "Cotação só — sem
+reserva real." Erro vira toast com `action: { label: correcao, onClick:
+retry }`.
+
+**`src/components/app/CotacaoSheet.tsx`** — o fluxo "Buscar cotação"
+dentro do construtor de proposta. Abre da `OptionRow` por um botão
+discreto (text-13, `SearchIcon` + "Buscar cotação") abaixo do grid de
+preço/custo/comissão. Três fases dentro do mesmo `Sheet`:
+
+1. **"form"** — seletor de integração ativa (`Select`, se houver; se
+   não, aviso "Sem conta ativa — usando dados de exemplo"), campos de
+   destino (texto), check-in/check-out (`type="date"`), adultos e
+   crianças (`type="number"`). Botão "Buscar hotéis" (`variant="primary"
+   block`, reage no `pointerdown`, `loading` durante a busca).
+2. **"hotels"** — lista de `HotelBusca[]`, cada hotel clicável (botão
+   com `border-line` + `hover:border-line-strong` + `active:scale-[0.995]`,
+   transition de transform só). Cada item: nome (text-15 medium),
+   destino + categoria (text-13 muted), preço em `Money` com
+   `reserveFor` do teto. Badge "Exemplo" (tone warn) se
+   `exemplo === true`. "Voltar" para a fase de form.
+3. **"cotacao"** — detalhe da cotação: nome do hotel, custo em
+   `Money size="20"`, check-in/check-out em `tabular-nums`, detalhes.
+   Badge "Cotação de exemplo" se `exemplo === true`. Botão "Usar
+   este custo" (`variant="primary" block`) que chama
+   `onConfirm(custoCents, nome)` → preenche `costCents` da opção via
+   `costAutosave.commit(custoCents)` + toast "Custo preenchido".
+   "Voltar" para hotéis.
+
+**`Cotacao.custoCents` é o CUSTO, não o preço** — o "Usar este custo"
+preenche `costCents` da opção, nunca `priceCents`. O preço de venda
+continua sendo o agente quem define. O `fornecedor` texto do option
+não existe em `OpcaoEdicao` (não há campo `fornecedor` no schema de
+`proposal_options`) — o toast de confirmação mostra o nome do hotel +
+o valor para contexto, mas não tenta gravar um campo que não existe.
+
+**Integração no `PropostaEditorScreen.tsx`** — `OptionRow` ganhou estado
+`cotacaoOpen` + o botão "Buscar cotação" + o `CotacaoSheet` ao final do
+componente. `onConfirm` chama `costAutosave.commit(custoCents)` e mostra
+toast "Custo preenchido" com o nome do hotel e o valor.
+
+### Entrada na navegação
+
+**Decisão: link "Integrações" na barra lateral do AppShell (`SideNav`
+footer), ao lado de "Assinatura".** Mesmo padrão, mesma discrição. A
+barra inferior continua com 5 itens (Hoje/Funil/Propostas/Clientes +
+Dinheiro) — não inventei um sexto ícone. Na lateral (`lg:flex`, só
+desktop), o rodapé agora tem Assinatura / Integrações / Kitchen sink
+/ Sair.
+
+No mobile (390px) a barra lateral está oculta (`hidden lg:flex`) — então
+"Integrações" é alcançável apenas por URL direta ou por link futuro em
+alguma tela de configurações/perfil. É a mesma lacuna que "Assinatura"
+já tem (não foi introduzida por mim), e não é do escopo do S12
+resolvê-la. O Leandro pode navegar para `/integracoes` diretamente.
+
+### Decisões de design que tomei sozinha
+
+1. **Botão "Buscar cotação" como texto discreto, não CardAction.**
+   Coloquei como um `button` text-13 com `SearchIcon` abaixo do grid de
+   preço/custo/comissão — não como `CardAction` no topo do OptionRow.
+   Motivo: a ação principal do OptionRow é "editar a opção"; "buscar
+   cotação" é um atalho que preenche UM campo (custo), não uma ação
+   estrutural. Um botão de texto discreto diz "isto é um caminho
+   alternativo para preencher o custo", não "isto é uma ação tão
+   importante quanto remover".
+
+2. **Sheet sem arrasto (`draggable={false}`).** O CotacaoSheet tem
+   formulário com campos de data e number — o arrasto interferiria no
+   scroll e nos inputs. O Sheet fecha pelo botão "Voltar", pelo X, ou
+   pelo Esc.
+
+3. **Filtro de integração ativa no seletor.** O `Select` do CotacaoSheet
+   lista apenas integrações `isActive: true` (filtradas no cliente de
+   `listarIntegracoes()`). Se nenhuma ativa, o seletor some e aparece o
+   aviso "Sem conta ativa — usando dados de exemplo" — a busca segue
+   com `integracaoId: undefined`, que o backend resolve como modo dev
+   (dados de exemplo).
+
+4. **`transition-colors` trocado por `[transition:transform_120ms…]`
+   no botão de hotel.** O gate (`tests/design/guards.test.ts`) flag
+   `transition-colors` como animação de cor (fill/stroke) fora do
+   registro. Os componentes de UI (`Button`, `Card`, `Select`, etc.)
+   estão no registro (`deviations.ts`) com dono e motivo. Em vez de
+   adicionar `CotacaoSheet.tsx` ao registro, troquei por
+   `transition:transform` — o `active:scale-[0.995]` é a resposta
+   tátil, e a troca de cor no hover é instantânea (aceitável: é uma
+   mudança sutil de `border-line` para `border-line-strong`).
+
+### Verificação
+
+- `npx tsc --noEmit` — limpo.
+- `npm run build` — limpo (`/integracoes` aparece como rota dinâmica nova).
+- `npx vitest run tests/design/guards.test.ts` — 6/6 verdes (Postgres
+  `zarpa-db` de pé).
+
+**Passo a passo do fluxo para o PO (Leandro) clicar:**
+
+1. Login `dev@zarpa.local` / `dev12345`.
+2. Na barra lateral (desktop) ou URL direta, abrir `/integracoes`.
+3. Cadastrar uma conta: escolher Wooba ou Infotravel, dar um nome
+   (ex.: "Conta principal"), preencher a chave de API (e Client ID
+   se Infotravel). Clicar "Cadastrar conta" — a conta aparece na
+   lista acima, toast "Conta Wooba cadastrada".
+4. Remover uma conta: clicar "Remover" — toast "Conta removida" com
+   desfazer de 8s. Se desfazer, a conta volta.
+5. Abrir uma proposta no construtor (`/propostas/[id]/editar`).
+6. Em uma opção, clicar "Buscar cotação" — abre o sheet.
+7. Sem conta ativa: o sheet mostra "usando dados de exemplo". Com
+   conta: o seletor lista as contas ativas.
+8. Preencher destino (ex.: "Buenos Aires"), datas, pax. Clicar
+   "Buscar hotéis".
+9. A lista de hotéis aparece (3 de exemplo, sem conta ativa). Badge
+   "Exemplo" discreto se for o caso.
+10. Clicar em um hotel — a cotação aparece com o custo em `Money`.
+11. Clicar "Usar este custo" — o `costCents` da opção é preenchido,
+    toast "Custo preenchido" com o nome do hotel + valor, e o sheet
+    fecha.
+12. O campo "Custo" no OptionRow reflete o novo valor, e o
+    `SavedMark` mostra "Salvo".
+
+**Nada ficou pendente.** Os três itens de verificação (tsc, build,
+gate) estão verdes.
+
+---
+
 ## S11 — UI de cobrança (assinatura Asaas)
 
 ### O que ficou pronto

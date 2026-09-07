@@ -29,7 +29,8 @@ import { Field, FieldError, FieldHint, Label, SavedMark } from "@/components/ui/
 import { Input, Textarea } from "@/components/ui/Input";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import { ChevronRightIcon, LinkIcon, PlusIcon } from "@/components/app/icons";
+import { ChevronRightIcon, LinkIcon, PlusIcon, SearchIcon } from "@/components/app/icons";
+import { CotacaoSheet } from "@/components/app/CotacaoSheet";
 import { cn } from "@/lib/ui/cn";
 import { useAutosave } from "@/lib/ui/useAutosave";
 import { BlocksEditor } from "./BlocksEditor";
@@ -627,6 +628,8 @@ function OptionRow({
     }, { duration: 8000 });
   }, [option.id, option.name, toast]);
 
+  const [cotacaoOpen, setCotacaoOpen] = React.useState(false);
+
   const suggestedCommission = sugerirComissaoCents(option.priceCents, option.costCents);
   const suggestedInstallment = option.installments
     ? sugerirValorParcelaCents(option.priceCents, option.installments)
@@ -708,6 +711,15 @@ function OptionRow({
         </Field>
       </div>
 
+      <button
+        type="button"
+        onPointerDown={() => setCotacaoOpen(true)}
+        className="flex w-fit items-center gap-1.5 text-13 font-medium text-muted hover:text-ink [@media(pointer:coarse)]:min-h-9"
+      >
+        <SearchIcon className="size-3.5" />
+        Buscar cotação
+      </button>
+
       <div className="grid gap-3 sm:grid-cols-3">
         <Field>
           <Label optional>Parcelas</Label>
@@ -768,6 +780,20 @@ function OptionRow({
         />
         <span className="text-13 text-ink">Recomendar esta opção na proposta pública</span>
       </label>
+
+      <CotacaoSheet
+        open={cotacaoOpen}
+        onOpenChange={setCotacaoOpen}
+        optionName={option.name}
+        onConfirm={(custoCents, fornecedor) => {
+          void costAutosave.commit(custoCents);
+          toast.show({
+            title: "Custo preenchido",
+            description: `${fornecedor} — R$ ${(custoCents / 100).toFixed(2).replace(".", ",")}`,
+            tone: "ok",
+          });
+        }}
+      />
     </div>
   );
 }

@@ -206,6 +206,12 @@ function SideNav({ activeHref }: { activeHref: string | null }) {
           Assinatura
         </Link>
         <Link
+          href="/integracoes"
+          className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
+        >
+          Integrações
+        </Link>
+        <Link
           href="/kitchen-sink"
           className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
         >
