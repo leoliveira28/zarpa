@@ -17,6 +17,7 @@ import {
   type OpcaoEdicao,
   type PropostaEdicao,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 // Helpers síncronos de matemática pura (não `'use server'`) — ver
 // docs/handoffs/rafa-para-nina.md, seção Parcelamento: seguro de importar
 // direto em componente de cliente, o arquivo não toca em banco nem em auth.
@@ -206,6 +207,7 @@ function PublishBar({
     const result = await converterPropostaEmVenda(proposta.id);
     setConvertingSale(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({
         title: "Não consegui gerar a venda",
         description: result.mensagem,
@@ -222,6 +224,7 @@ function PublishBar({
     const result = await enviarProposta(proposta.id);
     setSending(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({
         title: "Não consegui enviar a proposta",
         description: result.mensagem,
@@ -265,6 +268,7 @@ function PublishBar({
     const result = await marcarPropostaComoAceita(proposta.id, optionId);
     setMarkingAccepted(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       // Reverte o estado otimista — volta para `sent`/`viewed` como era.
       onPatched(previous);
       toast.show({
@@ -580,6 +584,7 @@ function OptionsCard({
     });
     setCreating(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui criar a opção", description: result.mensagem, tone: "danger" });
       return;
     }
@@ -728,6 +733,7 @@ function OptionRow({
       if (cancelled) return;
       const result = await excluirOpcao(option.id);
       if (!result.ok) {
+        avisarRecusaDeEscrita(result);
         toast.show({ title: `Não consegui remover ${option.name}`, description: result.mensagem, tone: "danger" });
       }
     }, 8000);

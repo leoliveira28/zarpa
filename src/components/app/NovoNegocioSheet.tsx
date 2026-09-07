@@ -12,6 +12,7 @@ import { Combobox } from "@/components/ui/Combobox";
 import { Field, FieldError, FieldHint, Label } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { Sheet, SheetContent } from "@/components/ui/Sheet";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 
 /* =============================================================================
    Novo negócio — o ponto de entrada que faltava
@@ -98,6 +99,7 @@ export function NovoNegocioSheet({
     });
     setCreating(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       setFieldError({ campo: result.campo, mensagem: result.mensagem });
       return;
     }

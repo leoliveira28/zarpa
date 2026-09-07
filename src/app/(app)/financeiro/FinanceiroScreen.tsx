@@ -11,6 +11,7 @@ import {
   type ParcelaResumo,
   type VendaResumo,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardAction, SectionHeading } from "@/components/ui/Card";
@@ -171,6 +172,7 @@ function RecebiveisSection({
   async function handleMarkPaid(parcela: ParcelaComVenda) {
     const result = await marcarParcelaPaga(parcela.id);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui marcar como paga", description: result.mensagem, tone: "danger" });
       return;
     }
@@ -362,6 +364,7 @@ function ComissaoRow({
     const result = await atualizarStatusComissao(venda.id, status);
     setSaving(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui atualizar", description: result.mensagem, tone: "danger" });
       return;
     }

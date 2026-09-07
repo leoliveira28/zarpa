@@ -13,6 +13,7 @@ import {
   type PreviaImportacao,
   type RelatorioImportacao,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { Badge, type BadgeProps } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, SectionHeading } from "@/components/ui/Card";
@@ -126,6 +127,7 @@ export function ImportWizard() {
     const result = await confirmarImportacao(file, mapping);
     setConfirming(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       setConfirmError({ mensagem: result.mensagem, correcao: result.correcao });
       return;
     }

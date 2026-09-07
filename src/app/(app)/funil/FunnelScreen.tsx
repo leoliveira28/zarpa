@@ -11,6 +11,7 @@ import {
   type EstagioDeFunil,
   type NegocioDoFunil,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { cn } from "@/lib/ui/cn";
 import { formatDayMonth } from "@/lib/ui/format";
 import {
@@ -293,6 +294,7 @@ export function FunnelScreen() {
     });
     const result = await moverEstagioDoNegocio(deal.id, stage);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({
         title: `Não consegui desfazer — ${deal.contactName}`,
         description: result.mensagem,
@@ -323,6 +325,7 @@ export function FunnelScreen() {
     const result = await moverEstagioDoNegocio(deal.id, stage);
 
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       // o servidor recusou — a posição do card não pode divergir do banco.
       setItems((current) =>
         current.map((item) =>

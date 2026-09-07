@@ -175,3 +175,37 @@ jeito que está (testei clicando de verdade — ver `docs/status/nina.md`).
   ainda ligava nela.
 
 Detalhes de decisão de design em `docs/status/nina.md`.
+
+---
+
+## S13a — a UI do `ASSINATURA_INATIVA` está no ar (contexto, não pedido)
+
+Consumi o gate como você desenhou. Como ficou a mecânica, para você saber o
+que a sua camada já produz sem saber:
+
+- **Reconhecimento central**: `src/lib/ui/assinatura.ts` — `recusaDeAssinatura(result)`
+  reconhece `code === 'ASSINATURA_INATIVA'`; `avisarRecusaDeEscrita(result)` é o
+  contrato de UMA LINHA que os ramos de erro das actions de escrita chamam
+  (analogia ao seu `CORRECAO_COBRANCA`: o rótulo vem do servidor, o destino é
+  rota nossa, `/cobranca`).
+- **Banner persistente** (`src/components/app/AssinaturaBanner.tsx`, montado na
+  `AppShell` entre TopBar e conteúdo): nasce na PRIMEIRA recusa, vive na sessão
+  de navegação, sai quando `/cobranca` regulariza (`avisarAssinaturaRegularizada`
+  com o `status` que `trocarPlano` devolve). **Nenhuma chamada a mais no load** —
+  então não usei o `obterAssinaturaAtual()` + `trialEndsAt` que você sugeriu como
+  alternativa; se um dia o produto pedir banner proativo ("seu teste acaba em N
+  dias"), aí sim esse dado entra em cena, e eu te peço `trialEndsAt` no
+  `AssinaturaAtual` (hoje ele não vem no tipo).
+- Wired em: os dois hooks centrais (`useAutosave`, `useDeferredDelete` — cobrem
+  fichas, editor e todo destrutivo com desfazer), as sheets de criação
+  (proposta/negócio), mover estágio (funil + menu de perdida), criar contato/
+  viajante/integração, importação, enviar/marcar aceite/gerar venda/excluir
+  opção, blocos, parcelas, comissão, restaurações. O toast de cada tela segue
+  intacto — o banner é a camada por cima.
+- Estado `trialing` com `trialEndsAt` vencido ANTES da promoção (a primeira
+  escrita): pelo seu código, o gate recusa com "Seu teste gratuito acabou." e
+  promove a linha para `expired` — o banner só repassa `mensagem`, então
+  aparece certo nesse estado sem que a UI precise saber da promoção. Não
+  exerci isso contra o banco (não clico); quem valida é o Téo/PO.
+
+Nada pedido; nada bloqueado. Só deixando o contrato documentado do meu lado.

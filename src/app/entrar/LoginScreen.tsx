@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { authClient, useSession } from "@/lib/auth/client";
 import { CompassPlate, Rule } from "@/components/plates";
@@ -284,6 +285,17 @@ export function LoginScreen() {
           <CardAction type="button" onClick={toggleMode}>
             {mode === "password" ? "Entrar por link mágico" : "Entrar com senha"}
           </CardAction>
+        </div>
+        <div className="flex items-center justify-between gap-4 pt-2">
+          <p className="text-13 text-muted">Primeira vez por aqui?</p>
+          {/* Mesma voz do CardAction, em <Link>: a saída é outra rota, não
+              uma ação desta tela. Sem transition-colors — cor não anima. */}
+          <Link
+            href="/cadastrar"
+            className="shrink-0 rounded-xs text-13 font-medium text-muted hover:text-ink hover:underline hover:underline-offset-4 [@media(pointer:coarse)]:min-h-11"
+          >
+            Criar conta
+          </Link>
         </div>
       </div>
     </div>

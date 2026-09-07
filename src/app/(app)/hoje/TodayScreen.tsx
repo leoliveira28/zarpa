@@ -19,6 +19,7 @@ import {
   type ResumoDoPipeline,
   type TarefaDeHoje,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { cn } from "@/lib/ui/cn";
 import { useTransitionPreset } from "@/lib/ui/motion";
 import { useDeferredDelete } from "@/lib/ui/useDeferredDelete";
@@ -1048,6 +1049,7 @@ function NovoLembreteSheet({
     });
     setCreating(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       setFieldError({ campo: result.campo, mensagem: result.mensagem });
       return;
     }

@@ -19,6 +19,7 @@ import {
   type ServiceResult,
   type VendaResumo,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import {
@@ -420,6 +421,7 @@ function ParcelasCard({ venda }: { venda: VendaResumo }) {
   async function handleMarkPaid(parcela: ParcelaResumo) {
     const result = await marcarParcelaPaga(parcela.id);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui marcar como paga", description: result.mensagem, tone: "danger" });
       return;
     }
@@ -671,6 +673,7 @@ function NovaParcelaSheet({
     const result = await criarParcela(vendaId, { venceEm, valorCents: valor ?? 0 });
     setCreating(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       setFieldError({ campo: result.campo, mensagem: result.mensagem });
       return;
     }

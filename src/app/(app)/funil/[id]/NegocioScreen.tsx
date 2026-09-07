@@ -16,6 +16,7 @@ import {
   type PropostaResumo,
   type ServiceResult,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { Badge, type BadgeProps } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import {
@@ -185,6 +186,7 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
     const motivo = previous.stage === "perdido" ? (previous.lostReason ?? "reaberto por engano") : undefined;
     const result = await moverEstagioDoNegocio(previous.id, previous.stage, motivo);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui desfazer", description: result.mensagem, tone: "danger" });
       retry(); // não tenta adivinhar o estado certo sozinha — reconsulta tudo
       return;
@@ -229,6 +231,7 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
 
     const result = await moverEstagioDoNegocio(negocio.id, stage);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       setNegocio(previous);
       toast.show({
         title: `Não consegui mover para ${label}`,

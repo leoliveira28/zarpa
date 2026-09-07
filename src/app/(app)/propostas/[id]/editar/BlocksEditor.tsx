@@ -15,6 +15,7 @@ import {
   type ItemBibliotecaResumo,
   type PropostaEdicao,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardAction, CardFooter, CardHeader } from "@/components/ui/Card";
@@ -337,6 +338,7 @@ function BlockCard({
       if (cancelled) return;
       const result = await excluirBloco(block.id);
       if (!result.ok) {
+        avisarRecusaDeEscrita(result);
         toast.show({ title: "Não consegui remover o bloco", description: result.mensagem, tone: "danger" });
       }
     }, 8000);
@@ -351,6 +353,7 @@ function BlockCard({
     const result = await enviarImagemDaProposta(file);
     setUploading(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui enviar a imagem", description: result.mensagem, tone: "danger" });
       return;
     }
@@ -530,6 +533,7 @@ function AddBlockSheet({
     const result = await criarBloco(proposta.id, { kind, optionId: scope });
     setCreating(null);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui adicionar o bloco", description: result.mensagem, tone: "danger" });
       return;
     }
@@ -637,6 +641,7 @@ function LibraryPicker({
     const result = await inserirItemDaBibliotecaComoBloco(proposta.id, item.id, scope);
     setInserting(null);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui inserir", description: result.mensagem, tone: "danger" });
       return;
     }

@@ -7,6 +7,7 @@ import {
   restaurarProposta,
   type PropostaResumo,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -108,6 +109,7 @@ export function PropostasScreen({ initialIds }: { initialIds?: string[] }) {
   async function handleRestore(proposta: PropostaResumo) {
     const result = await restaurarProposta(proposta.id);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui restaurar", description: result.mensagem, tone: "danger" });
       return;
     }

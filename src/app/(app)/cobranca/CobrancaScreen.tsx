@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/Select";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
+import { avisarAssinaturaRegularizada } from "@/lib/ui/assinatura";
 import { useDeferredDelete } from "@/lib/ui/useDeferredDelete";
 import { formatDayMonth } from "@/lib/ui/format";
 
@@ -327,6 +328,9 @@ function TrocarPlanoSection({
       return;
     }
     onAssinaturaChange(result.data);
+    // Conta regularizada: o banner de bloqueio (S13a) sai na hora, em toda
+    // tela — sem esperar navegação nem recarga.
+    avisarAssinaturaRegularizada(result.data.status);
     toast.show({
       title: `Plano trocado para ${plano.name}`,
       tone: "ok",

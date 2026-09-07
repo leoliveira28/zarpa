@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import type { ServiceResult } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 
 /* =============================================================================
    useAutosave — salvamento automático, sem botão Salvar
@@ -56,6 +57,10 @@ export function useAutosave<T>(
     // deste é velha, e aplicá-la sobrescreveria o rótulo do commit atual.
     if (lastRef.current !== value) return result;
     if (!result.ok) {
+      // Autosave não tem toast — o erro mora no SavedMark ("Não salvou").
+      // Se a recusa for do gate de dunning, o banner persistente é quem
+      // explica por quê (S13a).
+      avisarRecusaDeEscrita(result);
       setState("error");
       setError(result.mensagem);
       return result;

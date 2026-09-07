@@ -9,6 +9,7 @@ import {
   restaurarContato,
   type ContatoResumo,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -97,6 +98,7 @@ export function ClientesScreen() {
   async function handleRestore(contact: ContatoResumo) {
     const result = await restaurarContato(contact.id);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({
         title: "Não consegui restaurar",
         description: result.mensagem,
@@ -317,6 +319,7 @@ function NovoClienteForm({
 
     setCreating(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       setFieldError({ campo: result.campo, mensagem: result.mensagem });
       return;
     }

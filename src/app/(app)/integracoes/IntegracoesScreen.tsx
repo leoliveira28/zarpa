@@ -8,6 +8,7 @@ import {
   type IntegracaoResumo,
   type Provider,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import {
@@ -289,6 +290,7 @@ function CadastrarSection({
     setSubmitting(false);
 
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({
         title: "Não consegui cadastrar a conta",
         description: result.mensagem,

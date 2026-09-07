@@ -1,5 +1,197 @@
 # Nina — status
 
+## S13a — /cadastrar (conta nova) + banner de conta bloqueada (dunning)
+
+Duas frentes sobre o backend que o rafa landou: a rota pública de cadastro
+(`criarConta` cria tenant + assinatura trial 14d + usuário, **sem logar**) e a
+camada persistente de UI para o código novo `ASSINATURA_INATIVA`.
+
+### O que ficou pronto
+
+**1. `/cadastrar` — `src/app/cadastrar/page.tsx` + `CadastroScreen.tsx`**
+Fora do grupo `(app)`, mesma razão do `/entrar` (rota sem sessão, sem
+AppShell). Mesmo registro "intermediário": a `CompassPlate` sozinha sangrando
+pelo canto (`plate-wash`, 14%, `hidden sm:block` — igual ao /entrar, inclusive
+na ausência em 390px), marca em caixa alta, display "Criar conta", coluna de
+`max-w-[26rem]` ancorada como página, `Rule` antes do rodapé.
+
+- Quatro campos: Seu nome, E-mail, Senha (com mostrar/ocultar no `pointerdown`),
+  Nome da agência. `autoComplete` certos (`name`/`email`/`new-password`/
+  `organization`).
+- **Validação local com os textos do zod do servidor** ("Informe seu nome.",
+  "A senha precisa de pelo menos 8 caracteres." etc.) — a tela recusa antes de
+  gastar uma chamada; o servidor continua sendo quem decide. Erro por campo
+  (`Field invalid` + `FieldError`), foco vai para o primeiro inválido, erro do
+  campo limpa ao digitar.
+- Fluxo de sucesso: `criarConta(...)` → OK → `authClient.signIn.email({ email,
+  senha, callbackURL: "/hoje" })` → `router.push("/hoje")`. **Nada de login
+  automático na action** (decisão do rafa); a senha digitada é reaproveitada,
+  ninguém redigita nada.
+- Erros do servidor mapeados por `result.campo` para o campo certo. **E-mail já
+  cadastrado** (`CONFLITO campo:'email'`) vira erro no campo de e-mail com o
+  link "Entrar" → `/entrar` DENTRO do `FieldError` — a correção é navegar, não
+  re-tentar. Erro sem campo (ex.: "Não consegui criar sua conta agora.") vira
+  `FieldError` solto entre o formulário e o botão, sem inventar campo.
+- Se o `signIn` falhar DEPOIS de a conta ter sido criada, a mensagem NÃO é o
+  "E-mail ou senha incorretos" do Better Auth (mentiria — a conta acabou de
+  nascer): é "Sua conta foi criada, mas o acesso automático falhou. Use o mesmo
+  e-mail e a senha que acabou de criar." + correção "Entrar" → `/entrar`.
+- Skeleton de checagem de sessão com a MESMA geometria da tela real (o /entrar
+  já faz isso; as duas portas têm que piscar igual, ou seja, não piscar).
+- Rodapé: "Já tem conta?" + link **Entrar**. No `/entrar`, entrou a linha
+  "Primeira vez por aqui?" + link **Criar conta** — a via é dupla.
+
+**2. Banner de bloqueio — `src/lib/ui/assinatura.ts` +
+`src/components/app/AssinaturaBanner.tsx` + mount na `AppShell`**
+
+- `recusaDeAssinatura(result)` reconhece `code === 'ASSINATURA_INATIVA'`;
+  `avisarRecusaDeEscrita(result)` é o contrato de UMA LINHA que os ramos de
+  erro de escrita chamam (no-op em qualquer outro código); `useBloqueioDeAssinatura()`
+  expõe o estado por `useSyncExternalStore` — sem provider, estado no módulo,
+  porque o banner mora no shell que persiste entre rotas.
+- O banner renderiza **acima do conteúdo, abaixo do TopBar**: faixa âmbar
+  (`bg-warn-soft`, cor de ESTADO) com cornija embaixo (`border-b border-hairline`
+  — separa registros, não envolve caixa), mensagem pronta do servidor, botão
+  com o rótulo de `correcao` ("Ir para Cobrança") linkando `/cobranca`.
+- **Wiring** (o erro do toast de cada tela continua intacto — o banner é a
+  camada por cima): `useAutosave` e `useDeferredDelete` (um ponto cada, cobrem
+  ficha de cliente, ficha de negócio, editor de proposta, blocos, venda e todo
+  destrutivo com desfazer de 8s); `NovaPropostaSheet` e `NovoNegocioSheet`;
+  mover estágio do funil (2 ramos) e "marcar como perdida" (`DealStageMenu`);
+  criar contato (ClientesScreen) e criar viajante (ContatoScreen); criar
+  integração; confirmar importação; enviar proposta, marcar como aceita, gerar
+  venda e excluir opção (editor); criar/inserir bloco e upload de imagem
+  (BlocksEditor); criar parcela e marcar parcela paga (venda); status de
+  comissão (FinanceiroScreen); arquivar/restaurar contato e restaurar proposta.
+- `avisarAssinaturaRegularizada(status)` na `/cobranca`: quando `trocarPlano`
+  devolve `active`/`trialing`, o banner sai NA HORA, em toda tela, sem
+  recarregar.
+
+### Decisões que tomei sozinha
+
+1. **Banner dirigido por recusa, não por status no load.** Não chamo
+   `obterAssinaturaAtual()` no shell: quem está em dia nunca paga um round-trip
+   para descobrir isso, e o estado "sem dados" de dunning não existe (leituras
+   nunca bloqueadas). Consequência assumida: um F5 limpa o banner, que volta na
+   próxima recusa. O toast da escrita continua sendo a primeira linha de aviso;
+   o banner é a segunda, persistente.
+2. **Âmbar (`warn`), não vermelho.** Bloqueio de dunning é estado de atenção
+   com saída clara (regularizar), não erro de ação. E o botão é `secondary`:
+   o azul do accent é "onde clicar" e está ocupado pelo CTA global do TopBar —
+   o fio do botão diz botão, o âmbar diz por quê.
+3. **Sem animação no banner.** É estado, não evento; a urgência já foi
+   comunicada pelo toast no momento da recusa. Movimento aqui só faria a página
+   tremer toda vez que a agente tentasse escrever de novo — e ela vai.
+4. **O banner não renderiza na `/cobranca`.** A tela de destino já mostra o
+   status em Badge e o caminho de regularização; um aviso linkando para a
+   página em que ele está é ruído.
+5. **Alinhamento pela medida do miolo, inclusive a exceção.** Rotas de quadro
+   (`/funil`, editor) abrem para a largura da janela no desktop; o banner
+   acompanha (`wide` prop do shell) — aviso persistente desalinhado do conteúdo
+   é ruído que ele não pode ter.
+6. **Limpeza por regularização, não por polling.** `avisarAssinaturaRegularizada`
+   na /cobranca é honesto e barato; um `setInterval` checando assinatura seria
+   o oposto das duas coisas.
+7. **Cadastro sem campo de endereço/slug** — o servidor deriva do nome da
+   agência. Traduzi a decisão em interface: `FieldHint` "É deste nome que nasce
+   o endereço da sua conta — você não precisa escolher."
+8. **O link entre as duas portas é `Link` com a voz do `CardAction`, sem
+   `transition-colors`** — a troca de cor num texto de 13px não precisa de
+   rampa, e cor não entra na régua de movimento do sistema (e não quis
+   adicionar entrada nova ao registro de desvios do gate).
+
+### O que NÃO fiz
+
+- Não toquei `src/server/**`, `src/db/**`, `tests/**` nem `package.json`.
+- **Banner proativo de trial** ("seu teste acaba em N dias") — não pediram; e
+  `AssinaturaAtual` nem traz `trialEndsAt` (só o gate o lê). Quando o produto
+  pedir, é pedido ao rafa, não inferência do client.
+- O checkbox "Recomendar esta opção" do editor continua falhando em silêncio
+  se o servidor recusar (pré-existente — `if (result.ok) onUpdated(...)` sem
+  ramo de erro). O banner não chega lá. Registroi, não consertei fora do
+  escopo.
+- Não criei testes (fronteira do Téo) nem toquei no `/` (continua caindo em
+  `/hoje`, que manda sem sessão para `/entrar` — de onde se chega ao cadastro).
+
+### Verificação (o que rodei)
+
+- `npx tsc --noEmit` — **0 erros no projeto inteiro** (17:00). Durante o
+  trabalho houve erros transitórios em `tests/signup/criarconta.test.ts` /
+  `tests/billing/gate-dunning.test.ts` — arquivos que o Téo editava no mesmo
+  momento (fora da minha fronteira); sumiram na rodada final.
+- `npm run build` — **limpo**: "Compiled successfully in 2.4s", TypeScript
+  ok, 18/18 páginas, e a rota nova `○ /cadastrar` aparece na lista (static).
+- `npx vitest run tests/design/guards.test.ts` — **6/6 verdes** (17:01,
+  depois das últimas edições do banner; Postgres de pé, `zarpa_test`
+  recriado). Tipografia, cor por contexto, paridade de tema, movimento (CSS e
+  JS), reduced-motion — nenhum desvio novo.
+- **Não testei clicando** — o PO (Leandro) clica. Passo a passo abaixo.
+
+### Passo a passo para o PO clicar
+
+#### A. Cadastro com conta NOVA (`/cadastrar`)
+
+1. Janela anônima (sem sessão) em `http://localhost:3000/entrar`, viewport
+   390×844. No rodapé da coluna, abaixo do fio: "Primeira vez por aqui?" +
+   "Criar conta".
+2. Tocar "Criar conta" → `/cadastrar`. Mesma cara do /entrar (a rosa dos
+   ventos some em 390px de propósito — igual ao /entrar), título display
+   "Criar conta", subtítulo com os 14 dias grátis.
+3. Tocar "Criar conta" com tudo vazio → quatro erros por campo, foco no
+   primeiro ("Informe seu nome."). Nada de modal, nada de vermelho no topo.
+4. Conferir a senha com o olho (mostra/oculta, sem perder o foco) e o hint
+   "Mínimo de 8 caracteres." sumir quando há erro.
+5. Preencher: nome "Marina Duarte", e-mail NOVO (`teste-cadastro@zarpa.local`),
+   senha 8+ (`marina12345`), agência "Agência Teste Maré". Tocar "Criar
+   conta" → régua no botão → cai em `/hoje` autenticado.
+6. Em `/hoje` do tenant novo: estados vazios com conteúdo de exemplo (a conta
+   acabou de nascer, não tem dado — e a tela não pode ficar oca).
+7. `/cobranca` → Badge "Em trial" (assinatura trial 14d criada pela
+   `criarConta`).
+8. Sair. Em `/cadastrar`, repetir com o MESMO e-mail → erro no campo de e-mail:
+   "Já existe uma conta com esse e-mail." + link "Entrar" embaixo do próprio
+   campo. Tocar "Entrar" → `/entrar`.
+9. Conferir os dois sentidos dos links (entrar → cadastrar, cadastrar →
+   entrar), o tema escuro e `prefers-reduced-motion` (nada anima além do
+   `.enter` padrão da rota).
+10. Login antigo `dev@zarpa.local` / `dev12345` continua funcionando pelo
+    link "Entrar".
+
+#### B. Banner de conta bloqueada (dunning)
+
+Como produzir o bloqueio em dev sem SQL — pela própria UI:
+
+1. Login `dev@zarpa.local` / `dev12345`. `/cobranca`: se não há assinatura,
+   assinar o Solo (dev grava só no banco). Depois "Cancelar assinatura" e
+   DEIXAR PASSAR os 8s do desfazer → status `canceled` → escrita bloqueada.
+   (Alternativa por SQL: `UPDATE subscriptions SET status='past_due' WHERE
+   tenant_id = <tenant do dev>;` — mensagem muda para "Sua assinatura está em
+   atraso — o app está em modo somente leitura.")
+2. `/hoje` → "Criar lembrete" → preencher e salvar: o toast de erro da tela
+   continua aparecendo E a **faixa âmbar** nasce acima do conteúdo (abaixo do
+   TopBar), com a mensagem do servidor + "Ir para Cobrança".
+3. Navegar para Funil/Clientes/Propostas: o banner PERSISTE entre telas.
+4. Tentar escrever em outra tela (botão "+" → nova proposta): toast de novo,
+   banner continua (não empilha, não pisca).
+5. **Leituras normais**: listas, fichas e dashboard carregam de verdade —
+   bloqueio é só de escrita.
+6. **Autosave**: abrir ficha de cliente, editar o nome → `SavedMark` "Não
+   salvou" + banner. Autosave não tem toast; o banner é quem explica por quê.
+7. No funil, arrastar um card: ele volta para o lugar (otimismo reversível) +
+   toast + banner.
+8. Tocar "Ir para Cobrança" → `/cobranca` **sem banner** (é a tela de
+   destino). Assinar qualquer plano (dev grava no banco) → toast "Plano
+   trocado…" → navegar para `/hoje`: banner sumiu, sem recarregar.
+9. Criar o lembrete de novo → funciona.
+10. Em 390px: mensagem acima do botão na faixa (empilha sem aperto), zero
+    scroll horizontal, contraste ok no tema escuro.
+
+Prestar atenção especial a: (a) o banner não cobre o TopBar (não é fixo —
+rola com a página, o TopBar fica acima dele); (b) nas rotas largas no desktop
+(/funil, editor) a faixa alinha com o conteúdo aberto; (c) o toast do erro e
+o banner contam a MESMA história sem palavras diferentes; (d) regularizar na
+/cobranca limpa o banner em todas as telas abertas na sequência.
+
 ## Frente 1 + Frente 2 — fechar o fluxo de aceite ponta a ponta
 
 O aceite de proposta só virava venda por UM caminho: o cliente clica "Aceitar

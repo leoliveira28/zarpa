@@ -8,6 +8,7 @@ import {
   type DealStage,
   type EstagioDeFunil,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { cn } from "@/lib/ui/cn";
 import { Button } from "@/components/ui/Button";
 import { CardAction } from "@/components/ui/Card";
@@ -182,6 +183,7 @@ export function LossReasonDialog({
     const result = await moverEstagioDoNegocio(deal.id, "perdido", motivo);
     setSubmitting(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       setError(result.mensagem);
       return;
     }

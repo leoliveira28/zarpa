@@ -9,6 +9,7 @@ import { APP_NAME } from "@/lib/ui/brand";
 import { useTransitionPreset } from "@/lib/ui/motion";
 import { signOut } from "@/lib/auth/client";
 import { Button } from "@/components/ui/Button";
+import { AssinaturaBanner } from "./AssinaturaBanner";
 import { NovaPropostaSheet } from "./NovaPropostaSheet";
 import { ThemeToggle } from "./ThemeToggle";
 import {
@@ -133,6 +134,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         )}
       >
         <TopBar title={title} />
+
+        {/* Dunning (S13a): nasce só depois da primeira recusa de escrita
+            (ASSINATURA_INATIVA) — nenhuma chamada extra no load. */}
+        <AssinaturaBanner wide={wide} />
 
         <main
           id="conteudo"

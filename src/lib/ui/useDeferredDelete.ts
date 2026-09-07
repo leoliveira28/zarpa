@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useToast } from "@/components/ui/Toast";
 import type { ServiceResult } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 
 /* =============================================================================
    useDeferredDelete — destrutivo real, com desfazer que funciona de verdade
@@ -59,6 +60,9 @@ export function useDeferredDelete<T>({
         if (cancelled) return;
         const result = await commitRef.current(item);
         if (!result.ok) {
+          // Recusa do gate de dunning (S13a) sobe o banner persistente junto
+          // do toast/onFailure de quem chamou.
+          avisarRecusaDeEscrita(result);
           onFailureRef.current?.(item, result.mensagem, result.correcao);
         }
       }, DELETE_UNDO_MS);

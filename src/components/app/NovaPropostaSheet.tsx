@@ -11,6 +11,7 @@ import { Combobox } from "@/components/ui/Combobox";
 import { Field, FieldError, FieldHint, Label } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { Sheet, SheetContent } from "@/components/ui/Sheet";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 
 /* =============================================================================
    Nova proposta — a mesma Sheet, dois pontos de entrada
@@ -80,6 +81,7 @@ export function NovaPropostaSheet({
     });
     setCreating(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       setFieldError({ campo: result.campo, mensagem: result.mensagem });
       return;
     }

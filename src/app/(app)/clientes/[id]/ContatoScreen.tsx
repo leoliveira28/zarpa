@@ -23,6 +23,7 @@ import {
   type ViajanteInput,
   type ViajanteResumo,
 } from "@/server";
+import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import {
@@ -1041,6 +1042,7 @@ function NovoPassageiroForm({
     });
     setCreating(false);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       setFieldError({ campo: result.campo, mensagem: result.mensagem });
       return;
     }
@@ -1270,6 +1272,7 @@ function EncerramentoCard({
   async function handleArchive() {
     const result = await arquivarContato(contact.id);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui arquivar", description: result.mensagem, tone: "danger" });
       return;
     }
@@ -1282,6 +1285,7 @@ function EncerramentoCard({
   async function handleRestore() {
     const result = await restaurarContato(contact.id);
     if (!result.ok) {
+      avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui restaurar", description: result.mensagem, tone: "danger" });
       return;
     }
