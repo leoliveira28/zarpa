@@ -1,5 +1,170 @@
 # Nina — status
 
+## Frente 1 + Frente 2 — fechar o fluxo de aceite ponta a ponta
+
+O aceite de proposta só virava venda por UM caminho: o cliente clica "Aceitar
+esta opção" no link público (`aceitarOpcaoPublica`). Dois buracos fechados
+nesta rodada — o botão público que sumia quando o agente não tinha WhatsApp,
+e o caminho manual da agente para registrar aceite que chegou por outro canal.
+
+### Frente 1 — botão de aceite público sempre visível (`/p/[slug]`)
+
+**`src/app/p/[slug]/PublicProposalScreen.tsx`** — o `OptionCard` tinha um
+render condicional que amarrava o botão "Aceitar esta opção" a `whatsappLink`
+existir. Sem WhatsApp cadastrado no tenant, o cliente caía num texto "Fale
+com quem te mandou esta proposta para confirmar" e **não conseguia aceitar
+pela proposta** — mesmo que `aceitarOpcaoPublica` gravasse o aceite no banco
+sem depender de WhatsApp nenhum.
+
+Correção: o botão "Aceitar esta opção" aparece **SEMPRE** quando
+`!isAccepted`, independente de `whatsappLink`. O `handleAccept` já chama
+`aceitarOpcaoPublica` (grava no banco) e DEPOIS abre o WhatsApp como
+confirmação secundária — se `whatsappLink` existe, abre; se não, só não
+abre, mas o aceite ficou registrado igual. O `else` "Fale com quem te
+mandou..." saiu; no lugar, um `<p>` discreto abaixo do botão quando há
+WhatsApp: "Depois de confirmar, abrimos o WhatsApp com quem te enviou" —
+diz o que VAI acontecer, não esconde o caminho de aceite.
+
+O `brand.primaryColor ?? "var(--accent)"` no `style` do botão continua — é
+a cor da marca do agente, regra do S7. `onPointerDown` já reagia no toque,
+mantive. O comentário no topo do arquivo que dizia "não existe action de
+aceitar hoje" foi atualizado — `aceitarOpcaoPublica` existe desde o S7
+(landou depois daquele comentário), e o botão agora a usa de verdade.
+
+### Frente 2 — "Marcar como aceita" no editor (caminho do agente)
+
+**`src/app/(app)/propostas/[id]/editar/PropostaEditorScreen.tsx`** — a
+`PublishBar` só mostrava "Gerar venda" quando `proposta.status ===
+"accepted"`, mas nada levava a `accepted` do lado da agente. Agora, quando
+`proposta.status === "sent" || "viewed"`, um botão **"Marcar como aceita"**
+(`variant="secondary" size="sm"`) aparece ao lado de "Copiar link"/"Abrir"/
+"Reenviar" — `secondary`, não `primary`, porque é o passo anterior ao CTA
+de destaque ("Gerar venda", que continua sendo o `primary` quando `accepted`).
+
+Ao clicar:
+
+1. **Uma opção só**: chama `marcarPropostaComoAceita(proposta.id, option.id)`
+   direto, sem perguntar.
+2. **Mais de uma**: abre um `Dialog` curto (`width="sm"`, não `Sheet`) com a
+   lista de opções como botões. Escolher uma chama a action e fecha o
+   diálogo. `Dialog` em vez de `Select` dropdown: a ação muda estado da
+   proposta, e botões explícitos com o nome da opção + Badge "Recomendada"
+   são mais diretos que um dropdown que esconde as opções atrás de um
+   clique extra. Cada botão tem `min-h-11` (alvo de toque confortável em
+   390px), `active:scale-[0.995]` no `pointerdown`, `transition:transform`
+   só (não `transition-colors` — o gate de design flag animação de cor fora
+   do registro).
+3. **Otimista com reversão**: `onPatched({ status: "accepted",
+   acceptedOptionId, acceptedAt: new Date() })` na hora — o `PublishBar`
+   re-renderiza em `accepted` e o "Gerar venda" aparece imediatamente, sem
+   esperar round-trip. Se `marcarPropostaComoAceita` recusar, reverte ao
+   estado anterior (`status`/`acceptedOptionId`/`acceptedAt` originais,
+   guardados antes do patch otimista) + toast com `mensagem` + `correcao`
+   (a correção do servidor vira o botão do próprio toast — re-tentar).
+4. Depois de aceita, o botão "Gerar venda" (que já existia) aparece
+   normalmente — **não reescrevi esse botão**, ele continua wired a
+   `converterPropostaEmVenda`.
+
+A action `marcarPropostaComoAceita(propostaId, optionId)` estava landada
+no `src/server/proposals.ts` (linha 764) e exportada no barril `@/server`.
+Consumi direto, sem stub. Handoff `nina-para-rafa.md` atualizado
+agradecendo.
+
+### Decisão: sem toast de desfazer de 8s no aceite manual
+
+`marcarPropostaComoAceita` é mudança de estado, não destrutivo. O `CLAUDE.md`
+pede toast com desfazer de 8s para **destrutivo**; o PO deixou explícito
+que esta é uma decisão minha, com a ressalva de que "desfazer aceite" não
+tem action no servidor (só reverteria localmente, voltando `accepted` na
+próxima recarga — promete o que não cumpre). Escolhi **não** usar
+`useDeferredDelete` aqui:
+
+- Aceite não apaga dado; muda um estado. O "dano" de clicar errado é
+  mínimo: a proposta fica "aceita" mas a agente pode simplesmente não
+  gerar a venda, ou aguardar. Não há perda irreversível.
+- Um botão explícito "Desfazer aceite" no futuro (exigiria uma action de
+  "desmarcar" no servidor) seria honesto. Por ora, não invento um
+  desfazer que só vive no cliente — a regra do CLAUDE.md é "confiança não
+  vem de enfeite, vem de espaçamento consistente e número que não pula",
+  e um desfazer que mente é o oposto de confiança.
+
+Se o servidor devolver `CONFLITO` (proposta não está em `sent`/`viewed`),
+o toast de erro mostra a mensagem pronta do Rafa ("Só dá para aceitar uma
+proposta enviada ou visualizada.") + a correção ("Enviar a proposta antes
+de marcar como aceita") como botão — a interface não esconde a regra do
+backend.
+
+### Verificação (o que rodei)
+
+- `npx tsc --noEmit` — **limpo**.
+- `npm run build` — **limpo**, 21 rotas (mesma contagem da rodada anterior,
+  `/p/[slug]` e `/propostas/[id]/editar` continuam dinâmicas).
+- `npx vitest run tests/design/guards.test.ts` — **6/6 verdes** (Postgres
+  `zarpa-db` de pé, schema `zarpa_test` recriado pelas 12 migrations).
+  Tipografia, cor por contexto, paridade de tema, movimento (CSS e JS),
+  `prefers-reduced-motion` — nenhum desvio não registrado.
+- **Não testei clicando** — o PO (Leandro) clica. Passo a passo abaixo.
+
+### Passo a passo do fluxo para o PO clicar
+
+Login `dev@zarpa.local` / `dev12345` em `http://localhost:3000/entrar`,
+viewport 390×844 (iPhone 14):
+
+**Frente 1 — botão público sem WhatsApp:**
+
+1. Pegar um tenant sem `whatsappLink` cadastrado na marca (ou editar a
+   marca em `/cobranca`? não — a marca do tenant se edita em... conferir
+   onde `atualizarMarca` é chamado. Em dev, o seed cria "Volta ao Mundo"
+   com WhatsApp — pode ser preciso limpar o campo direto no banco, ou
+   criar um tenant novo sem WhatsApp). Sem isso, o botão público aparece
+   COM o texto "Depois de confirmar, abrimos o WhatsApp" — ainda funciona,
+   mas não exercita a queda do `whatsappLink`.
+2. Abrir o link público `/p/<publicToken>` de uma proposta `sent`/`viewed`
+   desse tenant **sem sessão** (navegador limpo/incógnito).
+3. O botão "Aceitar esta opção" aparece em cada opção — antes aparecia
+   "Fale com quem te mandou esta proposta para confirmar".
+4. Tocar "Aceitar esta opção" → `aceitarOpcaoPublica` grava no banco →
+   botão vira "Você já confirmou esta opção." (text-ok). Sem WhatsApp, o
+   WhatsApp não abre; com WhatsApp, abre após 500ms com a mensagem pronta.
+
+**Frente 2 — "Marcar como aceita" no editor:**
+
+1. Abrir o editor de uma proposta `sent` ou `viewed`:
+   `/propostas/<id>/editar`. A `PublishBar` (topo) mostra Badge do status +
+   "Marcar como aceita" (`secondary`) + "Copiar link" + "Abrir" +
+   "Reenviar".
+2. **Uma opção só**: tocar "Marcar como aceita" → otimista: Badge vira
+   "Aceita" (ok), "Gerar venda" (`primary`) aparece no lugar, toast
+   "Proposta marcada como aceita". Sem diálogo.
+3. **Mais de uma opção**: tocar "Marcar como aceita" → abre `Dialog`
+   "Qual opção foi aceita?" com a lista de opções (nome + Badge
+   "Recomendada" na recomendada). Tocar uma opção → fecha o diálogo,
+   aplica otimista, mesma transição acima.
+4. **Reversão de erro**: se o servidor recusar (raro — proposta mudou de
+   estado em outra aba), o Badge volta para `sent`/`viewed`, o "Gerar
+   venda" some, toast "Não consegui marcar como aceita" com a mensagem do
+   servidor + botão de correção.
+5. Depois de aceita, tocar "Gerar venda" → `converterPropostaEmVenda` →
+   navega para `/vendas/<id>` (fluxo que já existia, não reescrevi).
+
+Prestar atenção especial a: (a) o `Dialog` de seleção abre/fecha no
+mobile Radix sem race (testar abrir, esc, abrir de novo); (b) o
+`onPointerDown` nos botões de opção do diálogo (não `onClick`); (c) o
+`active:scale-[0.995]` só anima `transform` (gate aprova); (d) o estado
+otimista sobrevive a um re-render do `PropostaEditorScreen` (o
+`onPatched` atualiza o `proposta` state no pai, que desce de volta para
+`PublishBar`); (e) o `loading={markingAccepted}` desabilita os botões do
+diálogo durante o request.
+
+### Pendências
+
+Nenhuma. As duas frentes estão implementadas e o build/gate estão verdes.
+A action `marcarPropostaComoAceita` do rafa já estava landada e exportada —
+consumi direto. O handoff `nina-para-rafa.md` foi atualizado para
+agradecer (a seção original de pedido foi substituída).
+
+---
+
 ## S12 — UI de integrações (Wooba + Infotravel, cotação só)
 
 ### O que ficou pronto

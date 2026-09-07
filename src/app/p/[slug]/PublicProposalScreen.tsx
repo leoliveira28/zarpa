@@ -26,10 +26,12 @@ import { APP_NAME } from "@/lib/ui/brand";
    `costCents`/`commissionCents` para vazar por engano porque o campo nem
    chega até o cliente.
 
-   Aceite de opção: NÃO existe action de servidor para "aceitar" hoje (ver
-   docs/handoffs/nina-para-rafa.md). O botão principal de cada opção abre o
-   WhatsApp do agente com uma mensagem pronta — é a saída honesta dentro do
-   contrato atual, não uma chamada de servidor inventada.
+   Aceite de opção: `aceitarOpcaoPublica` (de `@/server`) grava o aceite no
+   banco via função `SECURITY DEFINER` (sem login). O botão de cada opção
+   chama essa action; quando o agente cadastrou WhatsApp, abrimos o app como
+   confirmação secundária depois do aceite. Sem WhatsApp, o aceite segue
+   registrado — o "Fale com quem te mandou" saiu porque escondia o caminho
+   de aceite sempre que o tenant não tinha WhatsApp.
 
    Redesenho (pedido do PO — "muito sólido, fundo neutro com texto em cima"):
    esta é a única tela do produto marcada como EDITORIAL PLENO na tabela dos
@@ -324,20 +326,32 @@ function OptionCard({
         <Rule loose />
         {isAccepted ? (
           <p className="text-13 font-medium text-ok">Você já confirmou esta opção.</p>
-        ) : whatsappLink ? (
-          <button
-            type="button"
-            onPointerDown={handleAccept}
-            disabled={accepting}
-            className="inline-flex h-11 items-center justify-center gap-2 rounded-sm px-4 text-15 font-medium text-white disabled:opacity-60 [transition:transform_120ms_var(--curve-out)] active:scale-[0.98]"
-            style={{ backgroundColor: brand.primaryColor ?? "var(--accent)" }}
-          >
-            {accepting ? "Confirmando..." : "Aceitar esta opção"}
-          </button>
         ) : (
-          <p className="text-13 text-muted">
-            Fale com quem te mandou esta proposta para confirmar.
-          </p>
+          <>
+            {/*
+              O botão de aceite aparece SEMPRE que a proposta ainda não foi
+              aceita — o aceite no banco (`aceitarOpcaoPublica`) não tem nada
+              a ver com WhatsApp cadastrado no tenant. Antes o botão só
+              renderizava quando `whatsappLink` existia, deixando propostas de
+              agentes sem WhatsApp sem caminho de aceite pela tela pública.
+              O WhatsApp continua como confirmação secundária: `handleAccept`
+              abre-o depois de gravar o aceite, se existir.
+            */}
+            <button
+              type="button"
+              onPointerDown={handleAccept}
+              disabled={accepting}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-sm px-4 text-15 font-medium text-white disabled:opacity-60 [transition:transform_120ms_var(--curve-out)] active:scale-[0.98]"
+              style={{ backgroundColor: brand.primaryColor ?? "var(--accent)" }}
+            >
+              {accepting ? "Confirmando..." : "Aceitar esta opção"}
+            </button>
+            {whatsappLink ? (
+              <p className="mt-2 text-13 text-muted">
+                Depois de confirmar, abrimos o WhatsApp com quem te enviou.
+              </p>
+            ) : null}
+          </>
         )}
       </div>
     </div>

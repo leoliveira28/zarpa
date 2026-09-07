@@ -10,6 +10,7 @@ import {
   criarOpcao,
   enviarProposta,
   excluirOpcao,
+  marcarPropostaComoAceita,
   obterPropostaParaEdicao,
   reordenarOpcoes,
   type BlocoEdicao,
@@ -25,6 +26,7 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardAction, CardBody, CardFooter, CardHeader } from "@/components/ui/Card";
 import { CentsInput } from "@/components/ui/Money";
 import { Checkbox } from "@/components/ui/Checkbox";
+import { Dialog, DialogContent } from "@/components/ui/Dialog";
 import { Field, FieldError, FieldHint, Label, SavedMark } from "@/components/ui/Field";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
@@ -186,7 +188,12 @@ function PublishBar({
   const toast = useToast();
   const [sending, setSending] = React.useState(false);
   const [convertingSale, setConvertingSale] = React.useState(false);
+  const [markingAccepted, setMarkingAccepted] = React.useState(false);
+  const [selectOptionOpen, setSelectOptionOpen] = React.useState(false);
   const isDraft = proposta.status === "draft";
+  // Estados que antecedem o aceite — a agente registra o aceite quando o
+  // cliente confirmou por outro canal (telefone, WhatsApp fora do app).
+  const canMarkAccepted = proposta.status === "sent" || proposta.status === "viewed";
   const canSend = proposta.options.length > 0;
   const meta = STATUS_META[proposta.status] ?? { label: proposta.status, tone: "neutral" as const };
 
@@ -227,6 +234,64 @@ function PublishBar({
     toast.show({ title: "Proposta enviada", description: "O link público já está no ar.", tone: "ok" });
   }
 
+  // Aceite manual pela agente — o caminho que faltava. O cliente nem sempre
+  // clica "Aceitar" no link público; quando aceita por telefone/WhatsApp fora
+  // do app, a agente precisa registrar o aceite para destravar o "Gerar
+  // venda". Otimista com reversão: a UI vira `accepted` na hora, e se o
+  // servidor recusar, volta ao estado anterior + toast com a correção.
+  //
+  // Sem toast de desfazer de 8s (decisão argumentada em docs/status/nina.md):
+  // `marcarPropostaComoAceita` é mudança de estado, não destrutivo; não há
+  // action de "desmarcar aceite" no servidor, então o desfazer só reverteria
+  // localmente e voltaria `accepted` na próxima recarga — promete o que não
+  // cumpre. Se clicou errado, a agente simplesmente não gera a venda, ou
+  // arquivava a proposta. Um botão explícito "Desfazer aceite" no futuro
+  // (action de "desmarcar" a criar) seria honesto; por ora não invento.
+  async function handleMarkAccepted(optionId: string) {
+    const previous: Pick<PropostaEdicao, "status" | "acceptedOptionId" | "acceptedAt"> = {
+      status: proposta.status,
+      acceptedOptionId: proposta.acceptedOptionId,
+      acceptedAt: proposta.acceptedAt,
+    };
+    // Otimista: o `PublishBar` re-renderiza em `accepted` e o "Gerar venda"
+    // aparece imediatamente, sem esperar round-trip.
+    onPatched({
+      status: "accepted",
+      acceptedOptionId: optionId,
+      acceptedAt: new Date(),
+    });
+    setMarkingAccepted(true);
+    setSelectOptionOpen(false);
+    const result = await marcarPropostaComoAceita(proposta.id, optionId);
+    setMarkingAccepted(false);
+    if (!result.ok) {
+      // Reverte o estado otimista — volta para `sent`/`viewed` como era.
+      onPatched(previous);
+      toast.show({
+        title: "Não consegui marcar como aceita",
+        description: result.mensagem,
+        tone: "danger",
+        action: result.correcao ? { label: result.correcao, onClick: () => void handleMarkAccepted(optionId) } : undefined,
+      });
+      return;
+    }
+    // Reconcilia com o estado real do servidor (data de aceite, etc.).
+    onPatched(result.data as Partial<PropostaEdicao>);
+    toast.show({ title: "Proposta marcada como aceita", tone: "ok" });
+  }
+
+  function triggerMarkAccepted() {
+    const sorted = [...proposta.options].sort((a, b) => a.position - b.position);
+    if (sorted.length === 0) return;
+    // Uma opção só: aceita direto, sem perguntar qual.
+    if (sorted.length === 1) {
+      void handleMarkAccepted(sorted[0]!.id);
+      return;
+    }
+    // Mais de uma: abre o seletor curto.
+    setSelectOptionOpen(true);
+  }
+
   function publicUrl() {
     return `${window.location.origin}/p/${proposta.publicToken}`;
   }
@@ -243,6 +308,8 @@ function PublishBar({
       });
     }
   }
+
+  const sortedOptions = [...proposta.options].sort((a, b) => a.position - b.position);
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -263,6 +330,17 @@ function PublishBar({
         </>
       ) : (
         <>
+          {canMarkAccepted ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={markingAccepted}
+              disabled={sortedOptions.length === 0}
+              onClick={triggerMarkAccepted}
+            >
+              Marcar como aceita
+            </Button>
+          ) : null}
           <Button size="sm" variant="secondary" onClick={handleCopy}>
             <LinkIcon className="size-4" />
             Copiar link
@@ -275,6 +353,37 @@ function PublishBar({
           )}
         </>
       )}
+
+      {/*
+        Seletor curto de opção aceita — só abre quando a proposta tem MAIS de
+        uma opção. `Dialog` (não `Sheet`): é uma decisão de uma só escolha,
+        não um formulário; o `Sheet` pesado com campos ficaria desproporcional
+        para "qual opção o cliente escolheu?". Lista de botões em vez de
+        `Select` dropdown: a ação é destructive-adjacent (muda estado da
+        proposta), e botões explícitos com o nome da opção são mais diretos
+        que um dropdown que esconde as opções atrás de um clique extra.
+      */}
+      <Dialog open={selectOptionOpen} onOpenChange={setSelectOptionOpen}>
+        <DialogContent
+          title="Qual opção foi aceita?"
+          description="O cliente escolheu qual das opções da proposta?"
+        >
+          <div className="flex flex-col gap-1 py-1">
+            {sortedOptions.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onPointerDown={() => void handleMarkAccepted(option.id)}
+                disabled={markingAccepted}
+                className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-line px-4 py-3 text-left text-15 font-medium text-ink [transition:transform_120ms_var(--curve-out)] hover:border-line-strong active:scale-[0.995] disabled:opacity-60"
+              >
+                <span className="min-w-0 truncate">{option.name}</span>
+                {option.isRecommended ? <Badge tone="accent">Recomendada</Badge> : null}
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

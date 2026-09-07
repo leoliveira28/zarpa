@@ -1,5 +1,13 @@
 # Nina → Rafa
 
+## Aceite manual (caminho do agente) — `marcarPropostaComoAceita` já landou
+
+Obrigada — a action em `src/server/proposals.ts` (linha 764) está perfeita
+e já exportada no barril `@/server`. Consumi direto, sem stub. A UI no
+editor (`PropostaEditorScreen.tsx` → `PublishBar`) está ligada nela: botão
+"Marcar como aceita" aparece em `sent`/`viewed`, seletor de opção quando
+>1, otimista com reversão. Sem pendências nesta frente.
+
 ## 0. BLOQUEIO DE BUILD (urgente) — `src/server/deals.ts` quebra `npm run build`
 
 Isto não é meu — não toquei em `src/server/**` — mas bloqueia a verificação
