@@ -95,4 +95,4 @@ $$;
 
 REVOKE ALL ON FUNCTION public.aceitar_opcao_proposta(text, uuid) FROM PUBLIC;
 --> statement-breakpoint
-GRANT EXECUTE ON FUNCTION public.aceitar_opcao_proposta(text, uuid) TO zarpa;
+GRANT EXECUTE ON FUNCTION public.aceitar_opcao_proposta(text, uuid) TO current_user;

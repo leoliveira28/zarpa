@@ -278,7 +278,9 @@ $$;
 
 REVOKE ALL ON FUNCTION public.proposta_publica(text) FROM PUBLIC;
 --> statement-breakpoint
-GRANT EXECUTE ON FUNCTION public.proposta_publica(text) TO zarpa;
+-- Neutro de ambiente: o role que conecta (zarpa local, neondb_owner no Neon) é o dono
+-- da função e já tem EXECUTE — o grant fica explícito, e não se acopla a um nome de role.
+GRANT EXECUTE ON FUNCTION public.proposta_publica(text) TO current_user;
 --> statement-breakpoint
 
 -- ---------------------------------------------------------------------------
@@ -361,4 +363,4 @@ $$;
 
 REVOKE ALL ON FUNCTION public.registrar_visita_proposta(text, text, integer, uuid, text, text, text) FROM PUBLIC;
 --> statement-breakpoint
-GRANT EXECUTE ON FUNCTION public.registrar_visita_proposta(text, text, integer, uuid, text, text, text) TO zarpa;
+GRANT EXECUTE ON FUNCTION public.registrar_visita_proposta(text, text, integer, uuid, text, text, text) TO current_user;
