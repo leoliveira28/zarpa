@@ -481,14 +481,13 @@ describe('slug — colisão vira CONFLITO amigável (regressão do pré-cheque s
     // ainda) e uma perde o INSERT no índice `tenants_slug_key`. O índice único é a
     // garantia real — o contrato observável é "UM tenant com esse slug, jamais dois".
     //
-    // ACHADO DESTA RODADA (documentado em docs/handoffs/teo-para-rafa.md): quem PERDE a
-    // corrida recebe hoje o erro CRU do drizzle (DrizzleQueryError "Failed query: insert
-    // into tenants..."), NÃO o CONFLITO do pré-cheque — a tradução do 23505 no catch de
-    // `criarTenant` é código morto porque `ehViolacaoDeUnicidade` lê `error.code` e o
-    // drizzle 0.45 traz o PostgresError original em `error.cause`. Aqui o teste afirma só
-    // o que é determinístico: uma vitoriosa, uma perdedora, um tenant no banco. Se o
-    // pré-cheque vencer a corrida (janela inversa), a perdedora é ServiceError CONFLITO —
-    // as duas formas são aceitas, com assert extra quando for ServiceError.
+    // Quem PERDE recebe ServiceError CONFLITO pelos DOIS caminhos possíveis: se o
+    // pré-cheque vencer a janela, recusa direto; se o índice único vencer, o catch de
+    // `criarTenant` traduz a violação — o drizzle 0.45 embrulha o PostgresError (23505)
+    // em DrizzleQueryError com o original em `.cause`, e `ehViolacaoDeUnicidade`
+    // percorre a cadeia de cause. (Achado desta rodada, documentado em
+    // docs/handoffs/teo-para-rafa.md: antes lia só `error.code` — código morto,
+    // perdedor recebia erro cru.)
     const base = unico('qa-slug-corrida')
     const [a, b] = await Promise.allSettled([
       criarTenant({ name: `Agência A ${base}`, slug: base }),
@@ -502,15 +501,11 @@ describe('slug — colisão vira CONFLITO amigável (regressão do pré-cheque s
 
     if (venceu[0]!.status === 'fulfilled') limpeza.push(venceu[0]!.value.tenantId)
     const erro = (perdeu[0] as PromiseRejectedResult).reason
-    expect(erro).toBeInstanceOf(Error)
-
-    // Pré-cheque venceu a corrida → o perdedor recebe o CONFLITO amigável (caminho que o
-    // teste anterior cobre de forma determinística).
-    if (erro instanceof ServiceError) {
-      expect(erro.code).toBe('CONFLITO')
-      expect(erro.mensagem).toBe('Esse endereço já está em uso.')
-      expect(`${erro.message} ${erro.mensagem}`).not.toMatch(/duplicate key|23505/i)
-    }
+    expect(erro).toBeInstanceOf(ServiceError)
+    const conflito = erro as InstanceType<typeof ServiceError>
+    expect(conflito.code).toBe('CONFLITO')
+    expect(conflito.mensagem).toBe('Esse endereço já está em uso.')
+    expect(`${conflito.message} ${conflito.mensagem}`).not.toMatch(/duplicate key|23505/i)
 
     // A garantia real (índice único) valeu: exatamente UM tenant com esse slug.
     const comOSlug = await authDb

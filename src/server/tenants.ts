@@ -224,9 +224,23 @@ export async function criarTenant(dados: {
   return { tenantId };
 }
 
-/** Postgres 23505 = unique_violation. O driver expõe o código em `.code`. */
+/**
+ * Postgres 23505 = unique_violation.
+ *
+ * O drizzle-orm (0.45.2) embrulha a falha do driver em `DrizzleQueryError`
+ * ("Failed query: insert into ...") e o `PostgresError` original — o único que
+ * tem `.code === '23505'` — fica em `error.cause`. Ler só `error.code` devolve
+ * `undefined` para toda falha que passar pelo query builder, então percorre-se
+ * a cadeia de `cause` procurando o código (limite de 5 níveis, rede de
+ * segurança contra cadeia circular). Regressão coberta por
+ * `tests/signup/criarconta.test.ts` (corrida real de slug).
+ */
 function ehViolacaoDeUnicidade(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  const codigo: unknown = (error as { code?: unknown }).code;
-  return codigo === '23505';
+  let atual: unknown = error;
+  for (let nivel = 0; nivel < 5; nivel += 1) {
+    if (!(atual instanceof Error)) return false;
+    if ((atual as { code?: unknown }).code === '23505') return true;
+    atual = (atual as { cause?: unknown }).cause;
+  }
+  return false;
 }
