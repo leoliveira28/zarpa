@@ -200,6 +200,12 @@ function SideNav({ activeHref }: { activeHref: string | null }) {
 
       <div className="mt-auto flex flex-col gap-3 border-t border-hairline p-3">
         <Link
+          href="/cobranca"
+          className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
+        >
+          Assinatura
+        </Link>
+        <Link
           href="/kitchen-sink"
           className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
         >

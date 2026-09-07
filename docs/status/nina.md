@@ -1,5 +1,155 @@
 # Nina — status
 
+## S11 — UI de cobrança (assinatura Asaas)
+
+### O que ficou pronto
+
+**`src/app/(app)/cobranca/page.tsx` + `CobrancaScreen.tsx`** — tela nova,
+rota `/cobranca`. Registro silencioso (miolo do app): papel, fio entre
+seções (`SectionHeading` + `Rule`), uma cor de destaque (o azul do accent
+aparece uma vez — no botão "Assinar"). Sem ilustração, sem prancha.
+
+A tela faz uma chamada combinada (`Promise.all` de
+`obterAssinaturaAtual` + `listarPlanos` + `listarFaturas`) e três
+estados: skeleton (`Skeleton`/`SkeletonRow`, nunca spinner), erro
+(`Card` + `FieldError` + botão com `correcao` do servidor) e pronto.
+
+**Seção "Plano atual"** — se `assinatura` existe e tem `plano`, mostra
+card com nome, Badge de status (`tone` por estado), valor mensal em
+`Money size="20"` com `reserveFor` (teto dos planos), período atual
+(início → fim em `tabular-nums`), data de cancelamento se aplicável.
+Se `null` ou sem plano, card simples "Nenhum plano ativo" com instrução.
+O rodapé do card (quando `status !== "canceled"`) tem a ação de
+cancelar como `CardAction` em `text-danger` — texto, não botão, e o
+contexto à esquerda "O cancelamento entra em vigor no fim do período
+atual".
+
+**Seção "Trocar de plano"** — `Select` de forma de pagamento
+(`billingType`: Pix/Cartão/Boleto, default Pix) com nota discreta de
+que em dev só grava a intenção. Abaixo, os 3 planos da `listarPlanos`
+separados por `Rule inner`, cada um com nome, Badge "Plano atual" se
+for o atual, descrição, features (lista), preço em `Money size="17"` com
+`reserveFor` do teto, e botão "Assinar" (`variant="primary" size="sm"`)
+quando não é o plano atual. O botão reage no `pointerdown`, fica
+carregando (`loading`) durante o `trocarPlano`, e no sucesso troca o
+estado da assinatura otimistamente + toast "Plano trocado para X"
+(`tone="ok"`). Erro vira toast com `action: { label: correcao, onClick:
+retry }` — a correção do servidor vira o botão do próprio toast.
+
+**Seção "Faturas"** — `listarFaturas`, mais recente primeiro, cada
+linha com data (`formatDayMonth` de `dueDate` ou `createdAt`),
+método (Pix/Cartão/Boleto/—), valor em `Money size="15"` com
+`reserveFor` do teto, status em `Badge` (`tone` por estado). Estado
+vazio: `EmptyState` com preview de exemplo (fatura paga, R$ 99,00).
+
+**Cancelar assinatura — `useDeferredDelete` (decisão argumentada).**
+`cancelarAssinatura` não tem par de reabertura no servidor. A regra do
+CLAUDE.md é clara: destrutivo = toast com desfazer de 8s, não modal
+"tem certeza?". Escolhi `useDeferredDelete` (mesmo padrão de
+`excluirViajante`/`excluirOpcao`): o status muda para `canceled`
+otimistamente na hora (a UI mostra "Cancelada" imediatamente), e
+`cancelarAssinatura` só é chamado de verdade após 8s sem "Desfazer".
+Desfazer reverte o estado local (`status` volta para o anterior) e o
+timer morre — a chamada nunca acontece, não preciso de
+`restaurarAssinatura`. Se o commit tardio falhar (raro), `onFailure`
+mostra toast de erro e recarrega a tela. O `window.setTimeout` do
+`useDeferredDelete` sobrevive à desmontagem do componente (navegação
+durante os 8s) — o cancelamento ainda persiste.
+
+Por que não cancelamento imediato + `trocarPlano` como desfazer: o
+`trocarPlano` recriaria a assinatura, mas o plano poderia ter mudado de
+preço, ou a chamada falhar, e o "Desfazer" prometeria algo que pode
+não conseguir cumprir. `useDeferredDelete` é mais honesto: se
+desfeito a tempo, nada foi persistido.
+
+### Entrada na navegação — decisão
+
+Não adicionei um sexto ícone à `BottomNav` (limite de 4-5 itens em
+390px, e a tela é baixa frequência — 1x/mês, não 15x/dia). Em vez
+disso, dois caminhos discretos:
+
+1. **`SideNav` (desktop)** — item "Assinatura" no rodapé, ao lado de
+   "Kitchen sink", sempre visível no menu lateral. Edição em
+   `src/components/app/AppShell.tsx`.
+2. **Link "Plano e cobrança" no header de `/vendas` e `/financeiro`** —
+   texto discreto (`text-13 text-muted`), à direita do título, ao lado
+   do `MoneyHubTabs`. É onde a agente pensa em dinheiro — ver o custo
+   do app perto do que ela ganha faz sentido. Edição em
+   `VendasScreen.tsx` e `FinanceiroScreen.tsx`.
+
+No mobile, o único caminho é o link no header de Dinheiro. A agente
+vai de "Dinheiro" → "Plano e cobrança". É aceitável para uma tela de
+baixa frequência; não justifica um sexto ícone na barra inferior que
+competiria por atenção com Hoje/Funil/Propostas/Clientes/Dinheiro.
+
+### Badge tones — decisão
+
+Status da assinatura: `active` → `ok`, `trialing` → `accent` (destaque
+inicial, não é "tudo bem" como active), `past_due` → `danger`,
+`canceled` → `neutral`. Faturas: `paid` → `ok`, `pending` → `neutral`
+(pendente não é problema até vencer), `overdue` → `danger`,
+`refunded` → `neutral`. Verde/âmbar são estado, não marca — o azul do
+accent só aparece no botão de assinar.
+
+### Passo a passo do fluxo para o PO clicar
+
+Login `dev@zarpa.local` / `dev12345` em `http://localhost:3000/entrar`,
+viewport 390×844 (iPhone 14):
+
+1. **Chegar à tela** — dois caminhos:
+   - Desktop: menu lateral → "Assinatura" (rodapé, entre "Kitchen sink"
+     e "Tema").
+   - Mobile: barra inferior → "Dinheiro" → "Plano e cobrança" (link
+     no header, ao lado do título "Vendas" ou "Recebíveis").
+2. **`/cobranca`** — se o tenant dev ainda não tem assinatura (provável
+   se o seed não cria), a seção "Plano atual" mostra "Nenhum plano
+   ativo". A seção "Trocar de plano" mostra os 3 planos (Solo R$ 49,
+   Pro R$ 99, Studio R$ 199) com botão "Assinar" em cada um. A seção
+   "Faturas" mostra estado vazio "Nenhuma fatura ainda" com preview.
+3. **Assinar um plano** — escolher forma de pagamento (Pix default),
+   tocar "Assinar" no plano Pro. Botão fica carregando. Sucesso: a
+   seção "Plano atual" atualiza para "Pro" com Badge "Ativa", valor
+   R$ 99,00. Toast "Plano trocado para Pro". A seção "Trocar de
+   plano" agora mostra Badge "Plano atual" no Pro, e o botão "Assinar"
+   some dele (os outros dois mantêm o botão).
+4. **Trocar de plano** — tocar "Assinar" em outro plano (ex.: Studio).
+   Mesmo fluxo: carrega, troca, toast. O plano anterior perde o Badge
+   "Plano atual", o novo ganha. `trocarPlano` é idempotente (já no
+   plano → devolve sem recriar), então clicar no plano atual não faz
+   nada (o botão some para o plano atual).
+5. **Cancelar assinatura** — no rodapé do card "Plano atual", tocar
+   "Cancelar assinatura" (texto em vermelho, `CardAction`). O status
+   muda para "Cancelada" na hora (Badge `neutral`), a data de
+   cancelamento aparece. Toast "Assinatura cancelada — Desfazer" por
+   8s. **Tocar "Desfazer"** dentro de 8s: o status volta para "Ativa",
+   a data some, e nada foi enviado ao servidor (o timer morre). Deixar
+   os 8s passar: `cancelarAssinatura` persiste de verdade no DB. O
+   card de plano atual continua visível com Badge "Cancelada".
+6. **Faturas** — se houver faturas no DB, a lista mostra cada uma com
+   data, método, valor e Badge de status. Se não houver, estado vazio
+   com preview de exemplo.
+
+### Verificação (o que rodei)
+
+- `npx tsc --noEmit` — **limpo**.
+- `npm run build` — **limpo**, `/cobranca` aparece como rota dinâmica
+  (ƒ) nova na lista de rotas (21 rotas no total).
+- `npx vitest run tests/design/guards.test.ts` — **6/6 verde**
+  (Postgres `zarpa-db` de pé via `npm run db:up`, schema `zarpa_test`
+  recriado pelas migrations). Tipografia, cor por contexto, paridade
+  de tema, movimento (CSS e JS), `prefers-reduced-motion` — nenhum
+  desvio não registrado.
+- **Não testei clicando no navegador** — o PO (Leandro) clica. O passo
+  a passo acima é para ele julgar a tela em 390×844. Prestar atenção
+  especial a: (a) o `Select` de forma de pagamento abre e fecha
+  corretamente no mobile (Radix Select em touch); (b) o botão
+  "Assinar" reage no `pointerdown` (não `click`); (c) o cancelamento
+  otimista mostra "Cancelada" imediatamente e o "Desfazer" reverte;
+  (d) o link "Plano e cobrança" no header de Vendas/Financeiro é
+  visível e clicável em 390px (não compete com o `MoneyHubTabs`).
+
+---
+
 ## S10 — dashboard do mês no `/hoje` religado
 
 ### O buraco

@@ -109,7 +109,15 @@ export function FinanceiroScreen() {
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-3">
-        <h2 className="display text-32 text-ink">Financeiro</h2>
+        <div className="flex items-end justify-between gap-3">
+          <h2 className="display text-32 text-ink">Financeiro</h2>
+          <Link
+            href="/cobranca"
+            className="shrink-0 pb-1 text-13 font-medium text-muted hover:text-ink"
+          >
+            Plano e cobrança
+          </Link>
+        </div>
         <MoneyHubTabs />
       </header>
 
