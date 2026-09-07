@@ -64,6 +64,13 @@
       "when": 1757980800000,
       "tag": "0008_receivables_dedupe",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1758067200000,
+      "tag": "0009_planos_e_assinatura",
+      "breakpoints": true
     }
   ]
 }

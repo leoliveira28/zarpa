@@ -540,3 +540,50 @@ Cinco pontos concretos para virar teste automatizado:
 Sem migration nesta rodada — nada para conferir em `drizzle/meta/_journal.json` além do
 que já existia (seguindo a regra "RLS na mesma migration que cria a tabela", não criei
 tabela nenhuma, então não há policy nova para auditar).
+
+---
+
+## S11 — Testes de cobrança (assinatura Asaas)
+
+Backend pronto e commitado (`src/server/billing.ts` + `src/lib/asaas/client.ts` +
+migration `drizzle/0009_planos_e_assinatura.sql` com seed dos 3 planos + RLS). Gate já
+passou (378 testes, 10 migrations aplicadas, allowlist vazia) — então a migration
+aplica limpa e a varredura por catálogo de `tenant-isolation.test.ts` já cobre
+`subscriptions`/`payments` (são tabelas com `tenant_id` e RLS desde `0000`/`0009`).
+**Não quebrou nada** — mas a NOVA lógica de billing não tem teste de behavior ainda.
+
+### Pontos concretos para virar teste (`tests/`, sua fronteira)
+
+1. **Seed dos 3 planos** — confira que `plans` tem Solo 4900 / Pro 9900 / Studio 19900
+   (centavos), `isActive: true`, `slug` único. A migration faz `INSERT ... ON CONFLICT
+   (slug) DO NOTHING` — teste que rodar a migration duas vezes não duplica.
+2. **RLS de `subscriptions`/`payments`** — a varredura por catálogo já deve pegar; se
+   não, confira que `tenant-isolation.test.ts` vê as duas tabelas. Um tenant não lê
+   assinatura/fatura de outro.
+3. **`trocarPlano` idempotente** — chamar duas vezes com o mesmo `planId` não cria duas
+   assinaturas (uma assinatura viva por tenant: `status in ('trialing','active',
+   'past_due')`).
+4. **`trocarPlano` com `planId` de outro tenant/inexistente** → `NAO_ENCONTRADO`
+   (`plans` é catálogo global, então planId inválido = não existe; não vaza entre
+   tenants porque o plano não tem tenant).
+5. **Modo dev sem `ASAAS_API_KEY`** — `trocarPlano`/`cancelarAssinatura` operam só no
+   DB sem chamar Asaas. O cliente `asaas/client.ts` lança `ASAAS_NAO_CONFIGURADO` se
+   chamado direto sem chave — teste que o erro tem `code`/`correcao` certos.
+6. **`processarWebhookAsaas` idempotente** — mesmo `asaasPaymentId` processado duas
+   vezes não cria duas `payments` (índice único em `payments.asaas_payment_id`).
+7. **`verificarWebhookAsaas`** — sem `ASAAS_WEBHOOK_TOKEN` configurado, retorna
+   `true` (dev/teste não trava); com token configurado, só `true` se o header/query
+   bater. Teste ambos caminhos.
+
+### A rota do webhook é fronteira do PO
+
+`src/app/api/asaas/webhook/route.ts` (PO escreve) chama `verificarWebhookAsaas` +
+`processarWebhookAsaas`. Se quiser testar a rota HTTP de ponta a ponta, peça ao PO —
+ou teste a lógica importando `processarWebhookAsaas` direto (sem a rota).
+
+### O que NÃO tem (não teste o que não existe)
+
+- Sem enforcement/paywall (não bloqueia tela por `past_due`).
+- Sem trial/dunning — decisão de produto em aberto.
+- Sem integração de checkout real (cartão/Pix/boleto via Asaas) — pós-v1; em dev o
+  `billingType` só grava intenção.

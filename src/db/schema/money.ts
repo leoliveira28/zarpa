@@ -12,6 +12,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { uuidv7 } from '../uuid';
 import { tenants } from './tenants';
+import { plans } from './plans';
 
 /**
  * Cobrança da assinatura do SaaS (Asaas: Pix + cartão recorrente + boleto).
@@ -20,6 +21,11 @@ import { tenants } from './tenants';
  * `proposal_options`. Aqui é só o R$ 49/99/199 que o agente paga para usar o produto.
  *
  * `provider` já existe como coluna porque trocar de gateway é caro se o schema assume um.
+ *
+ * S11: `subscriptions` ganha `planId` FK -> `plans` (catálogo em `./plans.ts`). O `plan`
+ * enum text preexistente permanece como fallback. `payments` é a tabela que o contrato
+ * S11 chama de `invoices` — mesma semântica, já com RLS e idempotência em `asaas_payment_id`.
+ * A camada de actions (`src/server/billing.ts`) expõe `listarFaturas()` lendo de `payments`.
  */
 
 export const subscriptions = pgTable(
@@ -32,7 +38,19 @@ export const subscriptions = pgTable(
     provider: text('provider').notNull().default('asaas'),
     asaasCustomerId: text('asaas_customer_id'),
     asaasSubscriptionId: text('asaas_subscription_id'),
+    /**
+     * Plano da assinatura (enum text, preexistente desde `0000_fundacao`). Mantido
+     * como fallback — a camada de actions prefere `planId` (FK -> `plans`) quando
+     * presente e cai para `plan` se `planId` for nulo. `plan` nunca fica dessincronizado
+     * de `planId` em novas escritas: `trocarPlano` seta os dois juntos.
+     */
     plan: text('plan', { enum: ['solo', 'pro', 'studio'] }).notNull(),
+    /**
+     * FK -> `plans`. Nullable: rows pré-0009 não têm o vínculo. S11 passa a setar
+     * este campo em toda troca/cancelamento. `ON DELETE SET NULL`: apagar um plano
+     * do catálogo não pode sumir com a assinatura do agente.
+     */
+    planId: uuid('plan_id').references(() => plans.id, { onDelete: 'set null' }),
     status: text('status', {
       enum: ['trialing', 'active', 'past_due', 'canceled', 'expired'],
     })
@@ -51,6 +69,7 @@ export const subscriptions = pgTable(
   },
   (t) => [
     index('subscriptions_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
+    index('subscriptions_plan_id_idx').on(t.planId),
     uniqueIndex('subscriptions_asaas_subscription_key')
       .on(t.asaasSubscriptionId)
       .where(sql`${t.asaasSubscriptionId} is not null`),

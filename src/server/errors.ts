@@ -13,7 +13,8 @@ export type ServiceErrorCode =
   | 'NAO_ENCONTRADO'
   | 'DADOS_INVALIDOS'
   | 'CONFLITO'
-  | 'LIMITE_DO_PLANO';
+  | 'LIMITE_DO_PLANO'
+  | 'ASAAS_NAO_CONFIGURADO';
 
 export class ServiceError extends Error {
   code: ServiceErrorCode;

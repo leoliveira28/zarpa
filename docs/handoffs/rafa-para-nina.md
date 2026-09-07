@@ -1014,3 +1014,93 @@ const propostas: PropostaResumo[] = r.data;
 É só trocar a chamada no `NegocioScreen.tsx` quando for conveniente — o provisório
 (`listarPropostas({ limite: 200 })` + filtro no cliente) continua funcionando, só não
 escala. Sem pressa, não bloqueia nada.
+
+---
+
+## S11 — UI de cobrança (assinatura Asaas)
+
+O backend do S11 está pronto e commitado (`src/server/billing.ts` + `src/lib/asaas/`).
+**Sem credencial Asaas ainda** — em dev (`ASAAS_API_KEY` ausente) `trocarPlano`/
+`cancelarAssinatura` operam só no DB, então o fluxo inteiro é testável sem chamar a
+API. Quando a chave entra, o mesmo código passa a criar/cancelar no Asaas de verdade.
+
+### Actions (todas em `@/server`, `ServiceResult<T>`, `requireAuthContext` + `withTenant`)
+
+```ts
+import {
+  obterAssinaturaAtual, listarPlanos, trocarPlano, cancelarAssinatura, listarFaturas,
+  type AssinaturaAtual, type PlanoResumo, type FaturaResumo,
+  type StatusAssinatura, type StatusFatura, type TrocarPlanoInput,
+} from "@/server";
+```
+
+- **`obterAssinaturaAtual()`** → `ServiceResult<AssinaturaAtual | null>`. `null` = sem
+  assinatura (não é erro — agente pode estar em trial sem registro).
+- **`listarPlanos()`** → `ServiceResult<PlanoResumo[]>`. Os 3 planos ativos, por preço
+  crescente: Solo 4900, Pro 9900, Studio 19900 (centavos, BRL).
+- **`trocarPlano({ planId, billingType? })`** → `ServiceResult<AssinaturaAtual>`.
+  Idempotente (já no plano pedido → devolve sem recriar). `billingType`:
+  `'CREDIT_CARD' | 'PIX' | 'BOLETO'`, opcional. Em dev sem chave, grava só no DB.
+- **`cancelarAssinatura()`** → `ServiceResult<AssinaturaAtual | null>`.
+- **`listarFaturas()`** → `ServiceResult<FaturaResumo[]>`. Mais recente primeiro.
+
+### Tipos
+
+```ts
+type PlanoResumo = { id, slug: 'solo'|'pro'|'studio', name, priceCents, currency, description, features: string[]|null, isActive };
+type StatusAssinatura = 'trialing' | 'active' | 'past_due' | 'canceled';
+type AssinaturaAtual = { id, tenantId, plano: PlanoResumo|null, status, asaasCustomerId, asaasSubscriptionId, currentPeriodStart, currentPeriodEnd, canceledAt, createdAt, updatedAt };
+type StatusFatura = 'pending' | 'paid' | 'overdue' | 'refunded';
+type FaturaResumo = { id, subscriptionId, asaasPaymentId, amountCents, status, method: 'pix'|'credit_card'|'boleto'|null, dueDate, paidAt, createdAt };
+type TrocarPlanoInput = { planId: string; billingType?: 'CREDIT_CARD'|'PIX'|'BOLETO' };
+```
+
+### O fluxo de negócio ponta a ponta (o critério de "pronto")
+
+A agente precisa ver e gerenciar sua assinatura. Sugestão de rota: `/cobranca` (ou
+`/assinatura` — você decide o nome; não está na nav ainda, é tela nova). Fluxo:
+
+1. Abrir a tela → `obterAssinaturaAtual()` mostra o plano atual + status. Se `null`,
+   mostrar os 3 planos (`listarPlanos`) com a opção de assinar.
+2. Escolher um plano (ou trocar) → `trocarPlano({ planId, billingType })`. Em dev sem
+   chave, a assinatura é criada no DB e a tela reflete o novo plano. Com chave, o
+   fluxo de pagamento real (cartão/Pix/boleto) entra no lugar — mas a UI consome o
+   MESMO `trocarPlano`, o backend decide.
+3. Cancelar → `cancelarAssinatura()` (destrutivo = toast com desfazer de 8s, não modal
+   "tem certeza?" — regra do CLAUDE.md). Mas note: `cancelarAssinatura` não tem par de
+   reabertura no servidor; o desfazer só reverte o estado local da tela e recria via
+   `trocarPlano` se você quiser — confira se vale o padrão `useDeferredDelete` ou se o
+   cancelamento é imediato. Decisão sua.
+4. Faturas → `listarFaturas()` numa seção, mais recente primeiro, valor em
+   `tabular-nums` + `Money`, status em `Badge`.
+
+### Regras de design (Papel e Pedra — miolo silencioso)
+
+- Registro silencioso: uma cor só, zero ilustração. `#12557F` (accent) = uma coisa só
+  por tela (dizer onde clicar).
+- Todo valor: `Money` + `tabular-nums` + largura reservada (número que não pula).
+- `Rule` de `@/components/plates` como cornija entre seções, nunca card com 4 bordas.
+- Skeleton (não spinner), erro diz o que aconteceu + botão de correção (`FieldError`).
+- Reagir no `pointerdown`. `prefers-reduced-motion` desde o primeiro componente. 390px.
+- Status da assinatura em `Badge` — `tone` por estado: `active`/`trialing` = ok,
+  `past_due` = warn/danger, `canceled` = neutral.
+
+### O que NÃO existe (não invente)
+
+- **Sem enforcement/paywall**: S11 é só o motor. NÃO bloqueie nenhuma tela por status.
+  Trial de quantos dias? Dunning (o que faz `past_due`)? São decisões de produto em
+  aberto — o PO vai perguntar ao Leandro. Você só mostra e deixa o agente trocar/cancelar.
+- **Sem rota de webhook na UI** — isso é fronteira do PO (`src/app/api/asaas/webhook`).
+- O método de pagamento (cartão/Pix/boleto) em produção pede integração de checkout
+  Asaas — fora do v1 atual; o `billingType` no `trocarPlano` é o gancho, mas a tela de
+  pagamento real é pós-v1. Em dev, o seletor de `billingType` pode existir mas só grava
+  a intenção (o backend não chama Asaas sem chave).
+
+### Verificação (o que VOCÊ roda)
+
+1. `npx tsc --noEmit` — limpo.
+2. `npm run build` — limpo.
+3. `npx vitest run tests/design/guards.test.ts` — Postgres `zarpa-db` de pé
+   (`npm run db:up`).
+4. **NÃO teste clicando** — o PO (Leandro) clica. Reporte o passo a passo em
+   `docs/status/nina.md`.

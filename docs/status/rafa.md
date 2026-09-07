@@ -1,5 +1,55 @@
 # Status — Rafa (backend / plataforma)
 
+## 2026-09-07 — S11: motor de cobrança (assinatura Asaas) — backend pronto
+
+### O que ficou pronto
+
+Motor de cobrança completo, **sem credencial Asaas** (env-driven; em dev sem
+`ASAAS_API_KEY`, troca/cancela operam só no DB — fluxo testável end-to-end no CI).
+
+- **`src/server/billing.ts`** (novo, `'use server'`) — 6 actions: `obterAssinaturaAtual`
+  (devolve `null` se sem assinatura, não é erro), `listarPlanos` (3 ativos), `trocarPlano`
+  (idempotente, `TrocarPlanoInput = { planId, billingType? }`), `cancelarAssinatura`,
+  `listarFaturas`, `processarWebhookAsaas` (idempotente via `asaas_payment_id`).
+  Tipos: `PlanoResumo`, `StatusAssinatura` ('trialing'|'active'|'past_due'|'canceled'),
+  `AssinaturaAtual`, `StatusFatura`, `FaturaResumo`, `TrocarPlanoInput`.
+- **`src/lib/asaas/client.ts`** (novo) — `asaasConfigurado`, `erroAsaasNaoConfigurado`,
+  `criarClienteAsaas`, `criarAssinaturaAsaas`, `cancelarAssinaturaAsaas`,
+  `listarPagamentosAsaas`, `verificarWebhookAsaas` (token no header
+  `asaas-access-token`/query `access_token`; sem token configurado = `true` em dev).
+- **`src/db/schema/plans.ts`** (novo) + **migration `drizzle/0009_planos_e_assinatura.sql`**
+  — tabela `plans` (catálogo GLOBAL, sem `tenant_id`, policy `plans_read USING(true)`)
+  com seed dos 3 planos (`ON CONFLICT (slug) DO NOTHING`): Solo 4900, Pro 9900, Studio
+  19900. Reusei as tabelas `subscriptions`/`payments` já definidas em `money.ts` (com
+  RLS desde `0000`/`0009`) em vez de criar `invoices` novas — menos superfície.
+- **`.env.example`** — `ASAAS_API_URL`, `ASAAS_API_KEY`, `ASAAS_WEBHOOK_TOKEN`, `ASAAS_ENV`.
+- Exports no barril `@/server` + `verificarWebhookAsaas` de `@/lib/asaas/client`.
+
+### Decisões que tomei sozinha
+
+- **Reusar `subscriptions`/`payments` do `money.ts`** em vez de criar `invoices` (spec
+  original do PO). As tabelas já existiam com RLS; `payments` mapeia status Asaas
+  (`confirmed`/`received` → `paid`) para o vocabulário do produto.
+- **Modo dev sem chave**: `trocarPlano`/`cancelarAssinatura` interceptam antes de chamar
+  o cliente Asaas e operam só no DB. O cliente Asaas lança `ASAAS_NAO_CONFIGURADO` se
+  chamado direto — defesa em profundidade.
+- **Sem enforcement/paywall** — S11 é só o motor. Trial (quantos dias?) e dunning
+  (o que faz `past_due`?) são decisão de produto, pendência pro PO.
+
+### O que NÃO fiz (fora da fronteira / não pedido)
+
+- **Rota webhook HTTP** (`src/app/api/asaas/webhook/route.ts`) — fronteira do PO.
+- UI de cobrança — fronteira da Nina (handoff em `rafa-para-nina.md` seção S11).
+- Testes de behavior — fronteira do Téo (handoff em `rafa-para-teo.md` seção S11).
+
+### Verificação (feita pelo PO — eu caí no 402 antes de reportar)
+
+O PO rodou por mim: `tsc` limpo, `build` limpo (18 rotas), gate 378/378 allowlist vazia
+com **10 migrations** (a `0009` aplicou limpa, RLS intacta). Handoffs escritos pelo PO a
+partir do código verificado.
+
+---
+
 ## Tarefa desta rodada: S10 — Dashboard do mês
 
 Pedido: backend do dashboard que a agente abre para DECIDIR o que fazer, não só para ver
