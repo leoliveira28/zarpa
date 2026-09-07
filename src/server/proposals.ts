@@ -1,7 +1,7 @@
 'use server';
 
 import { randomBytes } from 'node:crypto';
-import { and, asc, desc, eq, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   activities,
@@ -241,6 +241,17 @@ export type FiltroPropostas = {
   busca?: string;
   incluirArquivadas?: boolean;
   limite?: number;
+  /**
+   * S10: restringe a lista a um conjunto conhecido de ids — o caminho de
+   * "/propostas?ids=..." que o card "propostas paradas" do dashboard usa para linkar
+   * direto às propostas destacadas (`src/server/dashboard.ts`,
+   * `ResumoDePropostasParadas.itens`). Sem isso, um card com N ids obrigaria a tela a
+   * buscar TUDO e filtrar no cliente. Ignorado quando vazio/omitido — não filtra nada, é
+   * o comportamento de sempre. `incluirArquivadas` continua valendo: se algum dos ids
+   * pedidos estiver arquivado, some da lista a menos que o chamador também peça
+   * `incluirArquivadas: true`.
+   */
+  ids?: string[];
 };
 
 /**
@@ -313,6 +324,7 @@ export async function listarPropostas(
     return withTenant(tenantId, async (tx) => {
       const condicoes = [];
       if (!filtro?.incluirArquivadas) condicoes.push(isNull(proposals.archivedAt));
+      if (filtro?.ids && filtro.ids.length > 0) condicoes.push(inArray(proposals.id, filtro.ids));
       if (busca && busca.length > 0) {
         condicoes.push(
           or(

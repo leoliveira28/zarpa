@@ -1,6 +1,167 @@
 # Status — Rafa (backend / plataforma)
 
-## Tarefa desta rodada: `criarTarefa` — o "Criar lembrete" morto da tela Hoje
+## Tarefa desta rodada: S10 — Dashboard do mês
+
+Pedido: backend do dashboard que a agente abre para DECIDIR o que fazer, não só para ver
+número — cada métrica tem que apontar de volta para a tela onde a ação acontece (o PO
+tinha auditado o produto ponta a ponta e achado peças desconectadas em rodadas
+anteriores; esta entrega foi desenhada para não repetir isso).
+
+### Pronto
+
+1. **`src/server/dashboard.ts` (novo)** — duas Server Actions, exportadas no barril
+   `src/server/index.ts`. **Nenhuma tabela nova, nenhuma migration** — tudo lido de
+   `sales`/`proposals`, que já têm RLS desde `0007_vendas_e_recebiveis.sql`/
+   `0003_construtor_de_proposta.sql`. Mesmo padrão de sempre: `requireAuthContext()` +
+   `withTenant`, `ServiceResult<T>`, `tenantId` nunca argumento.
+
+   - **`obterResumoDoMes()`** — três queries sequenciais dentro da MESMA transação:
+     - *Vendas e faturamento* — soma `sales.valorBrutoCents`/`taxaServicoCents` das linhas
+       com `createdAt` no mês corrente (UTC). Decisão: `sales` não tem coluna própria de
+       "quando fechou" (diferente de `deals.closedAt`) — a EXISTÊNCIA da linha já significa
+       "virou venda" (só nasce de proposta aceita), então `createdAt` é o proxy mais direto
+       sem inventar coluna nova.
+     - *Comissão a receber vs. recebida* — agregada por `sales.comissaoStatus`
+       (`prevista`/`recebida`/`atrasada`), soma `comissaoPrevistaCents` de cada grupo, e
+       `aReceberCents = previstaCents + atrasadaCents` (o número pronto para o rótulo da
+       tela). **Escopada ao MESMO mês da métrica anterior** — decisão consciente, não a
+       única leitura possível (a alternativa, "tudo que falta receber independente de
+       quando vendeu", é métrica diferente — registrada como pedido em aberto abaixo).
+     - *Conversão de proposta* — coorte por `proposals.sentAt` no mês corrente: `enviadas`
+       = toda a coorte, `aceitas` = quantas da MESMA coorte estão `status: 'accepted'`
+       agora. Não é "aceitas no mês / enviadas no mês" (dois filtros de data diferentes
+       criariam taxa que passa de 100%) — é sempre a mesma coorte, medida no presente. Usei
+       `.groupBy(proposals.status)` + `count(*)::int`, primeira vez que `.groupBy` aparece
+       neste projeto.
+   - *Propostas paradas* — `status in ('sent','viewed')`, `archivedAt is null`,
+     `diasParado > 7` (mesmo limiar de `listarNegociosParados` em `deals.ts` — um conceito
+     de "parado" só, não dois números para a agente aprender). `diasParado` conta a partir
+     do mais recente entre `sentAt` e `lastViewedAt`. **SEM recorte de mês** — uma proposta
+     enviada há 40 dias e ainda sem resposta continua parada mesmo que tenha nascido no mês
+     passado (mesmo raciocínio do `pipelineAbertoCents` em `deals.ts`). **Sempre devolve os
+     `id`s de cada proposta parada** (`PropostaParada[]`), nunca só a contagem — é
+     literalmente o pedido desta rodada: "3 propostas paradas" sem id não linka para lugar
+     nenhum.
+   - **`exportarResumoDoMesCsv()`** — mesmo cálculo (fatora um `calcularResumoDoMes(tx,
+     agora)` interno, chamado pelas duas actions dentro do próprio `withTenant`), formatado
+     como texto CSV pronto para baixar: delimitador `;`, BOM UTF-8 no início, dinheiro
+     formatado `1.234,56` (só para exibição — a aplicação nunca guarda assim). Devolve
+     `{ nomeArquivo, conteudo }` — Server Action que devolve texto, não uma rota HTTP;
+     `src/app/api/**` é fronteira do PO, e não precisava de rota nova: o texto já chega
+     pronto no cliente, que dispara o download com `Blob`/`URL.createObjectURL` (contrato
+     completo em `docs/handoffs/rafa-para-nina.md`).
+
+2. **`listarPropostas` ganhou filtro `ids?: string[]`** (`src/server/proposals.ts`,
+   `FiltroPropostas`) — é o que torna o card "propostas paradas" de fato clicável:
+   `/propostas?ids=<lista>` chama `listarPropostas({ ids })` e mostra só essas. Pequena
+   adição dentro da minha fronteira (o arquivo já é meu), sem mudar nenhum comportamento
+   existente (filtro novo, opcional, ignorado quando vazio).
+
+3. **Contratos escritos**: `docs/handoffs/rafa-para-nina.md` (seção "S10" — assinatura
+   completa, a tabela "para onde cada card deve linkar" pedida explicitamente, o exemplo de
+   download de CSV via `Blob`, e as três decisões de recorte de tempo) e
+   `docs/handoffs/rafa-para-teo.md` (seção "S10" — cinco pontos concretos de teste:
+   isolamento nas três queries novas, soma por `comissaoStatus`, coorte de conversão por
+   `sentAt` não por "aceita no mês", fronteira exata do limiar de 7 dias, e paridade
+   numérica entre `obterResumoDoMes`/`exportarResumoDoMesCsv`).
+
+### Verificado manualmente contra Postgres de verdade (não só `tsc`)
+
+Segui a doutrina de sempre ("se não tem teste provando, não existe") e não me contentei
+com tipo batendo: escrevi um script descartável (deletado depois, não ficou no
+repositório) e rodei contra `zarpa_test` com dois tenants throwaway. Confirmei:
+
+- **`.groupBy(proposals.status)` + `count(*)::int` volta `number` de verdade** — primeira
+  vez que `.groupBy` é usado neste projeto, valia a pena confirmar em vez de assumir que se
+  comporta como o `count(*)::int` avulso já usado em `sales.ts`/`contacts.ts`.
+- **Colunas de data (`sentAt`, `lastViewedAt`) chegam como `Date` de verdade**, não como
+  string crua do driver — as três queries deste arquivo leem COLUNA DIRETO (nunca
+  `sql<Date>()` livre usado como valor de `.select({...})`), então não caí no bug
+  documentado em `deals.ts`/`contacts.ts` (S4) que exigiu `paraDataOuNula()`. Não precisei
+  do mesmo workaround aqui — e confirmei isso, não só assumi pela leitura do código.
+- **Filtro de data por `gte`/`lt` contra `timestamptz` com `Date` do JS funciona** (mesmo
+  padrão já usado em `followups.ts`, agora reusado aqui) — range do mês corrente pegou
+  certo as linhas dentro e excluiu as de fora.
+- **"Paradas" não tem recorte de mês, "conversão" tem** — plantei uma proposta enviada 10
+  dias atrás (mês anterior, dado que hoje é dia 7) que ficou de fora de
+  `conversao.enviadas` (certo — não foi enviada este mês) mas apareceu em `paradas.itens`
+  (certo — está parada agora, independente de quando foi enviada). Os dois recortes de
+  tempo diferentes não vazam um para o outro.
+- **Isolamento**: tenant A não viu nenhuma linha do tenant B nas três queries; tenant B viu
+  exatamente a 1 proposta que era dele.
+
+Saída relevante do script:
+
+```
+[conversao, tenant A, groupBy] [ { status: 'viewed', total: 1 }, { status: 'accepted', total: 1 } ]
+[paradas filtradas > 7 dias, tenant A] [ { title: 'Proposta parada', dias: 10 } ]
+TODAS AS VERIFICACOES PASSARAM.
+Limpeza concluida (tenants throwaway removidos).
+```
+
+### Decisões que tomei sozinha
+
+- **"Vendas do mês" usa `sales.createdAt`**, não uma coluna de "data de fechamento"
+  dedicada (não existe) — ver item 1 de "Pronto".
+- **"Comissão a receber vs. recebida" escopada ao mês corrente**, não ao saldo total em
+  aberto histórico — registrado como decisão explícita (não a única leitura válida do
+  pedido) em comentário no próprio `dashboard.ts` e no handoff da Nina, com convite para
+  pedir uma segunda função se o produto quiser as duas visões.
+- **Limiar de "parada" = 7 dias**, igual ao de `listarNegociosParados` (`deals.ts`) — um
+  conceito de "parado" só no produto inteiro, não um número diferente por tela.
+- **CSV via Server Action que devolve texto, não rota `src/app/api/**`** — evita pedir algo
+  ao PO que eu não precisava pedir; o download acontece 100% no cliente a partir do texto
+  já pronto.
+- **Sem `Promise.all` para as três queries** — sequenciais, mesmo padrão que todo outro
+  arquivo de `src/server/` usa; no volume esperado (MEI, 10-15 vendas/mês) cada query é um
+  scan pequeno dentro da partição do próprio tenant, a soma fica bem abaixo dos 800ms do
+  critério de aceite sem precisar de pipelining. Não medi o tempo real de wall-clock desta
+  rodada (não tenho 12 meses de dado de teste semeados no ambiente) — ver riscos.
+
+### Riscos
+
+- **Não confirmei o orçamento de "menos de 800ms com 12 meses de dados de teste" com
+  medição de verdade** — não existe hoje um script/seed que gere 12 meses de dado por
+  tenant no volume do produto (o `seed.ts` atual cria um cenário pequeno de demonstração).
+  Os índices que já existem (`sales_tenant_created_idx`, `proposals_tenant_active_idx`
+  etc.) cobrem os padrões de acesso das três queries, e o volume esperado por tenant (MEI,
+  10-15 vendas/mês × 12 meses ≈ 120-180 vendas, propostas em proporção parecida) é pequeno
+  para Postgres — mas "deveria ser rápido" não é "medi que é rápido". Pedido ao PO/Téo: se
+  existir (ou for criado) um seed de carga de 12 meses, rodar `obterResumoDoMes()` com
+  `console.time` (ou um teste de performance) antes de fechar o critério de aceite como
+  cumprido de fato.
+- **"Comissão a receber" escopada ao mês** pode não ser a leitura que o produto quer no
+  fim das contas (ver decisão acima) — é reversível/estendível (uma segunda função), não
+  bloqueante, mas registro o risco de expectativa desalinhada.
+- Mesmos riscos estruturais de sempre (GUCs forjáveis por SQL arbitrário) não mudam nesta
+  rodada — nenhum GUC novo, nenhuma policy nova.
+
+### O que precisa dos outros
+
+- **Nina**: religar os cards do dashboard a `obterResumoDoMes()`/`exportarResumoDoMesCsv()`
+  — contrato completo, com a tabela "para onde cada card deve linkar", em
+  `docs/handoffs/rafa-para-nina.md`, seção "S10". O card de "propostas paradas" já vem com
+  os ids prontos para `/propostas?ids=...` (filtro novo em `listarPropostas`).
+- **Téo**: os cinco pontos de teste em `docs/handoffs/rafa-para-teo.md`, seção "S10", e —
+  se possível — um jeito de medir o critério de aceite de performance (800ms/12 meses) de
+  verdade, não só por inspeção de índice.
+- **PO**: se quiser o seed de 12 meses de dado para medir performance de verdade, é pedido
+  novo — não existe hoje.
+
+### Verificação
+
+- `npx tsc --noEmit`: limpo.
+- `npx eslint src/server/dashboard.ts src/server/proposals.ts src/server/index.ts`: limpo.
+- `npx tsx scripts/check/known-failures.ts`: 378 testes, allowlist vazio, sem regressão
+  (Postgres de dev de pé, `zarpa_test` recriado do zero pelo `globalSetup`, 9 migrations
+  aplicadas — nenhuma migration nova nesta rodada).
+- Script manual (não versionado) contra `zarpa_test`, dois tenants — ver seção acima.
+- Não toquei em `src/components`, `src/styles`, `src/app/**`, `tests/`, `package.json` —
+  fronteira respeitada. Não commitei — quem commita é o PO.
+
+---
+
+## Rodada anterior: `criarTarefa` — o "Criar lembrete" morto da tela Hoje
 
 Pedido: auditoria ao vivo no produto encontrou o botão "Criar lembrete" da tela Hoje sem
 `onClick`, e nenhuma função de servidor de criação manual de tarefa em lugar nenhum do

@@ -184,3 +184,14 @@ export {
   type GerarParcelasInput,
   type ParcelaPatch,
 } from './sales';
+export {
+  obterResumoDoMes,
+  exportarResumoDoMesCsv,
+  type ResumoDoMes,
+  type ResumoVendasDoMes,
+  type ResumoComissaoDoMes,
+  type ConversaoDePropostas,
+  type PropostaParada,
+  type ResumoDePropostasParadas,
+  type ResumoDoMesCsv,
+} from './dashboard';

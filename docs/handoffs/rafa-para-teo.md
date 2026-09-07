@@ -470,3 +470,73 @@ de sempre. Pontos concretos para virar teste:
    (`grep totalViajantes tests/` veio vazio), então a correção não deveria quebrar nada
    seu, mas registrando aqui para você não achar essa mudança de diff estranha sem
    contexto.
+
+---
+
+## S10 — Dashboard do mês (`src/server/dashboard.ts`) — pedido de teste
+
+**Nenhuma tabela nova, nenhuma migration.** Duas Server Actions novas
+(`obterResumoDoMes`, `exportarResumoDoMesCsv`), lendo só `sales`/`proposals` (RLS já
+coberto desde `0007_vendas_e_recebiveis.sql`/`0003_construtor_de_proposta.sql`). Um filtro
+novo em `listarPropostas` (`src/server/proposals.ts`): `FiltroPropostas.ids?: string[]`.
+
+Verifiquei manualmente contra `zarpa_test` (script descartável, não ficou no
+repositório — mesma disciplina das rodadas anteriores) com dois tenants: confirmei
+isolamento nas três queries novas, `.groupBy(proposals.status)` + `count(*)::int` voltando
+`number` de verdade (agregação por `.groupBy` nunca tinha sido usada neste projeto antes —
+valia a pena confirmar contra Postgres real, não só `tsc`), datas chegando como `Date`
+(não string crua do driver — as três queries deste arquivo leem coluna direto, nunca
+`sql<Date>()` livre, então não precisei do `paraDataOuNula()` que `deals.ts` precisou), e
+que uma proposta "parada" de um mês anterior aparece em `paradas.itens` mesmo fora do
+recorte de `conversao` (que É por mês) — prova de que os dois recortes de tempo diferentes
+(um com janela de mês, outro sem) não vazam um para o outro. Saída completa do script no
+`docs/status/rafa.md`, seção S10.
+
+Cinco pontos concretos para virar teste automatizado:
+
+1. **Isolamento nas três queries novas.** Dois tenants, cada um com vendas/propostas no
+   mês corrente — `obterResumoDoMes()` do tenant A nunca deve somar nada do tenant B (nem
+   em `vendas`, nem em `comissao`, nem em `conversao`, nem em `paradas`). Ponto de atenção
+   extra: `paradas.itens` retorna `contactName`/`destination` via JOIN — confirme que o
+   JOIN não vaza contato de outro tenant mesmo que (hipoteticamente) uma FK apontasse
+   errado; hoje isso não deveria acontecer por causa do RLS em cascata (`deals`/`contacts`
+   também são `tenant_id`-isolados), mas é o tipo de coisa que vale um teste explícito
+   depois de uma feature nova com 3 JOINs.
+
+2. **"Comissão a receber vs. recebida" bate a soma certa por status.** Plante 3 vendas no
+   mês corrente com `comissaoStatus` diferente (`prevista`/`recebida`/`atrasada`) e
+   `comissaoPrevistaCents` conhecido em cada uma; confira `comissao.previstaCents`,
+   `.recebidaCents`, `.atrasadaCents` batendo exatamente, e `aReceberCents === previstaCents
+   + atrasadaCents` (é literalmente essa soma, mas vale travar contra regressão se alguém
+   mudar a fórmula sem querer).
+
+3. **Conversão é por coorte de `sentAt`, não por "aceita neste mês".** Caso que pega
+   regressão: proposta enviada no mês passado E aceita ESTE mês — não deve contar em
+   `conversao.enviadas` nem em `.aceitas` do mês corrente (a coorte é de quem foi ENVIADA
+   este mês, ponto). Proposta enviada este mês e ainda `sent`/`viewed` (não aceita) conta
+   em `enviadas`, não em `aceitas`. `taxa === 0` quando `enviadas === 0` (não `NaN`).
+
+4. **Propostas paradas: o limiar é `> 7 dias`, estritamente maior, e SEM recorte de mês.**
+   Casos de fronteira que valem teste: proposta com último evento (`sentAt` ou
+   `lastViewedAt`, o mais recente dos dois) há EXATAMENTE 7 dias → não deve aparecer (é
+   `> 7`, não `>= 7`); há 8 dias → deve aparecer. Proposta `accepted`/`declined`/`expired`
+   nunca aparece em `paradas`, mesmo que tenha ficado muito tempo sem UPDATE. Proposta
+   `sent`/`viewed` mas `archivedAt` preenchida também não aparece (arquivada saiu da lista
+   de trabalho ativa). `lastViewedAt` mais recente que `sentAt` vence no cálculo de
+   `diasParado` (o inverso do maior-entre-dois já é testado para `deals.ts`, mesma lógica
+   aqui, arquivo diferente).
+
+5. **`exportarResumoDoMesCsv` não muda o RESULTADO NUMÉRICO em relação a
+   `obterResumoDoMes`** — é o mesmo cálculo, só formatado diferente (vírgula decimal,
+   `;` como delimitador, BOM UTF-8 no início do texto). Um teste de contrato bom: chamar as
+   duas com o MESMO estado de banco e conferir que os números batem depois de desfazer a
+   formatação (ex.: `"1.234,56"` → `123456` centavos). Vale também um teste de
+   "não quebra o parser" — que o conteúdo, dividido por `\r\n`, tenha o número de linhas
+   esperado e nenhum campo com `;`/aspas cru fora de aspas (a função de escape
+   (`escaparCampoCsv`) já trata isso, mas nunca testei com um TÍTULO de proposta contendo
+   `;` de verdade — vale plantar um título assim e conferir que o CSV resultante ainda
+   parseia certo).
+
+Sem migration nesta rodada — nada para conferir em `drizzle/meta/_journal.json` além do
+que já existia (seguindo a regra "RLS na mesma migration que cria a tabela", não criei
+tabela nenhuma, então não há policy nova para auditar).

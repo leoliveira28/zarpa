@@ -852,3 +852,132 @@ Pontos que valem atenção na tela:
 
 Verificação: `npx tsc --noEmit` limpo e `npx tsx scripts/check/known-failures.ts` verde
 (378 testes, allowlist vazio, sem regressão) com o Postgres de dev de pé.
+
+---
+
+## S10 — Dashboard do mês, contrato completo (`src/server/dashboard.ts`)
+
+Duas Server Actions novas, exportadas no barril. **Nenhuma tabela nova, nenhuma
+migration** — tudo lido de `sales`/`proposals`, que já existiam. Mesmo padrão de sempre:
+`tenantId` vem da sessão, `ServiceResult<T>`, nunca lança.
+
+```ts
+async function obterResumoDoMes(): Promise<ServiceResult<ResumoDoMes>>
+async function exportarResumoDoMesCsv(): Promise<ServiceResult<{ nomeArquivo: string; conteudo: string }>>
+```
+
+```ts
+type ResumoDoMes = {
+  mes: string;                    // 'AAAA-MM' do mês corrente (UTC)
+  vendas: {
+    totalVendas: number;          // quantidade de sales.createdAt no mês
+    faturamentoBrutoCents: number;
+    taxaServicoCents: number;
+  };
+  comissao: {
+    previstaCents: number;
+    recebidaCents: number;
+    atrasadaCents: number;
+    aReceberCents: number;        // previstaCents + atrasadaCents — já pronto para o rótulo "a receber"
+    totalCents: number;
+  };
+  conversao: {
+    enviadas: number;             // propostas com sentAt no mês (a coorte inteira)
+    aceitas: number;              // da MESMA coorte, quantas estão accepted agora
+    taxa: number;                 // aceitas/enviadas, 0 quando enviadas === 0
+  };
+  paradas: {
+    itens: PropostaParada[];      // SEMPRE com os ids — ver abaixo
+    totalCents: number;
+  };
+};
+
+type PropostaParada = {
+  id: string;
+  title: string;
+  status: 'sent' | 'viewed';
+  dealId: string;
+  contactId: string;
+  contactName: string;
+  destination: string | null;
+  valueCents: number;             // do NEGÓCIO associado (proposta não tem valor próprio)
+  diasParado: number;
+};
+```
+
+### O card "propostas paradas" → `/propostas?ids=...`
+
+Este é o card que o pedido desta rodada destacou por nome: nunca devolvo só a
+CONTAGEM de propostas paradas, sempre os `id`s de cada uma (`paradas.itens[].id`).
+Para linkar direto, adicionei um filtro novo em `listarPropostas` que você já usa:
+
+```ts
+listarPropostas({ ids: paradas.itens.map((p) => p.id) })
+```
+
+Sugestão de rota: `/propostas?ids=<id1>,<id2>,...` — a página lê `searchParams.ids`,
+faz `.split(',')` e chama `listarPropostas({ ids })`. Não fiz a leitura de
+`searchParams` porque `src/app/**` é sua fronteira; o que eu garanti do meu lado é que
+`listarPropostas` aceita a lista e devolve só essas propostas (ignora arquivadas por
+padrão, igual à listagem normal — se algum id estiver arquivado e você quiser mostrar
+mesmo assim, passe `incluirArquivadas: true` junto). Se preferir outro padrão de
+navegação (ex.: abrir uma Sheet com a lista em vez de navegar para `/propostas`), o dado
+já está pronto para os dois: cada item de `paradas.itens` já tem `title`/`contactName`/
+`destination`/`valueCents`/`diasParado` — o suficiente para renderizar uma linha sem
+round-trip extra.
+
+### Para onde cada card deve linkar (o pedido explícito desta rodada)
+
+| Card | Número mostra | Ação ao clicar |
+|---|---|---|
+| Vendas e faturamento do mês | `vendas.totalVendas`, `vendas.faturamentoBrutoCents` | `/vendas` — lista completa, já existe |
+| Comissão a receber vs. recebida | `comissao.aReceberCents`, `comissao.recebidaCents` | `/financeiro` — já agrupa por `comissaoStatus` (`FinanceiroScreen.tsx`) |
+| Conversão de proposta | `conversao.taxa`, `conversao.enviadas`/`conversao.aceitas` | `/propostas` — lista completa; se quiser destacar só a coorte do mês, é o mesmo `ids` mostrado acima, mas eu não coletei os ids de TODA a coorte enviada (só das paradas) — me avise se quiser isso também, é a mesma query com `select id` a mais |
+| Propostas paradas | `paradas.itens.length`, `paradas.totalCents` | `/propostas?ids=...` — ver seção acima, com os ids prontos |
+| Exportar CSV | — | botão que baixa o arquivo, ver seção seguinte |
+
+### Exportar CSV — sem rota nova
+
+`exportarResumoDoMesCsv()` devolve `{ nomeArquivo, conteudo }` prontos — `conteudo` já
+vem com BOM UTF-8 e `;` como delimitador (Excel/Sheets em pt-BR abrem direto, mesma
+preocupação documentada em `src/server/csv.ts`, que é o espelho para LER planilha). Não
+criei rota em `src/app/api/**` (fronteira do PO) porque não precisa: é só
+
+```ts
+const r = await exportarResumoDoMesCsv();
+if (!r.ok) { /* toast com r.mensagem/r.correcao */ return; }
+const blob = new Blob([r.data.conteudo], { type: 'text/csv;charset=utf-8' });
+const url = URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = r.data.nomeArquivo;
+a.click();
+URL.revokeObjectURL(url);
+```
+
+Sem `<a href>` para uma rota, sem download de servidor — o texto já está no cliente
+depois do `await`.
+
+### Três decisões de recorte que valem ler antes de desenhar os cards
+
+Documentadas com mais detalhe em comentário no topo de `src/server/dashboard.ts`, resumo
+aqui:
+
+1. **"Vendas do mês"** = `sales.createdAt` no mês corrente (não `deals.closedAt` — `sales`
+   não tem coluna própria de "quando fechou"; a existência da linha já significa "virou
+   venda", `createdAt` é o proxy mais direto).
+2. **"Comissão a receber vs. recebida" é do MESMO mês que (1)**, não o saldo total em
+   aberto de todos os tempos. Se você (ou o PO) quiser também "tudo que falta receber,
+   não importa quando vendeu" — é uma métrica diferente, sem recorte de `createdAt`, me
+   peça que eu escrevo uma segunda função.
+3. **"Propostas paradas" NÃO tem recorte de mês** — uma proposta enviada há 40 dias e
+   ainda sem resposta continua parada mesmo que tenha sido enviada no mês passado (mesmo
+   raciocínio do "pipeline aberto" em `deals.ts`, que também ignora quando o negócio
+   nasceu). Limiar: mais de 7 dias sem `sentAt`/`lastViewedAt` mais recente — o MESMO
+   número que `listarNegociosParados` já usa, de propósito (um conceito de "parado" só,
+   não dois números diferentes para a agente decorar).
+
+Testado contra Postgres de verdade (não só `tsc`) com dois tenants — confirmei
+isolamento, `.groupBy` + `count(*)::int` batendo, e que uma proposta "parada" de um mês
+anterior aparece em `paradas.itens` mesmo fora do recorte de `conversao`. Detalhe
+completo em `docs/status/rafa.md`.
