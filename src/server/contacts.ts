@@ -2,7 +2,7 @@
 
 import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { contacts, deals, travelers } from '@/db/schema';
+import { contacts, deals } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { maskDocument } from '@/lib/crypto';
@@ -223,8 +223,19 @@ export async function obterContato(contatoId: string): Promise<ServiceResult<Con
           notes: contacts.notes,
           aniversario: contacts.birthMonthDay,
           updatedAt: contacts.updatedAt,
-          totalViajantes: sql<number>`(select count(*)::int from ${travelers} where ${travelers.contactId} = ${contacts.id})`,
-          totalNegocios: sql<number>`(select count(*)::int from ${deals} where ${deals.contactId} = ${contacts.id})`,
+          // Nomes de coluna LITERAIS (`travelers.contact_id`, não `${travelers.contactId}`)
+          // são de propósito, não descuido — comprovado contra o Postgres de teste ao
+          // escrever `src/server/deals.ts` (S4): quando um `sql<>` é usado como VALOR de
+          // `.select({...})`, o Drizzle renderiza `${coluna}` SEM qualificar a tabela
+          // (`"id"`, não `"contacts"."id"`). Como `travelers`/`deals` também têm coluna
+          // `id`, `${travelers.contactId} = ${contacts.id}` virava `"contact_id" = "id"` —
+          // e dentro do escopo da subquery (`from travelers`), `"id"` desambiguava para
+          // `travelers.id`, não para o `contacts.id` de fora. A condição comparava
+          // `travelers.contact_id = travelers.id` (quase sempre falso) e estas duas colunas
+          // voltavam SEMPRE ZERO, silenciosamente, para todo contato. Ver
+          // `docs/status/rafa.md` (S4) para o traço completo do bug.
+          totalViajantes: sql<number>`(select count(*)::int from travelers where travelers.contact_id = contacts.id)`,
+          totalNegocios: sql<number>`(select count(*)::int from deals where deals.contact_id = contacts.id)`,
         })
         .from(contacts)
         .where(eq(contacts.id, contatoId))
