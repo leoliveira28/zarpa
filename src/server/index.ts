@@ -146,7 +146,6 @@ export {
   obterNegocio,
   listarNegociosParados,
   obterResumoDoPipeline,
-  COLUNAS_DO_FUNIL,
   type DealStage,
   type EstagioDeFunil,
   type NegocioDoFunil,
@@ -158,6 +157,7 @@ export {
   type ResumoDeParados,
   type ResumoDoPipeline,
 } from './deals';
+export { COLUNAS_DO_FUNIL } from './dealStages';
 export {
   converterPropostaEmVenda,
   listarVendas,

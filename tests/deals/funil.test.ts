@@ -61,7 +61,6 @@ vi.mock('@/lib/auth/session', () => ({
 }))
 
 const {
-  COLUNAS_DO_FUNIL,
   listarNegociosDoFunil,
   moverEstagioDoNegocio,
   criarNegocio,
@@ -69,6 +68,9 @@ const {
   listarNegociosParados,
   obterResumoDoPipeline,
 } = await import('@/server/deals')
+// `COLUNAS_DO_FUNIL` mora em `dealStages.ts` (não `deals.ts`, que é `'use server'`
+// e só pode exportar função assíncrona).
+const { COLUNAS_DO_FUNIL } = await import('@/server/dealStages')
 
 // ---------------------------------------------------------------------------
 // Fixture

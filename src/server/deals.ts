@@ -21,8 +21,8 @@ import { parseDataFlexivel } from './normalize';
  * 1. VOCABULÁRIO DE ESTÁGIO, 6 no banco → 5 no quadro. `deals.stage` tem seis valores
  *    (`novo, cotando, proposta_enviada, negociando, ganho, perdido`); o quadro tem cinco
  *    colunas porque `perdido` NÃO é coluna — é uma saída do funil, não um lugar onde o
- *    negócio fica. Mapeamento (ver `COLUNAS_DO_FUNIL` abaixo, fonte única para não a UI e o
- *    servidor divergirem de novo):
+ *    negócio fica. Mapeamento (ver `COLUNAS_DO_FUNIL` em `./dealStages`, fonte única para
+ *    não a UI e o servidor divergirem de novo):
  *
  *      novo             → "Novo contato"
  *      cotando          → "Montando"
@@ -74,19 +74,8 @@ const ESTAGIOS = [
   'perdido',
 ] as const;
 
-/**
- * Fonte única do rótulo e da ordem das colunas do quadro. A Nina pode importar isto direto
- * em vez de manter uma segunda lista (`STAGES` em `src/lib/ui/sample-data.ts`) que um dia
- * fica desalinhada com o enum do banco — foi exatamente essa divergência (5 colunas de
- * exemplo vs. 6 valores de `deals.stage`) que motivou este comentário existir.
- */
-export const COLUNAS_DO_FUNIL: { estagio: EstagioDeFunil; label: string }[] = [
-  { estagio: 'novo', label: 'Novo contato' },
-  { estagio: 'cotando', label: 'Montando' },
-  { estagio: 'proposta_enviada', label: 'Enviada' },
-  { estagio: 'negociando', label: 'Negociando' },
-  { estagio: 'ganho', label: 'Fechada' },
-];
+// `COLUNAS_DO_FUNIL` mora em `./dealStages` — este arquivo é `'use server'` e só
+// pode exportar função assíncrona; uma constante aqui quebra o build do Next.
 
 // ---------------------------------------------------------------------------
 // Helpers de data — nada de PII aqui, só aritmética de `Date`.
