@@ -1,6 +1,180 @@
 # Status — Rafa (backend / plataforma)
 
-## Tarefa desta rodada: S9 — vendas, comissão e recebíveis (o dinheiro)
+## Tarefa desta rodada: S4 — o funil (backend)
+
+Entrega: o serviço completo do funil que faltava atrás de `FunnelScreen.tsx` e do topo de
+`TodayScreen.tsx` — hoje os dois rodam 100% sobre `src/lib/ui/sample-data.ts`. Arquivo novo
+`src/server/deals.ts` (padrão de `contacts.ts`: `requireAuthContext` + `withTenant`),
+exportado em `src/server/index.ts`. Não criei tabela nem migration: `deals`/`tasks`/
+`activities` já existem com RLS desde `0000_fundacao.sql` — conferi a policy
+(`deals_isolation`/`activities_isolation`, `ENABLE`+`FORCE ROW LEVEL SECURITY`,
+`USING`/`WITH CHECK` contra `app.tenant_id`) antes de escrever a primeira query.
+
+### Pronto
+
+1. **`listarNegociosDoFunil()`** — board pronto: todo negócio do tenant exceto `perdido`
+   (ele não tem coluna, ver mapeamento abaixo), com contato resolvido via JOIN e
+   `diasParado` calculado (o maior entre `updatedAt` e a `activity` mais recente do
+   negócio). Limite de 500, rede de segurança, não paginação de produto.
+2. **`moverEstagioDoNegocio(dealId, novoEstagio, motivoPerda?)`** — o que o arrasto do
+   kanban chama. `motivoPerda` OBRIGATÓRIO quando `novoEstagio === 'perdido'` (mínimo 3
+   caracteres depois de `trim()`), erro amigável se faltar. Grava uma `activity`
+   (`type: 'stage_changed'`) e uma linha de `audit_log` a cada transição real. **Idempotente
+   sob clique duplo por dois caminhos**: se o negócio já está no estágio pedido no SELECT,
+   não grava nada; sob concorrência de verdade, o `UPDATE ... WHERE stage <> novoEstagio`
+   da segunda chamada simultânea reavalia contra a linha já commitada pela primeira e afeta
+   zero linhas — sem segunda `activity`, sem erro. `closedAt` é gravado ao entrar em
+   `ganho`/`perdido` e limpo ao sair de volta para um estágio aberto (reabrir não pode
+   deixar `closed_at` mentindo para o resumo do pipeline). Sem máquina de estados: qualquer
+   transição é aceita, mesma filosofia de `atualizarStatusComissao` em `sales.ts`.
+3. **`criarNegocio(input)`** — criação básica a partir de um contato existente do mesmo
+   tenant (RLS decide "existe" — id de outro tenant dá `NAO_ENCONTRADO`, igual ao resto do
+   código). Nasce sempre `stage: 'novo'`.
+4. **`obterNegocio(dealId)`** — detalhe autenticado + timeline (`activities`, mais recente
+   primeiro) para a futura tela de detalhe. Inclui `costCents`/`commissionCents` do negócio
+   (autenticado, mesma doutrina de `OpcaoEdicao` em `proposals.ts` — nunca confundir com a
+   leitura pública, que aqui nem existe).
+5. **`listarNegociosParados()`** — negócios abertos (não `ganho`, não `perdido`) sem
+   movimentação há mais de 7 dias, com a soma em `valueCents` já calculada — para a seção
+   "Paradas" do Hoje.
+6. **`obterResumoDoPipeline()`** — os "dois números do topo" do Hoje: `pipelineAbertoCents`
+   (soma de todo negócio não `ganho`/não `perdido`, sem recorte de tempo) e
+   `fechadoNoMesCents` (soma dos `ganho` cujo `closedAt` cai no mês corrente, UTC).
+7. **Contratos escritos**: `docs/handoffs/rafa-para-nina.md` (seção "S4", assinatura de
+   cada action, shape de retorno, o mapeamento 6↔5 de estágio, a definição exata dos "dois
+   números do topo") e `docs/handoffs/rafa-para-teo.md` (seção "S4", motivo de perda
+   obrigatório, "parados" não incluir ganho/perdido, isolamento, idempotência).
+
+### Dois defeitos reais encontrados testando contra Postgres de verdade (não só `tsc`)
+
+Segui a minha própria regra ("se não tem teste provando, não existe") e não me contentei
+com `tsc --noEmit` verde: rodei um script manual (deletado depois, não ficou no
+repositório) contra `zarpa_test` para cada query nova antes de considerar pronto. Isso
+achou dois bugs que `tsc` NUNCA pegaria, porque os dois são de runtime/SQL, não de tipo:
+
+1. **Subquery correlacionada com `${coluna}` embutida em `sql<>()` usado como VALOR de
+   `.select({...})` renderiza SEM qualificar a tabela.** Minha primeira versão de
+   `ultimaAtividadeEm` era `sql<Date | null>`(select max(${activities.occurredAt}) from
+   ${activities} where ${activities.dealId} = ${deals.id})``, e o SQL gerado
+   (`query.toSQL()`) saiu `where "deal_id" = "id"` — **sem nenhum prefixo de tabela**.
+   Como `activities` tem sua própria coluna `id`, dentro do escopo da subquery (`from
+   activities`) o `"id"` desambigua para `activities.id`, não para o `deals.id` de fora. A
+   condição vira `activities.deal_id = activities.id` (quase sempre falso) e a função
+   voltaria sempre `null`, silenciosamente — nenhum erro, nenhum type error, só o dado
+   errado. Confirmei que isto é comportamento do Drizzle (não do Postgres nem do driver):
+   o MESMO padrão usado em `.where()` do nível principal da query renderiza CORRETAMENTE
+   qualificado (`"contacts"."name"`, `"travelers"."full_name"`) — só falha quando o `sql<>`
+   é o valor de um campo do `.select({...})`. **Corrigi usando nomes de coluna literais**
+   (`deals.id`, `activities.deal_id`, sem interpolação de coluna do Drizzle) — funciona
+   porque nem `deals` nem `activities` são referenciadas com alias nestas duas queries.
+   Documentei o porquê em comentário extenso no próprio `deals.ts`
+   (`ultimaAtividadeSql()`), para o próximo dev não copiar o padrão quebrado.
+
+2. **O MESMO bug já existia em produção**: `obterContato` (`src/server/contacts.ts`,
+   `totalViajantes`/`totalNegocios`) usa exatamente o padrão `${travelers.contactId} =
+   ${contacts.id}` dentro de um `sql<number>` de select — e pela mesma razão, SEMPRE
+   soma zero (a condição vira `travelers.contact_id = travelers.id`). Não é uma tabela de
+   tenant vazando dado de outro tenant (não é bug de isolamento), é a tela de detalhe de
+   contato mostrando "0 viajantes, 0 negócios" para todo contato, sempre, desde que a
+   função foi escrita — corrigi junto (mesmo fronteira, `src/server/**`), com o mesmo
+   comentário explicando o porquê. Nenhum teste existente depende do valor `0`
+   (`grep totalViajantes tests/` não achou nada), então a correção não quebra suite.
+
+3. **Um `sql<Date>()` livre nunca chega como `Date`, mesmo com `::timestamptz` — chega como
+   a string crua do driver** (`"2026-09-06 01:03:21.925+00"`). Comprovado isolando a
+   variável passo a passo: coluna de schema referenciada DIRETO (`deals.updatedAt`, sem
+   `sql<>` em volta) chega como `Date` de verdade (o mapeador `mapFromDriverValue` do
+   Drizzle aplica); a MESMA coluna embrulhada em `sql`${deals.updatedAt}`` chega como
+   string. `count(*)::int` funciona (chega como `number`) — só o tipo `timestamp`/
+   `timestamptz` sofre disso. Escrevi `paraDataOuNula()` em `deals.ts` para todo consumo
+   de `ultimaAtividadeSql()` — defensivo, não depende de entender a causa raiz para estar
+   correto. **Registro como risco de plataforma, não só deste arquivo**: qualquer `sql<Date>`
+   futuro em `src/server/**` precisa do mesmo parse manual; não encontrei nenhum caso
+   existente além dos dois que já corrigi, mas não fiz uma varredura exaustiva do
+   repositório inteiro — só dos arquivos que uso.
+
+### Decisões que tomei sozinha
+
+- **Mapeamento 6↔5 de estágio**: `novo→novo`, `cotando→"Montando"`,
+  `proposta_enviada→"Enviada"`, `negociando→negociando`, `ganho→"Fechada"`,
+  `perdido`→sem coluna (sai do board, exige motivo). Documentado em `COLUNAS_DO_FUNIL`
+  (exportado, fonte única para a Nina não duplicar a lista) e no cabeçalho de
+  `deals.ts`.
+- **"Dois números do topo"**: "em negociação" = soma de todo negócio não `ganho`/não
+  `perdido`, SEM recorte de tempo (dinheiro em aberto continua em aberto mesmo parado há
+  60 dias). "Fechado no mês" = soma de `ganho` cujo `closedAt` cai no mês corrente (UTC).
+  Uso `closedAt`, não `updatedAt`, porque é o campo que `moverEstagioDoNegocio` (e o seed)
+  gravam especificamente para "quando fechou" — um negócio que nascesse `ganho` sem nunca
+  passar por `moverEstagioDoNegocio` ficaria de fora do "fechado no mês" até ser tocado;
+  aceito conscientemente, é o caminho normal do produto (arrastar no funil).
+- **Somas em JavaScript, não `sum()` no SQL**: `value_cents` é `bigint`; `sum(bigint)`
+  volta `numeric` do Postgres, que o driver devolve como STRING (mesma família de
+  problema do achado nº 3 acima — o Drizzle só converte string→number para COLUNA
+  mapeada, não para resultado de agregação livre). Buscar as linhas e somar em JS evita
+  esse cast manual. No volume esperado (10–15 vendas/mês por tenant) isso é seguro e mais
+  simples; revisitar se um tenant crescer ao ponto de "todos os negócios abertos" deixar
+  de caber numa query.
+- **`listarNegociosParados` filtra "mais de 7 dias" em JavaScript**, depois de buscar todo
+  negócio aberto — não em SQL. É o mesmo motivo do "somar em JS": calcular "a maior entre
+  `updatedAt` e a última activity" como coluna computável e filtrar por ela no mesmo nível
+  do SQL pediria uma CTE; no volume esperado, buscar tudo aberto (dezenas de linhas, não
+  milhares) e filtrar em memória é mais simples e não paga o preço de errar de novo com
+  `sql<>()` livre. Registrado como ponto de revisão futura se o funil crescer muito.
+- **`moverEstagioDoNegocio` aceita qualquer transição de estágio**, sem validar se "faz
+  sentido" — o roteiro não pediu máquina de estados, e travar isso é o tipo de regra que a
+  agente prefere que o produto quebre arrastando o card de qualquer jeito.
+- Corrigi o bug de `obterContato` (achado nº 2 acima) sem pedir confirmação: dentro da
+  minha fronteira, correção mecânica de duas linhas, bug demonstrável e sem teste que
+  dependesse do comportamento errado.
+
+### Riscos
+
+- **`sql<Date>`/`sql<T>` livre em qualquer Server Action futura precisa de parse
+  defensivo** — não é peculiaridade deste arquivo, é como o Drizzle + este driver se
+  comportam neste projeto (comprovado, não suposição). Se alguém escrever um novo
+  `sql<Date>()`/`sql<number>()` sem saber disso, o bug volta a nascer calado. Vale um
+  lint/convenção documentada, ou um teste de contrato do Téo que grave um valor conhecido
+  e confira o tipo runtime de uma função que usa este padrão.
+- **`listarNegociosDoFunil`/`listarNegociosParados` sem paginação real** — limite de 500 e
+  "busca tudo aberto", respectivamente. Adequado ao volume do produto hoje (MEI, 10-15
+  vendas/mês); revisitar se um tenant antigo acumular muitos negócios `ganho` ao longo dos
+  anos (o board inclui `ganho` na coluna "Fechada" indefinidamente — não há arquivamento
+  de negócio fechado ainda).
+- Negócio que nasceu `ganho` fora de `moverEstagioDoNegocio` (import futuro, por exemplo)
+  fica de fora de `fechadoNoMesCents` até ser tocado — ver decisão acima.
+
+### O que precisa dos outros
+
+- **Nina**: religar `FunnelScreen.tsx` e o topo/seção "Paradas" de `TodayScreen.tsx` a
+  `listarNegociosDoFunil`/`moverEstagioDoNegocio`/`listarNegociosParados`/
+  `obterResumoDoPipeline`, no lugar de `src/lib/ui/sample-data.ts` — contrato completo em
+  `docs/handoffs/rafa-para-nina.md`, seção "S4". Decisão de UI para o "motivo de perda"
+  (hoje não existe coluna "Perdida" no board — como/onde a agente aciona
+  `moverEstagioDoNegocio(id, 'perdido', motivo)`) é dela.
+- **Téo**: pedidos de teste em `docs/handoffs/rafa-para-teo.md`, seção "S4" — motivo de
+  perda obrigatório, idempotência sob clique duplo/concorrência, "parados" não incluir
+  ganho/perdido, isolamento entre tenants nas leituras novas, e o risco de `sql<Date>`
+  livre (achado nº 3) como possível teste de contrato.
+
+### Verificação
+
+- `npx tsc --noEmit`: limpo.
+- `npx tsx scripts/check/known-failures.ts`: 365 testes, allowlist vazia, sem regressão
+  (Postgres estava de pé nesta rodada).
+- Script manual (não versionado) contra `zarpa_test`: dois tenants, negócios em `novo`/
+  `perdido`/`ganho`, uma `activity`; confirmei (a) `perdido` nunca aparece no board, (b) a
+  correlação de `ultimaAtividadeEm` aponta para o negócio certo (não `null` para quem tem
+  activity, `null` para quem não tem), (c) `totalViajantes`/`totalNegocios` corrigidos
+  batem com a contagem real, (d) `UPDATE ... WHERE stage <> alvo` idempotente (1ª chamada
+  afeta 1 linha, 2ª chamada idêntica afeta 0), (e) soma de `valueCents` via query builder
+  chega como `number` de verdade, (f) isolamento: outro tenant vê zero negócios do
+  primeiro.
+- Não toquei em `src/components`, `src/styles`, `src/app/**`, `tests/`, `package.json` —
+  fronteira respeitada.
+
+---
+
+## Rodada anterior: S9 — vendas, comissão e recebíveis (o dinheiro)
 
 Entrega: schema + Server Actions para converter uma proposta ACEITA numa venda, editar
 custo/comissão/taxa de serviço, parcelar o cliente com vencimento e conferir a comissão

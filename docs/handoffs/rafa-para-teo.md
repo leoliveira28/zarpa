@@ -384,3 +384,89 @@ seguidas.
    migrations sem erro (327 testes, allowlist vazia, verde). Não criei tabela nova —
    só coluna (`tasks.suggested_message`) e um valor a mais no `CHECK` de
    `tasks.source` —, então não há policy de RLS nova para revisar aqui.
+
+---
+
+## S4 — o funil (`src/server/deals.ts`): pedido de teste
+
+Nenhuma migration nova (`deals`/`tasks`/`activities` já tinham RLS desde
+`0000_fundacao.sql` — conferi `deals_isolation`/`activities_isolation` antes de escrever a
+primeira query). Seis actions novas, todas `requireAuthContext` + `withTenant`, mesmo padrão
+de sempre. Pontos concretos para virar teste:
+
+1. **Isolamento padrão, nas seis actions.** Tenant A cria negócio(s) com `activity`,
+   tenant B chama cada uma das seis (`listarNegociosDoFunil`, `moverEstagioDoNegocio`,
+   `criarNegocio`, `obterNegocio`, `listarNegociosParados`, `obterResumoDoPipeline`) — zero
+   negócio do A aparece em nenhuma delas, e `moverEstagioDoNegocio`/`obterNegocio` chamado
+   com o `dealId` do A a partir do contexto do B devolve `NAO_ENCONTRADO` (RLS transforma
+   "existe em outro tenant" em "zero linhas", nunca erro de permissão — mesma resposta de
+   "não existe mais").
+
+2. **Motivo de perda obrigatório.** `moverEstagioDoNegocio(dealId, 'perdido')` sem
+   `motivoPerda` (ou com string vazia/2 caracteres) → `DADOS_INVALIDOS`, `campo:
+   'motivoPerda'`, e **o estágio do negócio não muda no banco** (confira lendo de volta,
+   não só o retorno da action). Com motivo válido (≥3 caracteres depois de trim), o negócio
+   vai para `perdido`, `lostReason` grava o texto, `closedAt` grava a hora, e uma `activity`
+   `type: 'stage_changed'` nasce com `metadata.motivoPerda` preenchido.
+
+3. **Idempotência sob clique duplo — os dois caminhos, não só o feliz.**
+   - Sequencial: mover um negócio de `novo` para `cotando`, chamar de novo com o MESMO
+     `novoEstagio` — segunda chamada não cria segunda `activity` nem segunda linha de
+     `audit_log` (`select count(*) from activities where deal_id = ...` deve ficar em 1, não
+     2), e o retorno reflete o estado já persistido.
+   - Concorrente de verdade: `Promise.all([moverEstagioDoNegocio(id, 'ganho'),
+     moverEstagioDoNegocio(id, 'ganho')])` — confira que só existe UMA `activity`
+     `stage_changed` para essa transição, não duas. É o `UPDATE ... WHERE stage <>
+     novoEstagio` que garante isso no banco (documentei o mecanismo em comentário no
+     código) — vale confirmar que ele segura a corrida de verdade, não só na leitura do
+     código.
+   - Reabertura limpa o estado: mover um negócio `ganho`→`negociando` deve zerar `closedAt`
+     (não pode sobrar um `closed_at` de uma venda "fechada" que na verdade reabriu — isso
+     inflaria `obterResumoDoPipeline().fechadoNoMesCents` silenciosamente). Mesma checagem
+     para `lostReason` ao sair de `perdido`.
+
+4. **"Parados" não inclui `ganho`/`perdido`.** Seed: um negócio `novo` sem `activity` e
+   `updatedAt` de 10 dias atrás (deve aparecer), um `ganho` também com `updatedAt` de 10
+   dias atrás (não deve aparecer, mesmo estando "velho"), um `perdido` idem (não deve
+   aparecer). `listarNegociosParados().itens` só deve conter o primeiro, e
+   `totalCents` deve bater exatamente com `valueCents` dele (não a soma dos três).
+
+5. **`listarNegociosDoFunil` exclui `perdido` e só ele.** Seed com um negócio em cada um
+   dos 6 estágios; o retorno deve ter exatamente 5, nunca incluindo o `perdido`, e o
+   `stage` de cada linha retornada precisa bater com o mapeamento documentado em
+   `docs/handoffs/rafa-para-nina.md` (S4) — vale um teste que trave o enum inteiro, não só
+   "perdido sumiu", porque é exatamente esse tipo de divergência (5 colunas de exemplo vs.
+   6 valores do banco) que motivou a entrega.
+
+6. **`diasParado`/"última movimentação" usa o maior entre `updatedAt` e a `activity` mais
+   recente, não só um dos dois.** Caso que pega bug de regressão: negócio com `updatedAt`
+   de HOJE mas nenhuma `activity` → `diasParado: 0`. Negócio com `updatedAt` de 30 dias
+   atrás mas uma `activity` de ONTEM → `diasParado: 1` (a activity é mais recente e vence).
+   Negócio sem nenhuma `activity` e `updatedAt` de 8 dias atrás → `diasParado: 8`, sem
+   erro/null por falta de activity (é o caso mais comum: negócio nunca teve nenhuma nota).
+
+7. **Achado que vale um teste de contrato de verdade, não só desta função**: `sql<Date>()`
+   livre no Drizzle (não ligado a coluna de schema) chega na aplicação como STRING do
+   driver, nunca como `Date`, mesmo com `::timestamptz` no SQL — comprovei isolando a
+   variável passo a passo, documentado com detalhe em `docs/status/rafa.md` (seção S4,
+   "Dois defeitos reais encontrados"). Escrevi `paraDataOuNula()` em `deals.ts` para
+   proteger os dois lugares que uso isso, mas é uma característica da combinação
+   Drizzle+driver deste projeto, não deste arquivo — um teste que grave uma `activity` com
+   `occurredAt` conhecido, exercite `listarNegociosDoFunil`, e confira que `diasParado`
+   bate com o valor esperado (não `NaN`, não `Infinity`, não um número absurdo por
+   `new Date(undefined)`) serve como guarda de regressão para essa classe inteira de bug —
+   se algum dia alguém tirar o `paraDataOuNula()` "porque parecia redundante", o teste
+   pega.
+
+8. **`obterContato` (`src/server/contacts.ts`) — corrigi um bug pré-existente sem pedido,
+   descoberto testando o item 7.** `totalViajantes`/`totalNegocios` usavam o mesmo padrão
+   quebrado de subquery correlacionada (`${travelers.contactId} = ${contacts.id}` sem
+   qualificar tabela) e SEMPRE voltavam zero, para todo contato, desde que a função foi
+   escrita — não é bug de isolamento entre tenants, é a tela de detalhe do contato mentindo
+   "0 viajantes, 0 negócios" mesmo quando existem. Corrigido (nomes de coluna literais,
+   mesmo padrão do item 7). Vale um teste que planta 1 viajante + 2 negócios num contato e
+   confere que `obterContato(id).data.totalViajantes === 1` /
+   `.totalNegocios === 2` — não encontrei teste existente que dependesse do valor errado
+   (`grep totalViajantes tests/` veio vazio), então a correção não deveria quebrar nada
+   seu, mas registrando aqui para você não achar essa mudança de diff estranha sem
+   contexto.

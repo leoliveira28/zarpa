@@ -584,3 +584,195 @@ Pontos que valem atenção na tela:
 - Nenhum campo de `sales`/`receivables` tem rota pública. Se um dia a proposta pública
   precisar mostrar "opções de parcelamento" ao cliente, isso já existe em
   `proposal_options.installments`/`installment_cents` (S5/S6) — não é isto aqui.
+
+---
+
+## S4 — o funil, contrato completo (`src/server/deals.ts`)
+
+`FunnelScreen.tsx` e o topo/seção "Paradas" de `TodayScreen.tsx` hoje rodam 100% sobre
+`src/lib/ui/sample-data.ts` (o comentário no próprio arquivo já dizia: "o serviço de
+pipeline/deals ainda não existe do lado do servidor"). Agora existe — `src/server/deals.ts`,
+exportado em `@/server`, mesmo padrão de sempre (`requireAuthContext` + `withTenant`,
+`ServiceResult<T>`, `tenantId` nunca como argumento).
+
+### O mapeamento de vocabulário que você precisa saber ANTES de ligar a tela
+
+`deals.stage` no banco tem **6** valores; o board (`STAGES` em `sample-data.ts`) tem **5**
+colunas. Não é bug, é porque `perdido` **não tem coluna** — é saída do funil, não lugar onde
+o negócio fica. Mapeamento (também exportado como `COLUNAS_DO_FUNIL`, para você não manter
+uma segunda lista que desalinha):
+
+| `deals.stage` (banco) | coluna do board |
+|---|---|
+| `novo` | "Novo contato" |
+| `cotando` | "Montando" |
+| `proposta_enviada` | "Enviada" |
+| `negociando` | "Negociando" |
+| `ganho` | "Fechada" |
+| `perdido` | **(sem coluna)** — `listarNegociosDoFunil()` já exclui do resultado |
+
+```ts
+import { COLUNAS_DO_FUNIL } from '@/server';
+// [{ estagio: 'novo', label: 'Novo contato' }, ..., { estagio: 'ganho', label: 'Fechada' }]
+```
+
+Troque `STAGES`/`Stage` de `sample-data.ts` por isto (ou por algo derivado, se quiser manter
+`hint` por coluna — eu não tenho essa string, é copy sua).
+
+### As seis actions
+
+```ts
+type DealStage = 'novo' | 'cotando' | 'proposta_enviada' | 'negociando' | 'ganho' | 'perdido';
+type EstagioDeFunil = Exclude<DealStage, 'perdido'>; // as 5 que têm coluna
+
+type NegocioDoFunil = {
+  id: string;
+  title: string;
+  destination: string | null;
+  valueCents: number;
+  stage: EstagioDeFunil;
+  contactId: string;
+  contactName: string;
+  departureOn: string | null;   // 'AAAA-MM-DD' — data da viagem (deals.departureOn)
+  diasParado: number;           // dias desde a última movimentação (ver definição abaixo)
+};
+
+async function listarNegociosDoFunil(): Promise<ServiceResult<NegocioDoFunil[]>>
+```
+Board pronto: todo negócio do tenant menos `perdido`, com o nome do contato já resolvido.
+`diasParado` é o mesmo conceito de `idleDays` no `Proposal` de exemplo — o maior entre
+`updatedAt` do negócio e o `occurredAt` da `activity` mais recente dele, em dias corridos,
+nunca negativo. Sem limite artificial de paginação visível (teto interno de 500, não deveria
+aparecer no produto tão cedo).
+
+```ts
+type NegocioMovido = {
+  id: string;
+  stage: DealStage;         // o valor NOVO, já persistido — pode ser 'perdido'
+  lostReason: string | null;
+  closedAt: Date | null;
+  updatedAt: Date;
+};
+
+async function moverEstagioDoNegocio(
+  dealId: string,
+  novoEstagio: DealStage,   // os 6 valores — inclui 'perdido'
+  motivoPerda?: string,
+): Promise<ServiceResult<NegocioMovido>>
+```
+É o que o arrasto do kanban chama. **`motivoPerda` é OBRIGATÓRIO quando `novoEstagio ===
+'perdido'`** (mínimo 3 caracteres depois de aparar espaço) — sem ele, `DADOS_INVALIDOS` com
+`campo: 'motivoPerda'` e `correcao: 'Escrever o motivo da perda'`. Como `perdido` não tem
+coluna no board, você precisa de uma UI própria para essa ação — sugestão: item no menu do
+card ("Marcar como perdida...") que abre um campo de texto curto antes de chamar a action,
+não um drop target. Decisão de onde/como é sua.
+
+Chamar duas vezes seguidas com o MESMO `novoEstagio` (duplo clique, replay de rede) é seguro
+— a segunda chamada não grava nada de novo e devolve o mesmo estado. Pode desabilitar o
+botão/soltar durante o request por UX, mas não precisa disso por correção.
+
+```ts
+type CriarNegocioInput = {
+  contactId: string;         // uuid — precisa ser contato existente do tenant
+  title: string;
+  destination?: string;
+  currency?: string;         // 3 letras, default 'BRL'
+  valueCents?: number;       // default 0
+  paxAdults?: number;        // default 1
+  paxChildren?: number;      // default 0
+  departureOn?: string;      // aceita 'AAAA-MM-DD' ou 'DD/MM/AAAA'
+  returnOn?: string;
+  expectedCloseOn?: string;
+};
+
+async function criarNegocio(input: CriarNegocioInput): Promise<ServiceResult<NegocioDoFunil>>
+```
+Nasce sempre `stage: 'novo'` — devolve no MESMO shape de `listarNegociosDoFunil`, pronto
+para inserir direto na coluna "Novo contato" sem recarregar o board inteiro.
+
+```ts
+type AtividadeDoNegocio = {
+  id: string;
+  type: string;   // 'note' | 'stage_changed' | 'proposal_sent' | 'proposal_viewed' | 'proposal_accepted' | 'task_done' | 'message' | 'contact_created'
+  body: string | null;
+  metadata: Record<string, unknown>;
+  actorUserId: string | null;
+  occurredAt: Date;
+};
+
+type NegocioDetalhe = {
+  id: string; title: string; destination: string | null; stage: DealStage;
+  currency: string; valueCents: number; costCents: number; commissionCents: number;
+  paxAdults: number; paxChildren: number;
+  departureOn: string | null; returnOn: string | null; expectedCloseOn: string | null;
+  lostReason: string | null; closedAt: Date | null;
+  contactId: string; contactName: string;
+  createdAt: Date; updatedAt: Date;
+  activities: AtividadeDoNegocio[]; // mais recente primeiro
+};
+
+async function obterNegocio(dealId: string): Promise<ServiceResult<NegocioDetalhe>>
+```
+Para a futura tela de detalhe do negócio (ainda não existe rota, pelo que vi). Inclui
+`costCents`/`commissionCents` — é autenticado, mesma doutrina de `OpcaoEdicao` em
+`proposals.ts` (a agente vê a própria margem). **Não é a mesma coisa que a proposta
+pública** — não existe leitura pública de negócio, e não deveria existir.
+
+```ts
+type NegocioParado = {
+  id: string; title: string; destination: string | null; valueCents: number;
+  contactId: string; contactName: string; diasParado: number;
+};
+type ResumoDeParados = { itens: NegocioParado[]; totalCents: number };
+
+async function listarNegociosParados(): Promise<ServiceResult<ResumoDeParados>>
+```
+Para a seção "Paradas há mais de 7 dias" do Hoje. `totalCents` já vem somado — não precisa
+`sumCents(itens)` na tela. Exclui `ganho` e `perdido` (um negócio fechado não é "parado", é
+fechado); `itens` já vem ordenado do mais parado para o menos parado.
+
+```ts
+type ResumoDoPipeline = { pipelineAbertoCents: number; fechadoNoMesCents: number };
+async function obterResumoDoPipeline(): Promise<ServiceResult<ResumoDoPipeline>>
+```
+Os "dois números do topo" do Hoje. **Recorte que eu escolhi** (documentado, sua decisão de
+copy/rótulo continua livre):
+- `pipelineAbertoCents` = soma de `valueCents` de todo negócio que não é `ganho` nem
+  `perdido`. **Sem recorte de tempo** — um negócio parado há 60 dias ainda é dinheiro em
+  aberto, então ainda soma aqui. Combina com o rótulo atual "Em negociação" da tela.
+- `fechadoNoMesCents` = soma de `valueCents` dos negócios `ganho` cujo `closedAt` cai no
+  mês corrente (UTC, do dia 1 às 00:00 até o dia 1 do mês seguinte). Combina com "Fechado no
+  mês".
+
+### Trocar em `TodayScreen.tsx`
+
+Hoje: `pipelineCents`/`closedCents` vêm de `sumCents(PROPOSALS.filter(...))` e `parked` vem
+de `stalled()`, os três de `sample-data.ts`. Troque por:
+
+```ts
+const [pipeline, setPipeline] = React.useState<ResumoDoPipeline | null>(null);
+const [parados, setParados] = React.useState<ResumoDeParados | null>(null);
+// useEffect chamando obterResumoDoPipeline() / listarNegociosParados(), mesmo padrão
+// de status loading/ready/error que tasks/opened já usam nesse arquivo.
+```
+`parados.itens` tem o mesmo formato que a seção "Paradas" já consome (`client`→
+`contactName`, `cents`→`valueCents`, `idleDays`→`diasParado`, `opens` não existe mais — a
+seção hoje mostra "nunca aberta" a partir de `proposal.opens === 0`; isso é sinal de
+proposta, não de negócio, e `deals` não sabe de aberturas de proposta. Se quiser manter esse
+sinal, precisaria juntar com `listarAberturasRecentes()` — que já existe — por `contactId`
+ou por um `dealId` em `proposal_views`, que hoje não existe like isso; me avise se for
+esse o caminho que você quer, decido a melhor forma de expor).
+
+### Trocar em `FunnelScreen.tsx`
+
+Troque `PROPOSALS`/`STAGES`/`Proposal`/`Stage` de `sample-data.ts` por
+`listarNegociosDoFunil()`/`COLUNAS_DO_FUNIL`/`NegocioDoFunil`/`EstagioDeFunil`. Campos que
+mudam de nome: `client`→`contactName`, `cents`→`valueCents`, `idleDays`→`diasParado`. Campos
+que não existem mais em `NegocioDoFunil` (são sinal de PROPOSTA, não de negócio):
+`opens`/`lastOpenHours` — o `Signal` do card hoje usa isso para "abriu o link"; sem esse
+dado aqui, o card do funil perde esse selo, ou você decide buscar via
+`listarAberturasRecentes()` numa segunda chamada e cruzar por `contactId` (não é 1:1 com
+`dealId` hoje). `moveTo()` deve chamar `moverEstagioDoNegocio(id, novoEstagio)` — e quando o
+alvo for a coluna "Fechada" com `stage: 'ganho'` está tudo igual; **não existe drop target
+para "perdido"** (ver seção da action acima) — precisa de uma segunda entrada de UI fora do
+arrasto.
