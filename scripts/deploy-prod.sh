@@ -16,6 +16,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PROJETO_NEON="gentle-bread-99525731"
+BRANCH_NEON="br-old-poetry-ac4g99ub"
 URL_PROD="https://zarpa.vercel.app"
 
 echo "── 0/5 Repo público no GitHub (idempotente)"
@@ -24,7 +25,7 @@ gh repo create zarpa --public --source=. --push \
   || echo "   (repo já existe ou push já feito — seguindo)"
 
 echo "── 1/5 Connection string do Neon (não exibida)"
-NEON_URL="$(neonctl connection-string "$PROJETO_NEON" --database zarpa --pooled | head -1)"
+NEON_URL="$(neonctl connection-string "$BRANCH_NEON" --project "$PROJETO_NEON" --database-name zarpa --pooled | head -1)"
 [ -n "$NEON_URL" ] || { echo "✗ Falha ao obter connection string"; exit 1; }
 
 echo "── 2/5 Migrations no Neon (a 0009 semeia Solo/Pro/Studio)"
