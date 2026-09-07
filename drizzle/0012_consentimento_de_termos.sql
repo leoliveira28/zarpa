@@ -1,0 +1,36 @@
+-- 0012_consentimento_de_termos — S13b: registro de consentimento LGPD no cadastro.
+--
+-- O cadastro público (`/cadastrar`) vai abrir para agente real, e antes dele a
+-- pessoa lê e aceita os Termos de uso e a Política de privacidade (/termos e
+-- /privacidade). O aceite é OBRIGATÓRIO NO SERVIDOR: `criarConta`
+-- (`src/server/signup.ts`) recusa sem `aceitouTermos: true` — nada neste
+-- sistema assume true por padrão. Quem não manda o campo, não cria conta.
+--
+-- Duas colunas em `tenants` (a tabela que É a conta):
+--   `terms_accepted_at` — o QUANDO do aceite (timestamptz, regra do CLAUDE.md);
+--   `terms_version`     — QUAL texto estava valendo no momento do aceite.
+--
+-- O par é a prova do consentimento (art. 8º da LGPD): um aceite de "termos" sem
+-- versão não prova nada — o texto muda com o tempo, e é a versão que aponta
+-- para o documento que a pessoa realmente leu. A versão vive numa constante só,
+-- `TERMS_VERSION` em `src/lib/legal/termsVersion.ts`; qualquer mudança de TEXTO
+-- nas duas páginas pede bump dessa constante na mesma commit.
+--
+-- Ambas ANULÁVEIS de propósito: tenants nascidos antes desta migration (e os
+-- tenants de demonstração do seed) não têm consentimento gravado, e inventar
+-- data ou versão para eles seria falsificar o registro. Só o caminho novo
+-- (`criarConta` → `criarTenant`) preenche as duas.
+--
+-- NENHUMA policy nova: são colunas novas numa tabela que já nasceu com
+-- ENABLE + FORCE ROW LEVEL SECURITY e policies `tenants_isolation` /
+-- `tenants_auth_service` em `0000_fundacao.sql`. Coluna segue a linha — a linha
+-- de `tenants` continua visível apenas dentro do próprio contexto de tenant.
+--
+-- Sem índice novo: nenhuma das duas colunas é chave de listagem ou de filtro —
+-- são registro de prova, lidas junto do próprio tenant. Se um dia houver busca
+-- "quem aceitou a versão X" (operação, não produto), aí nasce índice com a
+-- feature que a pedir.
+
+ALTER TABLE "tenants" ADD COLUMN "terms_accepted_at" timestamptz;
+--> statement-breakpoint
+ALTER TABLE "tenants" ADD COLUMN "terms_version" text;

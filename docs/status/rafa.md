@@ -1,5 +1,153 @@
 # Status — Rafa (backend / plataforma)
 
+## 2026-09-07 — S13b: /termos, /privacidade e consentimento LGPD no cadastro
+
+**Veredito: PRONTO no meu lado.** `tsc` e `npm run build` do repositório INTEIRO ficam
+vermelhos até duas linhas de uma linha pousarem — o checkbox na `CadastroScreen` (nina)
+e o `aceitouTermos: true` no helper `conta()` do teste de signup (Téo). Não é defeito: é
+o contrato novo exigindo as duas partes. Provei no worktree descartável que, com as duas
+linhas postas, tudo fecha (números reais abaixo).
+
+### ATENÇÃO AO PO — ANTES DE PUBLICAR EM PRODUÇÃO
+
+**O TEXTO DAS PÁGINAS /termos E /privacidade É MÍNIMO E HONESTO, MAS NÃO PASSOU POR
+ADVOGADO. REVISAR COM ADVOGADO ANTES DE PUBLICAR. A CAIXA `privacidade@zarpa.app`
+(`CANAL_DE_PRIVACIDADE` em `src/lib/legal/termsVersion.ts`) PRECISA EXISTIR DE VERDADE —
+O TEXTO PROMETE RESPOSTA POR ELA. SE O ENDEREÇO FINAL FOR OUTRO, MUDA A CONSTANTE E FAZ
+BUMP DA `TERMS_VERSION`.**
+
+### O que ficou pronto
+
+1. **Páginas públicas `/termos` e `/privacidade`** (`src/app/termos/page.tsx`,
+   `src/app/privacidade/page.tsx`) — Server Components estáticos, sem sessão, sem
+   banco, fora do `(app)` (mesmo padrão do `/cadastrar` e `/entrar`). Registro
+   intermediário: papel, `<Rule />` como cornija, zero prancha, zero serifa, `Rule`
+   reutilizada de `@/components/plates` (nenhum componente novo). A seção 1 da
+   privacidade é a distinção que o pedido marcou como a mais importante:
+   **agente = controladora dos dados dos clientes dela, Zarpa = operadora** — e o que
+   isso significa na prática (titular procura a agente; nós damos as ferramentas;
+   nunca contamos com o cliente dela por conta própria). Dados processados descritos
+   como são: cadastro do agente (nome, e-mail, senha só como hash, agência/cobrança),
+   dados que o agente lança (contatos, viajantes, negócios, propostas) e registros
+   técnicos. Base legal: execução de contrato para os dados do agente (art. 7º, V);
+   contrato no âmbito controladora–operadora + legítimo interesse (segurança/fraude,
+   art. 7º, IX) para os dados dos clientes dela. Direitos do art. 18 e canal de
+   contato. Nenhuma cláusula inventada — só afirmação que o produto de fato cumpre
+   hoje (sem publicidade, sem vender dado, sem treinar modelo, inadimplência nunca
+   bloqueia leitura).
+2. **Consentimento no `criarConta`** (`src/server/signup.ts`) — `aceitouTermos: boolean`
+   OBRIGATÓRIO no zod, sem default, sem coerção. Ausente e `false` são a MESMA recusa:
+   `DADOS_INVALIDOS`, `campo: 'aceitouTermos'`, mensagem sobre os termos,
+   `correcao: 'Aceitar os termos para continuar'`. O backend NÃO assume true — quem não
+   manda o campo, não cria conta (provado ao vivo: nem usuário nasce).
+3. **Gravação do consentimento** — colunas `terms_accepted_at` (timestamptz) +
+   `terms_version` (text) em `tenants`, migration **`drizzle/0012_consentimento_de_termos.sql`**
+   (idx 12 no `_journal.json`), colunas ANULÁVEIS (tenant antigo/seed = nulo, "sem
+   registro", nunca "aceito"). `criarTenant` ganhou `consentimento?: { aceitoEm }` e
+   grava o par na MESMA transação que o nascimento do tenant, mais a linha de audit_log
+   `consent.recorded` (metadata `{ termsVersion }` — o fato e a versão, nunca conteúdo).
+   Nenhuma policy nova, nenhum índice novo — coluna segue a linha, RLS de `tenants`
+   intocado (2 policies, conferidas após a migration).
+4. **`src/lib/legal/termsVersion.ts`** (novo, sem `'use server'` de propósito —
+   constante precisa ser importável por Server Component e por Server Action) —
+   `TERMS_VERSION` ('2026-09-07', data em que o texto passou a valer) e
+   `CANAL_DE_PRIVACIDADE`. Regra de bump documentada no arquivo: mudou TEXTO das
+   páginas, muda a versão NA MESMA commit. A versão gravada no consentimento sai
+   SEMPRE da constante — `termsVersion` mandado no corpo do input é descartado (provado
+   ao vivo).
+5. **Contratos**: `rafa-para-nina.md` §S13b (contrato novo do input, o erro exato que a
+   UI recebe, texto sugerido do checkbox com links inline, rotas do rodapé) e
+   `rafa-para-teo.md` §S13b (6 pontos de teste + a regressão intencional do helper).
+
+### Decisões que tomei sozinha
+
+- **Numeração 0012, não 0013.** O pedido citava `0013_*`, mas o `_journal.json` ia até
+  idx 11 (`0011_integracoes`) — a próxima real era 0012. Segui o journal, como o pedido
+  mandava conferir.
+- **A exigência do aceite mora no `criarConta`, não no `criarTenant`.** `criarTenant` é
+  função de serviço (a única porta pública de nascimento de tenant é o signup), recebe
+  `consentimento` como parâmetro e registra o que vier — nunca inventa: sem o
+  parâmetro, colunas nulas. Motivo prático: os testes existentes chamam `criarTenant`
+  direto sem consentimento; torná-lo obrigatório ali quebraria suite alheia sem ganho
+  de garantia, porque a garantia de verdade é o zod do `criarConta`.
+- **Recusa única para ausente e `false`** — uma mensagem, uma correção, um campo. A UI
+  não precisa distinguir "não mandou" de "desmarcou".
+- **`TERMS_VERSION` é data e a versão não é parâmetro de ninguém** — sai da constante,
+  que mora num arquivo sem `'use server'` (constante não pode sair de arquivo
+  `'use server'`).
+- **Consentimento não interfere no gate** — `vereditoDaAssinatura` não mudou uma linha;
+  aceite e assinatura são temas independentes (o pedido foi explícito, e a leitura das
+  páginas é pública e estática, sem tocar banco).
+- **Texto honesto em vez de completo** — sem cláusula de enfeite; tudo que o texto
+  afirma é comportamento existente no código (somente leitura em atraso, documento
+  com audit de leitura, cipher AES-256-GCM com key_id, cookie de sessão).
+
+### O que NÃO fiz (fora da fronteira / não pedido)
+
+- **UI do checkbox** — nina (ela está editando `CadastroScreen` em paralelo agora; o
+  contrato está no handoff §S13b).
+- **Testes permanentes** — teo (não toquei em `tests/**`; o helper `conta()` do teste de
+  signup é a única edição que ele precisa para desbloquear, mais os 6 pontos do
+  handoff).
+- **`.env.example`** — nada a acrescentar: nenhuma credencial nova; o canal de contato
+  é constante de código, não env.
+- **Fluxo de RE-aceite para contas existentes** — não existe (ver riscos): mudança de
+  `TERMS_VERSION` não re-pede aceite de quem já tem conta.
+
+### Verificação (números reais)
+
+- **`npm run db:migrate` em `zarpa_dev`**: ok — 23 tabelas, "todas as tabelas com RLS
+  habilitado e forçado". Colunas novas confirmadas no catálogo:
+  `terms_accepted_at | timestamp with time zone | YES` e `terms_version | text | YES`;
+  `pg_policies` de `tenants` = 2 (inalterado).
+- **Worktree descartável no HEAD + meus arquivos + os 2 remendos de uma linha** (o que
+  a nina e o Téo vão fazer de verdade; worktree e remendos apagados depois, nada
+  versionado):
+  - `npx tsc --noEmit` — limpo.
+  - `npm run build` — verde, **23 rotas**, `○ /termos` e `○ /privacidade` **estáticas**
+    (prerendered).
+  - `npx tsx scripts/check/known-failures.ts` — **480 testes, allowlist 0, "Portão ok"**;
+    globalSetup recriou `zarpa_test` do zero e aplicou **13 migrations** — a 0012 aplica
+    limpa do zero, não só incrementalmente.
+  - **Teste descartável de consentimento** (4 it, todas verdes, apagado com o
+    worktree): (1) sem o campo → `DADOS_INVALIDOS`/`aceitouTermos`/correção certa e
+    NENHUM usuário nasce; (2) `false` → idem; (3) `true` →
+    `termsAcceptedAt` dentro da janela [antes, depois] da chamada, `termsVersion` ===
+    `TERMS_VERSION` importada da constante, exatamente 1 audit `consent.recorded` com
+    `entity_id` do tenant e metadata `{ termsVersion }`; (4) `termsVersion` no corpo do
+    input é ignorado.
+- `npx eslint` nos 6 arquivos tocados — limpo.
+- **NADA commitado** — o PO commita.
+
+### Riscos
+
+- **Texto legal sem advogado e caixa de e-mail por provisionar** — os dois em CAPS
+  acima; são o que separa "pronto para revisão" de "pronto para produção".
+- **Sem re-aceite em mudança de versão** — conta que aceitou a versão A continua com A
+  gravada quando a B entrar no ar; `terms_accepted_at` não é regravado por login nem
+  por uso. Se o PO quiser re-aceite de contas existentes, é feature nova (tela + action
+  que grava de novo), não migration.
+- **Estado atual do repo é vermelho de propósito** até as duas linhas alheias pousarem
+  (tsc, build e qualquer roda de teste antes do ajuste do helper vão acusar); quem
+  rodar o portão no estado atual vai ver falhas concentradas em
+  `tests/signup/criarconta.test.ts` — todas do helper sem o campo, comprovado pela
+  rodada verde do worktree.
+- `audit_log` de consentimento nasce com `actorUserId: null` (cadastro é sem sessão) —
+  a identificação do aceite é o próprio tenant. Suficiente para o propósito; se um dia
+  precisar de rastreio fino de dispositivo/IP, é decisão nova (e PII a mais no audit).
+
+### O que precisa dos outros
+
+- **Nina**: checkbox + texto com links inline + `'aceitouTermos'` na lista de
+  `campoValido` — tudo em `rafa-para-nina.md` §S13b, incluindo o objeto de erro exato.
+- **Téo**: `aceitouTermos: true` no helper `conta()` (desbloqueia compilação e suíte) +
+  os 6 pontos de `rafa-para-teo.md` §S13b.
+- **PO**: advogado (CAPS), caixa `privacidade@zarpa.app`, decidir política de re-aceite
+  em bump de versão — e os links legais do rodapé público quando existir, apontando
+  `/termos` e `/privacidade`.
+
+---
+
 ## 2026-09-07 — S13a: cadastro público + trial 14 dias + gate de dunning
 
 ### O que ficou pronto

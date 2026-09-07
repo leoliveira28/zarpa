@@ -52,6 +52,16 @@ import { slugificar } from './normalize';
  * condição "tenant órfão sem usuário". A janela de inconsistência é o tempo entre os
  * dois comandos e nenhum cliente consegue observá-la: o tenant novo só fica visível
  * para o próprio dono, que ainda não existe.
+ *
+ * S13b — consentimento dos termos: `aceitouTermos: true` é OBRIGATÓRIO no input e o
+ * backend NÃO assume true — campo ausente e campo `false` são recusas explícitas com
+ * mensagem e correção prontas (é o checkbox legal da interface, não um detalhe de
+ * formulário). O aceite vira registro: `tenants.terms_accepted_at` +
+ * `tenants.terms_version` (a constante `TERMS_VERSION`, a que estava valendo nas
+ * páginas /termos e /privacidade que a pessoa leu) + linha de `audit_log`
+ * (`consent.recorded`), tudo na MESMA transação do nascimento do tenant, dentro de
+ * `criarTenant`. Um tenant sem consentimento registrado só nasce fora deste caminho
+ * (seed, testes) — nunca do cadastro público.
  */
 
 const criarContaInput = z.object({
@@ -59,7 +69,20 @@ const criarContaInput = z.object({
   email: z.email('E-mail inválido.').max(200),
   senha: z.string().min(8, 'A senha precisa de pelo menos 8 caracteres.').max(200),
   nomeAgencia: z.string().trim().min(2, 'Informe o nome da agência.').max(120),
+  /**
+   * Obrigatório e booleano de verdade — sem default, sem coerção. `false` passa
+   * pelo zod e é recusado logo abaixo com a mensagem certa; ausente falha o zod
+   * e cai na mesma mensagem (ver o `if` do `aceitouTermos` em `criarConta`).
+   */
+  aceitouTermos: z.boolean(),
 });
+
+/** Recusa única para os dois casos de consentimento ausente/recusado. */
+const RECUSA_DE_TERMS = {
+  mensagem:
+    'Para criar a conta, é preciso ler e aceitar os Termos de uso e a Política de privacidade.',
+  correcao: 'Aceitar os termos para continuar',
+} as const;
 
 export type CriarContaInput = z.infer<typeof criarContaInput>;
 
@@ -79,10 +102,33 @@ export async function criarConta(input: CriarContaInput): Promise<ServiceResult<
   return comoResultado(async () => {
     const parsed = criarContaInput.safeParse(input);
     if (!parsed.success) {
+      // Campo ausente ou não-booleano no aceite: mensagem de termos, não
+      // "Invalid input" cru do zod — é o erro que a interface vai mostrar junto
+      // do checkbox.
+      const faltouAceite = parsed.error.issues.some((issue) =>
+        issue.path.includes('aceitouTermos'),
+      );
+      if (faltouAceite) {
+        throw new ServiceError('DADOS_INVALIDOS', RECUSA_DE_TERMS.mensagem, {
+          campo: 'aceitouTermos',
+          correcao: RECUSA_DE_TERMS.correcao,
+        });
+      }
       const primeiro = parsed.error.issues[0];
       throw new ServiceError('DADOS_INVALIDOS', primeiro?.message ?? 'Dados inválidos', {
         campo: primeiro?.path.join('.'),
         correcao: 'Corrigir e criar a conta',
+      });
+    }
+
+    // `false` explícito: a pessoa leu e não aceitou. Mesma resposta do caso
+    // ausente — o backend não cria conta em nenhuma das duas formas, e a
+    // mensagem diz o que fazer (regra do CLAUDE.md: erro diz o que aconteceu E
+    // oferece a correção).
+    if (!parsed.data.aceitouTermos) {
+      throw new ServiceError('DADOS_INVALIDOS', RECUSA_DE_TERMS.mensagem, {
+        campo: 'aceitouTermos',
+        correcao: RECUSA_DE_TERMS.correcao,
       });
     }
 
@@ -130,6 +176,10 @@ export async function criarConta(input: CriarContaInput): Promise<ServiceResult<
           slug: candidato,
           plan: 'solo',
           contactEmail: email,
+          // S13b: o aceite já foi validado acima (obrigatório, true). O momento
+          // do registro é aqui, dentro do nascimento do tenant — e a versão é
+          // resolvida lá dentro pela constante, não aqui.
+          consentimento: { aceitoEm: new Date() },
         });
         tenantId = criado.tenantId;
         slugUsado = candidato;

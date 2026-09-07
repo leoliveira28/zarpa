@@ -44,6 +44,23 @@ export const tenants = pgTable(
     /** CPF/CNPJ do próprio agente (MEI). Cifrado como qualquer outro documento. */
     document: encryptedText('document_encrypted'),
 
+    /**
+     * Consentimento LGPD (S13b): quando e qual versão dos Termos de uso e da
+     * Política de privacidade a agente aceitou no cadastro. Gravados juntos em
+     * `criarTenant` — o par (data, versão) é a prova do aceite: sem a versão,
+     * um registro de "termos" não aponta para texto nenhum. Versão vem da
+     * constante `TERMS_VERSION` (`src/lib/legal/termsVersion.ts`), nunca de
+     * quem chama.
+     *
+     * Anuláveis de propósito: tenants anteriores à `0012_consentimento_de_termos`
+     * e os de demonstração do seed não têm consentimento gravado — nulo é o
+     * valor honesto ("sem registro"), não "recusou". Só `criarConta` preenche,
+     * e só com aceite explícito: não existe caminho que grave data sem versão
+     * nem versão sem data.
+     */
+    termsAcceptedAt: timestamp('terms_accepted_at', { withTimezone: true }),
+    termsVersion: text('terms_version'),
+
     locale: text('locale').notNull().default('pt-BR'),
     currency: text('currency').notNull().default('BRL'),
     timezone: text('timezone').notNull().default('America/Sao_Paulo'),

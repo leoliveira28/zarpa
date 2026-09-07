@@ -738,3 +738,46 @@ Pontos que EU provei ao vivo e quero ver travados em teste:
    escolhe): o `tenantId` do usuário entra por `withPendingTenant` (AsyncLocalStorage),
    nunca do corpo. Um teste que tente criar conta com `tenantId` no corpo e caia em
    outro tenant é bem-vindo (deve ser ignorado — o campo é `input: false` no Better Auth).
+
+## S13b — consentimento dos termos no cadastro (`aceitouTermos`)
+
+Migration `drizzle/0012_consentimento_de_termos.sql` (idx 12 no `_journal.json`): duas
+colunas anuláveis em `tenants` (`terms_accepted_at timestamptz`, `terms_version text`).
+**Nenhuma policy nova** — colunas seguem a linha, `tenants_isolation`/`tenants_auth_service`
+intactas, sem índice novo. A varredura por catálogo não deve acusar nada.
+
+**REGRESSÃO ESPERADA E INTENCIONAL**: `aceitouTermos: boolean` agora é obrigatório no
+input de `criarConta` (sem default — o backend não assume true). O helper `conta()` de
+`tests/signup/criarconta.test.ts` não manda o campo, então o arquivo nem compila
+(`tsc --noEmit`) e os testes de happy path falham em runtime com a recusa nova. Não
+toquei em `tests/**`. Atualize o helper (`aceitouTermos: true`) e acrescente os casos
+abaixo.
+
+Pontos para virar teste:
+
+1. **Recusa por ausência** — `criarConta(input)` SEM `aceitouTermos` →
+   `DADOS_INVALIDOS` com `campo: 'aceitouTermos'`, `mensagem` sobre os termos e
+   `correcao: 'Aceitar os termos para continuar'`. E nada nasce: conferir no banco
+   (via `authSql`, policy `tenants_auth_service`) que não existe tenant com o slug
+   derivado, nem usuário com o e-mail.
+2. **Recusa por `false` explícito** — mesma resposta, mesma ausência de efeito no
+   banco. O backend não assume true em NENHUMA forma: ausente e `false` são recusas
+   idênticas.
+3. **Gravação no happy path** (`aceitouTermos: true`) — `tenants.terms_accepted_at`
+   preenchido, `timestamptz`, ≈ agora (drift de segundos); `terms_version` igual à
+   constante `TERMS_VERSION` importada de `src/lib/legal/termsVersion.ts` (importar a
+   constante no teste, não hardcode a string — senão o teste quebra no primeiro bump).
+   E: mandar um campo `termsVersion` extra no corpo do input não muda a versão gravada
+   (o zod descarta — a versão é resolvida no servidor, nunca vem de quem chama).
+4. **Audit** — exatamente 1 linha `audit_log` com `action: 'consent.recorded'`,
+   `entity: 'tenant'`, `entity_id = tenantId`, `actor_user_id null`,
+   `metadata = { termsVersion: <versão> }` (sem dado pessoal). Nasce na MESMA
+   transação do tenant: se `signUpEmail` falha e a compensação apaga o tenant
+   (teste que você já tem), a linha de consentimento desaparece junto (CASCADE) —
+   não pode existir consentimento registrado de tenant que não existe.
+5. **Tenants sem registro** — o seed (e qualquer tenant anterior à 0012) tem as duas
+   colunas nulas e nada quebra: nulo significa "sem registro", nunca "aceito". Vale
+   um teste que leia um tenant do seed com as colunas nulas sem erro.
+6. **O gate não muda** — consentimento não interfere no veredito de assinatura;
+   `vereditoDaAssinatura` e os testes de `gate-dunning.test.ts` seguem verdes sem
+   alteração.

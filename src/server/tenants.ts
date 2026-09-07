@@ -7,6 +7,7 @@ import { withTenant } from '@/lib/tenant/withTenant';
 import { authDb } from '@/lib/auth/db';
 import { uuidv7 } from '@/db/uuid';
 import { requireAuthContext } from '@/lib/auth/session';
+import { TERMS_VERSION } from '@/lib/legal/termsVersion';
 import { slugificar } from './normalize';
 import { registrarAuditoria } from './audit';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
@@ -125,12 +126,25 @@ export async function atualizarMarca(input: MarcaInput): Promise<ServiceResult<n
  * estiver vazio — o fallback é rede de segurança, não fonte de verdade. Colisão de
  * `slug` vira `CONFLITO`: quem chama decide se tenta sufixo (`criarConta` tenta) ou
  * devolve o erro para a pessoa escolher outro nome.
+ *
+ * S13b — consentimento LGPD: `consentimento` (aceite dos Termos de uso e da Política
+ * de privacidade, `/termos` e `/privacidade`) nasce AQUI, na mesma transação do tenant,
+ * porque consentimento sem conta para anexar não existe. Quem EXIGE o aceite é
+ * `criarConta` (única porta pública de nascimento de tenant) — esta função apenas
+ * registra o que lhe for dado, e NUNCA inventa: sem `consentimento`, as colunas
+ * `terms_accepted_at`/`terms_version` nascem nulas ("sem registro"), que é o valor
+ * honesto para tenants criados fora do cadastro público (seed, testes). A versão dos
+ * termos vem da constante `TERMS_VERSION` (`src/lib/legal/termsVersion.ts`) e não é
+ * parâmetro de quem chama — quem nasce do cadastro público grava a versão vigente,
+ * ponto.
  */
 export async function criarTenant(dados: {
   name: string;
   slug: string;
   plan?: 'solo' | 'pro' | 'studio';
   contactEmail?: string;
+  /** S13b — aceite dos termos no cadastro. Ausente = sem registro, nunca 'aceito'. */
+  consentimento?: { aceitoEm: Date };
 }): Promise<{ tenantId: string }> {
   const slug = slugificar(dados.slug);
 
@@ -187,6 +201,11 @@ export async function criarTenant(dados: {
         brandName: dados.name.trim(),
         contactEmail: dados.contactEmail ?? null,
         trialEndsAt,
+        // S13b: o par (quando, versão) é a prova do consentimento. A versão não
+        // é parâmetro — vem da constante `TERMS_VERSION`, a que estava valendo
+        // na página que a pessoa leu. Sem `consentimento`, nulo: sem registro.
+        termsAcceptedAt: dados.consentimento?.aceitoEm ?? null,
+        termsVersion: dados.consentimento ? TERMS_VERSION : null,
       });
 
       await tx.insert(subscriptions).values({
@@ -207,6 +226,21 @@ export async function criarTenant(dados: {
         entityId: tenantId,
         metadata: { plano: plan, trialDias: DIAS_DE_TRIAL },
       });
+
+      // S13b: o registro do consentimento é um FATO (aceitou, quando, qual
+      // versão) — metadata só leva a versão, nunca conteúdo das páginas nem
+      // dado pessoal. Nascido fora do cadastro público (seed, testes), não há
+      // consentimento para registrar e esta linha não existe.
+      if (dados.consentimento) {
+        await registrarAuditoria(tx, {
+          tenantId,
+          actorUserId: null,
+          action: 'consent.recorded',
+          entity: 'tenant',
+          entityId: tenantId,
+          metadata: { termsVersion: TERMS_VERSION },
+        });
+      }
     });
   } catch (error: unknown) {
     // Corrida: dois cadastros simultâneos passam pelo pré-cheque e um perde o INSERT.

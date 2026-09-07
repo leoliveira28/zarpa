@@ -1464,3 +1464,77 @@ estado "sem dados" em dunning — a agente vê tudo, só não consegue escrever.
 - Nada muda no `/cobranca` do lado do servidor: `trocarPlano`/`cancelarAssinatura`/
   `listarFaturas` NÃO recebem o gate de propósito (é justamente a saída de quem está
   bloqueado).
+
+---
+
+## S13b — o checkbox de aceite: o contrato de `criarConta` mudou (campo NOVO e OBRIGATÓRIO)
+
+O cadastro vai abrir para agente real, então agora existe consentimento de verdade:
+páginas `/termos` e `/privacidade` (públicas, estáticas, sem sessão) e o registro do
+aceite no servidor. Sua parte é o checkbox na `CadastroScreen`.
+
+### 1. `aceitouTermos` entrou no input — obrigatório, sem default
+
+```ts
+type CriarContaInput = {
+  nomeAgente: string;
+  email: string;
+  senha: string;
+  nomeAgencia: string;
+  aceitouTermos: boolean; // NOVO, OBRIGATÓRIO — o valor do checkbox, nada mais
+};
+```
+
+- O backend **não assume true**. Campo ausente e campo `false` são a mesma recusa —
+  ninguém cria conta sem aceite. É isso que o `tsc` está acusando no
+  `CadastroScreen.tsx` (a chamada atual não manda o campo): **não é erro seu, é o
+  contrato novo pedindo o checkbox**. Adicione `aceitouTermos: <valor do checkbox>` na
+  chamada e inclua `'aceitouTermos'` na lista de `campoValido` para o erro destacar o
+  checkbox em vez de cair no erro geral.
+- O erro que a UI recebe nos dois casos (ausente ou `false`), pronto para mostrar:
+
+```ts
+{
+  ok: false,
+  code: 'DADOS_INVALIDOS',
+  mensagem: 'Para criar a conta, é preciso ler e aceitar os Termos de uso e a Política de privacidade.',
+  correcao: 'Aceitar os termos para continuar',
+  campo: 'aceitouTermos',
+}
+```
+
+  `correcao` é o rótulo do botão/ação junto do erro (regra do CLAUDE.md). Checkbox
+  desabilitando o botão até marcar é decisão sua — mas mantenha o tratamento do erro
+  do mesmo jeito, porque o servidor recusa de qualquer forma.
+
+### 2. Texto exato sugerido para o checkbox (links inline)
+
+> Li e aceito os **[Termos de uso](/termos)** e a **[Política de privacidade](/privacidade)**.
+
+- Um único checkbox com esse texto; os dois links inline com `<Link target="_blank">`
+  (nova aba — o cadastro não perde o estado do formulário). Link na expressão inteira
+  ("Termos de uso", "Política de privacidade"), nunca em "clique aqui". Accent só nos
+  links — é o "dizer onde clicar" do design system.
+- O aceite é gravado no servidor com data + versão (`tenants.terms_accepted_at` +
+  `terms_version` + linha de `audit_log` `consent.recorded`). Nada disso volta para a
+  tela e nada precisa ser exibido — para a UI, é um checkbox e pronto.
+
+### 3. Rotas novas: `/termos` e `/privacidade`
+
+- Server Components estáticos, públicas, sem sessão, fora do grupo `(app)` — mesmo
+  padrão do `/cadastrar` e do `/entrar`. Registro intermediário: papel, fio (`<Rule />`
+  de `@/components/plates` como cornija), zero prancha, zero serifa.
+- O rodapé de cada uma já aponta para a outra e para `/cadastrar`. Quando o rodapé do
+  app/site ganhar links legais, os destinos são `/termos` e `/privacidade`.
+- A versão do texto vive em `TERMS_VERSION` e o canal de contato em
+  `CANAL_DE_PRIVACIDADE`, ambos em `src/lib/legal/termsVersion.ts` — se precisar deles
+  em outra superfície, importe de lá; nunca hardcode (a versão gravada no consentimento
+  sai dessa constante).
+
+### 4. O que NÃO muda
+
+- O resto do contrato segue igual: `ContaCriada`, login logo depois via
+  `authClient.signIn.email({ email, password: senha, callbackURL: '/hoje' })`, slug
+  derivado do nome da agência com sufixo automático.
+- Gate de dunning e `ASSINATURA_INATIVA`: nada a ver com consentimento — uma coisa não
+  toca na outra.
