@@ -11,6 +11,7 @@ import {
   listarAberturasRecentes,
   listarContatos,
   listarNegocios,
+  listarProximasTarefas,
   listarTarefasDeHoje,
   obterResumoDoMes,
   obterResumoDoPipeline,
@@ -25,7 +26,7 @@ import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { cn } from "@/lib/ui/cn";
 import { useTransitionPreset } from "@/lib/ui/motion";
 import { useDeferredDelete } from "@/lib/ui/useDeferredDelete";
-import { formatRelativeShort, formatTime } from "@/lib/ui/format";
+import { formatDayMonth, formatRelativeShort, formatTime } from "@/lib/ui/format";
 import { useSession } from "@/lib/auth/client";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -184,6 +185,10 @@ export function TodayScreen() {
     [],
   );
 
+  // "A seguir" — os lembretes futuros. Falha silenciosa de propósito: a seção é
+  // complemento, não estrutura — sem ela a tela segue inteira, com as de hoje.
+  const [proximas, setProximas] = React.useState<TarefaDeHoje[]>([]);
+
   React.useEffect(() => {
     let active = true;
     setTasksStatus((current) => (current === "ready" ? current : "loading"));
@@ -196,6 +201,10 @@ export function TodayScreen() {
       }
       setTasks(result.data);
       setTasksStatus("ready");
+    });
+    void listarProximasTarefas().then((result) => {
+      if (!active) return;
+      if (result.ok) setProximas(result.data);
     });
     return () => {
       active = false;
@@ -535,6 +544,44 @@ export function TodayScreen() {
         )}
       </section>
 
+      {/* Lembretes futuros — o lembrete criado para amanhã tem onde aparecer;
+          sem isto o app parecia engolir o que acabou de ser criado (achado do
+          PO). Sem estado vazio: ausência é silêncio, a seção só existe quando
+          há o que mostrar. */}
+      {proximas.length > 0 ? (
+        <section aria-labelledby="hoje-a-seguir">
+          <SectionHeading>
+            <span id="hoje-a-seguir">A seguir</span>
+          </SectionHeading>
+          <Card className="overflow-hidden">
+            <ul className="divide-y divide-line-subtle">
+              {proximas.map((task) => (
+                <li key={task.id} className="flex items-start gap-3 px-4 py-3">
+                  <TaskSourceIcon
+                    source={task.source}
+                    className="mt-1 size-3.5 shrink-0 text-muted"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-15 text-ink">{task.title}</p>
+                    {taskDetail(task) ? (
+                      <p className="mt-0.5 truncate text-13 text-muted">
+                        {taskDetail(task)}
+                      </p>
+                    ) : null}
+                  </div>
+                  <span
+                    data-numeric
+                    className="shrink-0 pt-0.5 text-13 tabular-nums text-muted"
+                  >
+                    {formatDayMonth(new Date(task.dueAt))} · {formatTime(new Date(task.dueAt))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        </section>
+      ) : null}
+
       <section aria-labelledby="hoje-abriram">
         <SectionHeading>
           <span id="hoje-abriram">Abriram sua proposta</span>
@@ -781,13 +828,21 @@ export function TodayScreen() {
       <NovoLembreteSheet
         open={reminderSheetOpen}
         onOpenChange={setReminderSheetOpen}
-        onCreated={(task) =>
-          setTasks((current) =>
-            [...current, task].sort(
-              (a, b) => new Date(a.dueAt).valueOf() - new Date(b.dueAt).valueOf(),
-            ),
-          )
-        }
+        onCreated={(task) => {
+          // Vence até o fim de hoje local → entra na lista de agora; depois de
+          // hoje → a recarga traz a seção "A seguir" com o recém-criado.
+          const fimDeHoje = new Date();
+          fimDeHoje.setHours(23, 59, 59, 999);
+          if (new Date(task.dueAt).valueOf() <= fimDeHoje.valueOf()) {
+            setTasks((current) =>
+              [...current, task].sort(
+                (a, b) => new Date(a.dueAt).valueOf() - new Date(b.dueAt).valueOf(),
+              ),
+            );
+          } else {
+            retryTasks();
+          }
+        }}
       />
 
       {/* Primeira hora: o CTA do painel de conta nova abre a MESMA Sheet do
@@ -1187,7 +1242,10 @@ function NovoLembreteSheet({
       title: title.trim(),
       notes: notes.trim() || undefined,
       kind: kind as "followup" | "ligar" | "whatsapp" | "email" | "outro",
-      dueAt,
+      // O `datetime-local` não carrega fuso; convertido AQUI, no aparelho, o
+      // servidor (UTC, ex.: Vercel) deixava de interpretar "15:00" como 15:00
+      // UTC e o lembrete acordava 3h mais cedo que o marcado.
+      dueAt: new Date(dueAt).toISOString(),
       contactId: contactId || undefined,
     });
     setCreating(false);
@@ -1263,7 +1321,7 @@ function NovoLembreteSheet({
               {fieldError?.campo === "dueAt" ? (
                 <FieldError>{fieldError.mensagem}</FieldError>
               ) : (
-                <FieldHint>Hora do seu aparelho — sem conversão de fuso.</FieldHint>
+                <FieldHint>A hora do seu aparelho é a que vale.</FieldHint>
               )}
             </Field>
 

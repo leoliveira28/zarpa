@@ -81,6 +81,7 @@ export {
   rodarFilaDeFollowups,
   gerarFollowupsDaProposta,
   listarTarefasDeHoje,
+  listarProximasTarefas,
   criarTarefa,
   type ResultadoFilaTenant,
   type ResultadoFilaGeral,

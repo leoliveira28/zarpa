@@ -1,6 +1,6 @@
 'use server';
 
-import { and, asc, eq, gte, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, isNull, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { contacts, deals, proposals, tasks, tenants } from '@/db/schema';
 import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
@@ -318,6 +318,34 @@ export type TarefaDeHoje = {
  * `dueAt` é comparado em UTC contra a meia-noite do dia seguinte ao de hoje — ou seja,
  * "hoje" inclui qualquer hora do dia corrente, não só o passado exato até agora.
  */
+/** Colunas de tarefa + o contexto (contato, negócio, destino) que a tela Hoje lê
+ * no JOIN — compartilhado entre `listarTarefasDeHoje` e `listarProximasTarefas`. */
+const COLUNAS_TAREFA_COM_CONTEXTO = {
+  id: tasks.id,
+  title: tasks.title,
+  notes: tasks.notes,
+  suggestedMessage: tasks.suggestedMessage,
+  kind: tasks.kind,
+  source: tasks.source,
+  contactId: tasks.contactId,
+  contactName: contacts.name,
+  dealId: tasks.dealId,
+  dealTitle: deals.title,
+  destination: deals.destination,
+  dueAt: tasks.dueAt,
+  doneAt: tasks.doneAt,
+  createdAt: tasks.createdAt,
+} as const;
+
+/** "Hoje" da leitura é o dia corrente em UTC — o servidor não conhece o fuso do
+ * aparelho; a fronteira certa por fuso do usuário é dívida registrada (a régua
+ * é diária, a diferença só aparece na virada). */
+function fimDeHojeUtc(): Date {
+  const fim = new Date();
+  fim.setUTCHours(23, 59, 59, 999);
+  return fim;
+}
+
 export async function listarTarefasDeHoje(opcoes?: {
   limite?: number;
 }): Promise<ServiceResult<TarefaDeHoje[]>> {
@@ -325,27 +353,11 @@ export async function listarTarefasDeHoje(opcoes?: {
     const { tenantId } = await requireAuthContext();
     const limite = Math.min(Math.max(opcoes?.limite ?? 100, 1), 300);
 
-    const fimDeHoje = new Date();
-    fimDeHoje.setUTCHours(23, 59, 59, 999);
+    const fimDeHoje = fimDeHojeUtc();
 
     return withTenant(tenantId, async (tx) => {
       const linhas = await tx
-        .select({
-          id: tasks.id,
-          title: tasks.title,
-          notes: tasks.notes,
-          suggestedMessage: tasks.suggestedMessage,
-          kind: tasks.kind,
-          source: tasks.source,
-          contactId: tasks.contactId,
-          contactName: contacts.name,
-          dealId: tasks.dealId,
-          dealTitle: deals.title,
-          destination: deals.destination,
-          dueAt: tasks.dueAt,
-          doneAt: tasks.doneAt,
-          createdAt: tasks.createdAt,
-        })
+        .select(COLUNAS_TAREFA_COM_CONTEXTO)
         .from(tasks)
         .leftJoin(contacts, eq(contacts.id, tasks.contactId))
         .leftJoin(deals, eq(deals.id, tasks.dealId))
@@ -358,6 +370,36 @@ export async function listarTarefasDeHoje(opcoes?: {
         ...linha,
         vencida: linha.dueAt < agora,
       })) as TarefaDeHoje[];
+    });
+  });
+}
+
+/**
+ * Lembretes em aberto que vencem DEPOIS de hoje — a seção "A seguir" da tela Hoje.
+ * Sem ela, o lembrete criado para amanhã não existe em lugar nenhum da interface:
+ * o agente cria, a tela engole e ele volta achando que o app é quebrado (achado do
+ * PO: "lembretes não estão aparecendo"). Mesmo shape de `listarTarefasDeHoje` —
+ * inclusive `vencida`, sempre false aqui por construção — para a tela tratar as
+ * duas listas com um só tipo.
+ */
+export async function listarProximasTarefas(opcoes?: {
+  limite?: number;
+}): Promise<ServiceResult<TarefaDeHoje[]>> {
+  return comoResultado(async () => {
+    const { tenantId } = await requireAuthContext();
+    const limite = Math.min(Math.max(opcoes?.limite ?? 5, 1), 30);
+
+    return withTenant(tenantId, async (tx) => {
+      const linhas = await tx
+        .select(COLUNAS_TAREFA_COM_CONTEXTO)
+        .from(tasks)
+        .leftJoin(contacts, eq(contacts.id, tasks.contactId))
+        .leftJoin(deals, eq(deals.id, tasks.dealId))
+        .where(and(isNull(tasks.doneAt), gt(tasks.dueAt, fimDeHojeUtc())))
+        .orderBy(asc(tasks.dueAt))
+        .limit(limite);
+
+      return linhas.map((linha) => ({ ...linha, vencida: false })) as TarefaDeHoje[];
     });
   });
 }
