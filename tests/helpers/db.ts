@@ -358,6 +358,24 @@ async function enumLabel(sql: Sql, udtName: string): Promise<string | null> {
 }
 
 /**
+ * Texto de seed sem NENHUM dígito. A etiqueta do tenant embute o uuid
+ * (`zarpa-qa-11111111-1111-…`), e run de dígitos casava nos padrões de valor do
+ * leak-scanner: `PHONE_BR_RE` via "111111-1111" dentro do uuid e acusou falso
+ * positivo de telefone num payload público — só na suíte completa, porque
+ * `roteiro_publica` (sem guarda de rascunho, por desenho) devolve a linha
+ * sintética que `seedTenantRows` nasce em toda tabela de tenant. Foi consertado
+ * NA FONTE (aqui) e não no scanner: o scanner que menos reclama é o scanner
+ * inútil, e a classe inteira se fecha — qualquer tabela nova semeada de forma
+ * sintética deixa de poder gerar o mesmo susto. Dígito→letra (0→a … 9→j)
+ * preserva a marcação e a rastreabilidade ao tenant em qualquer dump.
+ */
+const DIGITO_EM_LETRA = 'abcdefghij'
+
+function etiquetaSemDigitos(seedTag: string): string {
+  return seedTag.replace(/\d/g, (d) => DIGITO_EM_LETRA[Number(d)] ?? 'x')
+}
+
+/**
  * Valor sintético plausível para uma coluna, a partir do tipo declarado.
  * Marcador `seed` no texto para a linha ser óbvia em qualquer dump.
  */
@@ -367,6 +385,7 @@ async function syntheticValue(
   seedTag: string,
 ): Promise<unknown | { raw: string }> {
   const t = col.udtName.toLowerCase()
+  const tag = etiquetaSemDigitos(seedTag)
 
   if (t === 'uuid') return { raw: 'gen_random_uuid()' }
   if (t === 'bool') return false
@@ -384,12 +403,12 @@ async function syntheticValue(
   if (col.dataType === 'USER-DEFINED') {
     const label = await enumLabel(sql, col.udtName)
     if (label !== null) return { raw: `'${label.replace(/'/g, "''")}'::"${col.udtName}"` }
-    return { raw: `'${seedTag}'::"${col.udtName}"` }
+    return { raw: `'${tag}'::"${col.udtName}"` }
   }
 
   // texto e afins
   const max = col.charMaxLength
-  const base = `${seedTag}-${col.name}`
+  const base = `${tag}-${col.name}`
   return max !== null && max < base.length ? base.slice(0, max) : base
 }
 

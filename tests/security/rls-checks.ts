@@ -50,6 +50,16 @@ export const KNOWN_ESCAPE_HATCHES: { table: string; policy: string }[] = [
   { table: 'public.proposal_blocks', policy: 'proposal_blocks_public_read' },
   { table: 'public.proposal_views', policy: 'proposal_views_public_insert' },
   { table: 'public.proposal_views', policy: 'proposal_views_public_select' },
+  // S14 — leitura pública do roteiro pós-venda (`drizzle/0013_roteiro_publico.sql`).
+  // Mesmo desenho da proposta pública (0004): `roteiro_publica` (SECURITY DEFINER) liga
+  // o GUC `app.roteiro_public_context` com `set_config(..., true)` local à transação e
+  // em NENHUM outro lugar do código. GUC DE PROPOSTA não foi reusado de propósito —
+  // um GUC de proposta não pode abrir tabela de roteiro; assim o alcance de cada escape
+  // hatch segue auditável separadamente. A policy é FOR SELECT e a proteção de COLUNA
+  // é a lista explícita dentro da função (o roteiro sai só de `itineraries`, nunca de
+  // join com proposals/contacts/travelers); a de LINHA é o token. Mesma ressalva de
+  // sempre: GUC é forjável por SQL arbitrário. Ver docs/handoffs/rafa-para-teo.md, §S14.1.
+  { table: 'public.itineraries', policy: 'itineraries_public_read' },
   // S11 — webhook do Asaas (`drizzle/0010_webhook_context.sql`). O webhook chega
   // sem sessão; precisa resolver o `tenantId` pelo `asaasSubscriptionId` antes de
   // abrir `withTenant`. O GUC `app.webhook_context` só liga DENTRO de

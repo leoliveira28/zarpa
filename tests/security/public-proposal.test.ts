@@ -246,6 +246,25 @@ async function plantCanaries(client: Sql): Promise<{ token: string | null }> {
   const tc = tokenCol[0]
   if (!tc) return { token: null }
 
+  // Preferir o token da fixture DESTE arquivo em vez de um `limit 1` sem ordem.
+  // Motivo: na suíte completa, `tenant-isolation.test.ts` semeia uma linha
+  // sintética em `proposals` (e em toda tabela de tenant), e qual token a sonda
+  // genérica pega é acaso de layout físico. Com o token sintético, a varredura
+  // exercita a linha sintética — `proposta_publica` devolve zero linhas (ela
+  // exige status publicável) e o sweep da proposta fica vago por acaso, não por
+  // garantia. Fixando o token da fixture, o sweep exercita SEMPRE a proposta
+  // `sent` de verdade que este arquivo semeou. O fallback genérico continua,
+  // para o teste não ficar cego se o schema mudar de forma. O payload público
+  // do ROTEIRO (que também casa no varredor de rotinas) tem arquivo próprio:
+  // tests/security/public-roteiro.test.ts.
+  const fixada = await withTenant(client, TENANT_A, (tx) =>
+    tx.unsafe<{ v: string }[]>(
+      `select "${tc.column_name}"::text as v from public.proposals where "${tc.column_name}"::text = $1`,
+      [FIXTURE_PUBLIC_TOKEN] as never[],
+    ),
+  )
+  if (fixada[0]?.v) return { token: fixada[0].v }
+
   const rows = await withTenant(client, TENANT_A, (tx) =>
     tx.unsafe<{ v: string }[]>(
       `select "${tc.column_name}"::text as v from public.proposals limit 1`,
