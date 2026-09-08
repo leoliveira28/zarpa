@@ -92,6 +92,13 @@
       "when": 1758412800000,
       "tag": "0012_consentimento_de_termos",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1758499200000,
+      "tag": "0013_roteiro_publico",
+      "breakpoints": true
     }
   ]
 }

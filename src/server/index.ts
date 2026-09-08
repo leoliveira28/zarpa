@@ -240,3 +240,34 @@ export {
   type IntegracaoResumo,
   type CriarIntegracaoInput,
 } from './integrations';
+export {
+  gerarRoteiro,
+  listarRoteiros,
+  type RoteiroResumo,
+  type BlocoDoRoteiro,
+  type GerarRoteiroInput,
+} from './itineraries';
+export {
+  obterRoteiroPublico,
+  type RoteiroPublico,
+  type RoteiroPublicoMeta,
+  type RoteiroPublicoBrand,
+  type RoteiroPublicoBloco,
+} from './publicItineraries';
+export {
+  listarEmViagem,
+  type EmViagemGrupos,
+  type ViagemEmCurso,
+  type PartidaProxima,
+  type ViagemAndamento,
+  type RetornoRecente,
+} from './viagens';
+export {
+  resumoDoPeriodo,
+  type ResumoDoPeriodo,
+  type OrigemDeContato,
+  type MotivoDePerda,
+} from './money';
+// Só TIPOS de `./periodo`: reexportar a função puxaria zod para o grafo de Client
+// Components que importa o barril (mesmo cuidado do `subscriptionGate` acima).
+export type { PeriodoInput, Periodo } from './periodo';

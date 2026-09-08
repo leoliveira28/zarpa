@@ -9,6 +9,7 @@ import { ServiceError, comoResultado, type ServiceResult } from './errors';
 import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 import { parseDataFlexivel } from './normalize';
+import { resolverPeriodo, type PeriodoInput } from './periodo';
 
 /**
  * O funil — o serviço que faltava atrás de `FunnelScreen.tsx` e do topo de `TodayScreen.tsx`
@@ -136,14 +137,6 @@ function paraDataOuNula(valor: string | null): Date | null {
  */
 function ultimaAtividadeSql() {
   return sql<string | null>`(select max(a.occurred_at) from activities a where a.deal_id = deals.id)`;
-}
-
-function inicioDoMesUTC(agora: Date): Date {
-  return new Date(Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth(), 1));
-}
-
-function inicioDoProximoMesUTC(agora: Date): Date {
-  return new Date(Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth() + 1, 1));
 }
 
 // ---------------------------------------------------------------------------
@@ -841,17 +834,28 @@ export async function listarNegociosParados(): Promise<ServiceResult<ResumoDePar
 export type ResumoDoPipeline = {
   /** Soma de `valueCents` de todo negócio que não é `ganho` nem `perdido`. Sem recorte de tempo. */
   pipelineAbertoCents: number;
-  /** Soma de `valueCents` dos negócios `ganho` cujo `closedAt` cai no mês corrente (UTC). */
+  /**
+   * Soma de `valueCents` dos negócios `ganho` cujo `closedAt` cai no período consultado
+   * (mês corrente por padrão, UTC). O nome mantém o sufixo "Mes" por compatibilidade com
+   * a tela que já consome — quando um período (`{ mes }` ou `{ de, ate }`) é passado, o
+   * recorte é o PERÍODO, não o mês.
+   */
   fechadoNoMesCents: number;
 };
 
-/** Ver a decisão de recorte documentada no comentário de topo do arquivo. */
-export async function obterResumoDoPipeline(): Promise<ServiceResult<ResumoDoPipeline>> {
+/**
+ * Ver a decisão de recorte documentada no comentário de topo do arquivo. Aceita o mesmo
+ * período opcional do §1 (`./periodo.ts`) que o restante das telas de leitura; ausente =
+ * mês corrente, comportamento preservado. `pipelineAbertoCents` continua sem recorte de
+ * tempo de propósito: dinheiro em aberto não pertence a um mês.
+ */
+export async function obterResumoDoPipeline(
+  periodoInput?: PeriodoInput,
+): Promise<ServiceResult<ResumoDoPipeline>> {
   return comoResultado(async () => {
     const { tenantId } = await requireAuthContext();
     const agora = new Date();
-    const inicioMes = inicioDoMesUTC(agora);
-    const inicioProximoMes = inicioDoProximoMesUTC(agora);
+    const periodo = resolverPeriodo(agora, periodoInput);
 
     return withTenant(tenantId, async (tx) => {
       const abertos = await tx
@@ -869,8 +873,8 @@ export async function obterResumoDoPipeline(): Promise<ServiceResult<ResumoDoPip
         .filter(
           (item) =>
             item.closedAt !== null &&
-            item.closedAt >= inicioMes &&
-            item.closedAt < inicioProximoMes,
+            item.closedAt >= periodo.inicio &&
+            item.closedAt < periodo.fimExclusivo,
         )
         .reduce((soma, item) => soma + item.valueCents, 0);
 

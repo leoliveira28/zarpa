@@ -5,6 +5,7 @@ import { contacts, deals, proposals, sales } from '@/db/schema';
 import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { comoResultado, type ServiceResult } from './errors';
+import { resolverPeriodo, type Periodo, type PeriodoInput } from './periodo';
 
 /**
  * S10 — o resumo do mês que a agente abre para DECIDIR o que fazer, não só para olhar
@@ -36,8 +37,15 @@ import { comoResultado, type ServiceResult } from './errors';
 // Decisões de recorte — documentadas aqui porque são a parte que mais importa revisar
 // ---------------------------------------------------------------------------
 //
+// 0. PERÍODO (§1 de `docs/PROPOSTAS_PRODUTO.md`): `obterResumoDoMes` e
+//    `exportarResumoDoMesCsv` aceitam um período opcional (`{ mes: 'AAAA-MM' }` ou
+//    `{ de, ate }`) validado em `./periodo.ts`. AUSENTE = mês corrente — o comportamento
+//    que a tela já tinha, preservado. As métricas 1, 2 e 3 abaixo passam a usar as
+//    fronteiras do período recebido; a decisão de recorte é a mesma, só muda a janela.
+//
 // 1. "VENDAS DO MÊS" = soma de `sales.valorBrutoCents` das linhas cujo `sales.createdAt`
-//    cai no mês corrente (UTC). `sales` não tem coluna própria de "quando fechou" (ao
+//    cai no período (mês corrente por padrão, UTC). `sales` não tem coluna própria de
+//    "quando fechou" (ao
 //    contrário de `deals.closedAt`) — mas a PRÓPRIA EXISTÊNCIA da linha já significa
 //    "fechou": `converterPropostaEmVenda` só cria `sales` a partir de
 //    `proposals.status = 'accepted'`. `createdAt` é o melhor proxy disponível para "quando
@@ -87,18 +95,6 @@ const DIAS_PARADA_LIMITE = 7;
 // `sales.ts` também tem os seus), em vez de um utilitário de data compartilhado que
 // arrastaria import cruzado entre arquivos de `'use server'`.
 // ---------------------------------------------------------------------------
-
-function inicioDoMesUTC(agora: Date): Date {
-  return new Date(Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth(), 1));
-}
-
-function inicioDoProximoMesUTC(agora: Date): Date {
-  return new Date(Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth() + 1, 1));
-}
-
-function rotuloDoMes(inicioMes: Date): string {
-  return `${inicioMes.getUTCFullYear()}-${String(inicioMes.getUTCMonth() + 1).padStart(2, '0')}`;
-}
 
 function maisRecente(a: Date, b: Date | null): Date {
   if (!b) return a;
@@ -179,8 +175,14 @@ export type ResumoDePropostasParadas = {
 // ---------------------------------------------------------------------------
 
 export type ResumoDoMes = {
-  /** `'AAAA-MM'` do mês corrente (UTC), pronto para rótulo/nome de arquivo. */
+  /**
+   * `'AAAA-MM'` do período (UTC), pronto para rótulo/nome de arquivo. Em período do tipo
+   * mês é o próprio mês; em faixa de datas é o mês da ponta inicial — para o rótulo
+   * completo use `periodo.rotulo`.
+   */
   mes: string;
+  /** O período efetivamente consultado — pontas inclusivas em `AAAA-MM-DD`. */
+  periodo: { de: string; ate: string; rotulo: string };
   vendas: ResumoVendasDoMes;
   comissao: ResumoComissaoDoMes;
   conversao: ConversaoDePropostas;
@@ -197,10 +199,14 @@ export type ResumoDoMes = {
  * ler, mais fácil de depurar um EXPLAIN se um dia precisar). Reavaliar `Promise.all` só se
  * um tenant real crescer muito além desse volume.
  */
-async function calcularResumoDoMes(tx: TenantDb, agora: Date): Promise<ResumoDoMes> {
-  const inicioMes = inicioDoMesUTC(agora);
-  const inicioProximoMes = inicioDoProximoMesUTC(agora);
-  const mes = rotuloDoMes(inicioMes);
+async function calcularResumoDoMes(
+  tx: TenantDb,
+  agora: Date,
+  periodo: Periodo,
+): Promise<ResumoDoMes> {
+  const inicioMes = periodo.inicio;
+  const inicioProximoMes = periodo.fimExclusivo;
+  const mes = periodo.rotulo;
 
   // --- 1 e 2: vendas + comissão do mês, mesma query (mesmo WHERE, mesmas linhas) ---
   const linhasVendas = await tx
@@ -315,15 +321,30 @@ async function calcularResumoDoMes(tx: TenantDb, agora: Date): Promise<ResumoDoM
     totalCents: itensParadas.reduce((soma, item) => soma + item.valueCents, 0),
   };
 
-  return { mes, vendas, comissao, conversao, paradas };
+  return {
+    mes,
+    periodo: { de: periodo.de, ate: periodo.ate, rotulo: periodo.rotulo },
+    vendas,
+    comissao,
+    conversao,
+    paradas,
+  };
 }
 
-/** O resumo do mês corrente, pronto para os cards do dashboard. */
-export async function obterResumoDoMes(): Promise<ServiceResult<ResumoDoMes>> {
+/**
+ * O resumo para os cards do dashboard. Sem argumento = mês corrente (comportamento
+ * anterior, preservado); com `{ mes: '2026-09' }` ou `{ de, ate }`, a janela inteira
+ * (vendas, comissão e conversão — as decisões 1–3 acima) muda junto. `paradas` continua
+ * sem recorte de tempo de propósito (decisão 4 — "parado" é sobre agora).
+ */
+export async function obterResumoDoMes(
+  periodoInput?: PeriodoInput,
+): Promise<ServiceResult<ResumoDoMes>> {
   return comoResultado(async () => {
     const { tenantId } = await requireAuthContext();
     const agora = new Date();
-    return withTenant(tenantId, (tx) => calcularResumoDoMes(tx, agora));
+    const periodo = resolverPeriodo(agora, periodoInput);
+    return withTenant(tenantId, (tx) => calcularResumoDoMes(tx, agora, periodo));
   });
 }
 
@@ -370,16 +391,28 @@ export type ResumoDoMesCsv = {
   conteudo: string;
 };
 
-/** O mesmo resumo de `obterResumoDoMes`, formatado como arquivo CSV para baixar. */
-export async function exportarResumoDoMesCsv(): Promise<ServiceResult<ResumoDoMesCsv>> {
+/**
+ * O mesmo resumo de `obterResumoDoMes`, formatado como arquivo CSV para baixar —
+ * aceitando o mesmo período opcional (§1). Em faixa de datas o nome do arquivo usa
+ * `_a_` no lugar do `..` do rótulo (`resumo-2026-01-01_a_2026-03-31.csv`) — ponto não é
+ * separador seguro em nome de arquivo em toda plataforma.
+ */
+export async function exportarResumoDoMesCsv(
+  periodoInput?: PeriodoInput,
+): Promise<ServiceResult<ResumoDoMesCsv>> {
   return comoResultado(async () => {
     const { tenantId } = await requireAuthContext();
     const agora = new Date();
-    const resumo = await withTenant(tenantId, (tx) => calcularResumoDoMes(tx, agora));
+    const periodo = resolverPeriodo(agora, periodoInput);
+    const resumo = await withTenant(tenantId, (tx) => calcularResumoDoMes(tx, agora, periodo));
+
+    const rotuloArquivo = periodo.rotulo.includes('..')
+      ? `${periodo.de}_a_${periodo.ate}`
+      : periodo.rotulo;
 
     const linhas = [
       linhaCsv(['Métrica', 'Valor']),
-      linhaCsv(['Mês de referência', resumo.mes]),
+      linhaCsv(['Período', resumo.periodo.rotulo]),
       linhaCsv(['Vendas fechadas', String(resumo.vendas.totalVendas)]),
       linhaCsv(['Faturamento bruto (R$)', centavosParaReaisCsv(resumo.vendas.faturamentoBrutoCents)]),
       linhaCsv(['Taxa de serviço cobrada (R$)', centavosParaReaisCsv(resumo.vendas.taxaServicoCents)]),
@@ -398,7 +431,7 @@ export async function exportarResumoDoMesCsv(): Promise<ServiceResult<ResumoDoMe
     ];
 
     return {
-      nomeArquivo: `resumo-${resumo.mes}.csv`,
+      nomeArquivo: `resumo-${rotuloArquivo}.csv`,
       conteudo: BOM_UTF8 + linhas.join('\r\n') + '\r\n',
     };
   });

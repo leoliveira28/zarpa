@@ -20,6 +20,7 @@ export * from './auth';
 export * from './people';
 export * from './pipeline';
 export * from './proposals';
+export * from './itineraries';
 export * from './library';
 export * from './plans';
 export * from './money';

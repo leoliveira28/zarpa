@@ -1,6 +1,6 @@
 'use server';
 
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { proposalOptions, proposals, receivables, sales } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
@@ -9,6 +9,7 @@ import { ServiceError, comoResultado, type ServiceResult } from './errors';
 import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 import { parseDataFlexivel } from './normalize';
+import { resolverPeriodo, type PeriodoInput } from './periodo';
 
 /**
  * S9 — o dinheiro que já fechou: converter proposta aceita em venda, editar
@@ -86,6 +87,13 @@ export type ParcelaResumo = {
 
 export type FiltroVendas = {
   comissaoStatus?: ComissaoStatus;
+  /**
+   * §1 (`docs/PROPOSTAS_PRODUTO.md`): recorte opcional por `{ mes: 'AAAA-MM' }` ou
+   * `{ de, ate }` sobre `sales.createdAt` (o "quando fechou" da venda — ver a decisão 1
+   * em `dashboard.ts`). AUSENTE = sem filtro de data, comportamento atual preservado.
+   * Validação/zod em `./periodo.ts`; período inválido volta como `DADOS_INVALIDOS`.
+   */
+  periodo?: PeriodoInput;
   limite?: number;
 };
 
@@ -280,6 +288,12 @@ export async function listarVendas(filtro: FiltroVendas = {}): Promise<ServiceRe
       const condicoes = filtro.comissaoStatus
         ? [eq(sales.comissaoStatus, filtro.comissaoStatus)]
         : [];
+
+      if (filtro.periodo !== undefined) {
+        const periodo = resolverPeriodo(new Date(), filtro.periodo);
+        const janela = and(gte(sales.createdAt, periodo.inicio), lt(sales.createdAt, periodo.fimExclusivo));
+        if (janela) condicoes.push(janela);
+      }
 
       const linhas = await tx
         .select(COLUNAS_VENDA)
