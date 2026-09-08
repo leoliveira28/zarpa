@@ -5,8 +5,8 @@ import { registrarVisitaProposta, aceitarOpcaoPublica, type PropostaPublica } fr
 import { Badge } from "@/components/ui/Badge";
 import { Money } from "@/components/ui/Money";
 import { ArchPlate, BiplanePlate, Rule } from "@/components/plates";
-import { ChatIcon } from "@/components/app/icons";
-import { CONTENT_FIELDS, KIND_LABEL } from "@/lib/ui/blockContent";
+import { PublicBlockSection } from "@/components/public/PublicBlockSection";
+import { PublicBrandBar } from "@/components/public/PublicBrandBar";
 import { cn } from "@/lib/ui/cn";
 import { formatBRL, formatDayMonth } from "@/lib/ui/format";
 import { APP_NAME } from "@/lib/ui/brand";
@@ -83,12 +83,6 @@ export function PublicProposalScreen({
 
   const { registerOption } = useProposalVisitBeacon(slug, options);
 
-  const generalWhatsapp = brand.whatsappLink
-    ? `${brand.whatsappLink}?text=${encodeURIComponent(
-        `Olá! Tenho uma dúvida sobre a proposta "${proposal.title}".`,
-      )}`
-    : null;
-
   const hasCoverPhoto = Boolean(proposal.coverImageUrl);
   // Maior preço do conjunto: toda opção reserva a mesma largura numérica, e a
   // coluna de preços nasce alinhada em vez de dentar conforme o valor muda de
@@ -99,32 +93,10 @@ export function PublicProposalScreen({
 
   return (
     <main className="enter mx-auto flex w-full max-w-[42rem] flex-col gap-12 px-6 pt-10 pb-20 sm:px-10 sm:pt-16 lg:max-w-[68rem] lg:gap-16 lg:px-12 lg:pt-20">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          {brand.logoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={brand.logoUrl}
-              alt=""
-              className="size-8 shrink-0 rounded-full object-cover"
-            />
-          ) : null}
-          <span className="truncate text-13 font-medium text-muted">
-            {brand.name ?? "Proposta de viagem"}
-          </span>
-        </div>
-        {generalWhatsapp ? (
-          <a
-            href={generalWhatsapp}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex shrink-0 items-center gap-1.5 text-13 font-medium text-muted hover:text-ink"
-          >
-            <ChatIcon className="size-4" />
-            WhatsApp
-          </a>
-        ) : null}
-      </div>
+      <PublicBrandBar
+        brand={brand}
+        whatsappText={`Olá! Tenho uma dúvida sobre a proposta "${proposal.title}".`}
+      />
 
       {hasCoverPhoto ? (
         // eslint-disable-next-line @next/next/no-img-element
@@ -167,7 +139,7 @@ export function PublicProposalScreen({
       {sharedBlocks.length > 0 ? (
         <section className="flex flex-col gap-6 lg:max-w-[44rem]">
           {sharedBlocks.map((block) => (
-            <BlockSection key={block.id} block={block} />
+            <PublicBlockSection key={block.id} block={block} />
           ))}
         </section>
       ) : null}
@@ -329,7 +301,7 @@ function OptionCard({
       {blocks.length > 0 ? (
         <div className="flex flex-col gap-4">
           {blocks.map((block) => (
-            <BlockSection key={block.id} block={block} compact />
+            <PublicBlockSection key={block.id} block={block} compact />
           ))}
         </div>
       ) : null}
@@ -366,65 +338,6 @@ function OptionCard({
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-/* =============================================================================
-   Bloco — hotel, voo, transfer, passeio, cruzeiro, seguro, texto, imagem
-   ========================================================================== */
-
-function BlockSection({
-  block,
-  compact,
-}: {
-  block: PropostaPublica["blocks"][number];
-  compact?: boolean;
-}) {
-  const fields = CONTENT_FIELDS[block.kind as keyof typeof CONTENT_FIELDS] ?? [];
-  const entries = fields
-    .map((field) => ({ label: field.label, value: block.content[field.key] }))
-    .filter((entry): entry is { label: string; value: string } => typeof entry.value === "string" && entry.value.trim() !== "");
-
-  if (block.kind === "image" && block.images.length === 0 && !block.title && !block.body) return null;
-  if (entries.length === 0 && !block.title && !block.body && block.images.length === 0) return null;
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        {block.kind !== "text" && block.kind !== "image" ? (
-          <Badge tone="neutral">{KIND_LABEL[block.kind as keyof typeof KIND_LABEL] ?? block.kind}</Badge>
-        ) : null}
-        {block.title ? (
-          <h4 className={compact ? "text-15 font-semibold text-ink" : "text-17 font-semibold text-ink"}>
-            {block.title}
-          </h4>
-        ) : null}
-      </div>
-
-      {entries.length > 0 ? (
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-1 text-13 sm:grid-cols-2">
-          {entries.map((entry) => (
-            <div key={entry.label} className="flex justify-between gap-3 sm:justify-start">
-              <dt className="text-muted">{entry.label}</dt>
-              <dd className="font-medium text-ink">{entry.value}</dd>
-            </div>
-          ))}
-        </dl>
-      ) : null}
-
-      {block.body ? (
-        <p className="text-15 leading-[1.5] whitespace-pre-line text-ink">{block.body}</p>
-      ) : null}
-
-      {block.images.length > 0 ? (
-        <div className="mt-1 flex gap-2 overflow-x-auto">
-          {block.images.map((url) => (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img key={url} src={url} alt="" className="h-32 shrink-0 rounded-md object-cover" />
-          ))}
-        </div>
-      ) : null}
     </div>
   );
 }

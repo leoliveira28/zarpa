@@ -6,7 +6,9 @@ import { useRouter } from "next/navigation";
 import {
   COLUNAS_DO_FUNIL,
   atualizarNegocio,
+  gerarRoteiro,
   listarPropostas,
+  listarRoteiros,
   moverEstagioDoNegocio,
   obterNegocio,
   type AtividadeDoNegocio,
@@ -14,6 +16,7 @@ import {
   type EstagioDeFunil,
   type NegocioDetalhe,
   type PropostaResumo,
+  type RoteiroResumo,
   type ServiceResult,
 } from "@/server";
 import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
@@ -36,7 +39,7 @@ import { useToast } from "@/components/ui/Toast";
 import { DealStageMenu, LossReasonDialog } from "@/components/app/DealStageMenu";
 import { NovaPropostaSheet } from "@/components/app/NovaPropostaSheet";
 import { ChevronRightIcon, PlusIcon } from "@/components/app/icons";
-import { formatDayMonth, formatTime } from "@/lib/ui/format";
+import { formatDayMonth, formatarFaixaDeDatas, formatTime } from "@/lib/ui/format";
 import { useAutosave } from "@/lib/ui/useAutosave";
 
 /* =============================================================================
@@ -342,6 +345,9 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
 
           <ViagemCard negocio={negocio} dealId={negocio.id} onPatched={patch} />
           <PropostaCard negocio={negocio} />
+          {/* §4 — o roteiro existe só no estágio "ganho": é pós-venda, não
+              argumento de venda. Entre a proposta e a linha do tempo. */}
+          {negocio.stage === "ganho" ? <RoteiroCard negocio={negocio} /> : null}
           <TimelineCard activities={negocio.activities} />
 
           <LossReasonDialog
@@ -778,6 +784,165 @@ function PropostaCard({ negocio }: { negocio: NegocioDetalhe }) {
           router.push(`/propostas/${id}/editar`);
         }}
       />
+    </Card>
+  );
+}
+
+/* =============================================================================
+   Roteiro — §4, pós-venda. O card só existe no estágio "ganho": o roteiro é
+   documento de viagem para o CLIENTE, fotografia da proposta aceita — sem
+   custo, sem comissão, sem preço. A geração é idempotente no servidor
+   (`gerarRoteiro` devolve o existente em vez de duplicar), então o botão não
+   precisa de defesa local contra clique duplo além do `disabled`.
+
+   O link público (`/r/<token>`) aparece truncado no corpo e a ação de copiar
+   mora no rodapé: o destino natural do link é o WhatsApp da agente — copiar é
+   a ação principal, abrir (para conferir antes de mandar) vira texto.
+   ========================================================================== */
+
+function RoteiroCard({ negocio }: { negocio: NegocioDetalhe }) {
+  const toast = useToast();
+  const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
+  const [roteiro, setRoteiro] = React.useState<RoteiroResumo | null>(null);
+  const [loadError, setLoadError] = React.useState<{ mensagem: string; correcao?: string } | null>(null);
+  const [gerarErro, setGerarErro] = React.useState<{ mensagem: string; correcao?: string } | null>(null);
+  const [gerando, setGerando] = React.useState(false);
+  const [copiado, setCopiado] = React.useState(false);
+  const [reloadToken, setReloadToken] = React.useState(0);
+  const reload = React.useCallback(() => setReloadToken((token) => token + 1), []);
+
+  React.useEffect(() => {
+    let active = true;
+    setStatus("loading");
+    void listarRoteiros().then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setStatus("error");
+        setLoadError({ mensagem: result.mensagem, correcao: result.correcao });
+        return;
+      }
+      setRoteiro(result.data.find((r) => r.dealId === negocio.id) ?? null);
+      setStatus("ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, [negocio.id, reloadToken]);
+
+  const url = roteiro ? `${window.location.origin}/r/${roteiro.publicToken}` : null;
+  const datas = roteiro ? formatarFaixaDeDatas(roteiro.departureOn, roteiro.returnOn) : null;
+
+  async function copiarLink(link: string) {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiado(true);
+      window.setTimeout(() => setCopiado(false), 2000);
+    } catch {
+      setGerarErro({
+        mensagem: "Não consegui copiar o link automaticamente.",
+        correcao: "Copie o link exibido acima à mão",
+      });
+    }
+  }
+
+  async function handleGerar() {
+    setGerando(true);
+    setGerarErro(null);
+    const result = await gerarRoteiro(negocio.id);
+    setGerando(false);
+    if (!result.ok) {
+      avisarRecusaDeEscrita(result);
+      setGerarErro({ mensagem: result.mensagem, correcao: result.correcao });
+      return;
+    }
+    setRoteiro(result.data);
+    const link = `${window.location.origin}/r/${result.data.publicToken}`;
+    toast.show({
+      title: "Roteiro gerado",
+      description: "O link público foi criado com a fotografia da proposta aceita.",
+      tone: "ok",
+      action: { label: "Copiar link", onClick: () => void copiarLink(link) },
+    });
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Roteiro</CardTitle>
+      </CardHeader>
+      <CardBody flush={status !== "ready" || (!roteiro && !gerarErro)}>
+        {status === "loading" ? (
+          <div className="flex flex-col gap-4 p-4">
+            <SkeletonRow />
+          </div>
+        ) : status === "error" ? (
+          <div className="flex flex-col items-start gap-3">
+            <FieldError>
+              {loadError?.mensagem ?? "Não consegui carregar o roteiro deste negócio."}
+            </FieldError>
+            <Button variant="secondary" size="sm" onClick={reload}>
+              {loadError?.correcao ?? "Tentar de novo"}
+            </Button>
+          </div>
+        ) : roteiro ? (
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="truncate text-15 font-medium text-ink">{roteiro.title}</span>
+            <span className="truncate text-13 text-muted">
+              {roteiro.clientName}
+              {datas ? ` · ${datas}` : ""}
+            </span>
+            {url ? (
+              <span data-numeric className="mt-1 truncate text-13 tabular-nums text-subtle">
+                {url}
+              </span>
+            ) : null}
+          </div>
+        ) : gerarErro ? (
+          <div className="flex flex-col items-start gap-2">
+            <FieldError>{gerarErro.mensagem}</FieldError>
+            {gerarErro.correcao ? (
+              <p className="text-13 text-muted">{gerarErro.correcao}</p>
+            ) : null}
+          </div>
+        ) : (
+          <EmptyState
+            compact
+            title="Nenhum roteiro gerado"
+            description="Gere o roteiro da viagem vendida: ele fotografa a proposta aceita em um link público para o cliente — sem preço, sem custo, sem comissão."
+          />
+        )}
+      </CardBody>
+      <CardFooter
+        action={
+          roteiro ? (
+            <Button
+              variant="primary"
+              size="sm"
+              onPointerDown={() => url && void copiarLink(url)}
+            >
+              {copiado ? "Copiado" : "Copiar link"}
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              size="sm"
+              onPointerDown={() => void handleGerar()}
+              disabled={gerando || status === "error"}
+            >
+              {gerando ? "Gerando..." : "Gerar roteiro"}
+            </Button>
+          )
+        }
+        secondary={
+          roteiro && url ? (
+            <CardAction onClick={() => window.open(url, "_blank", "noopener,noreferrer")}>
+              Abrir
+            </CardAction>
+          ) : undefined
+        }
+      >
+        {roteiro ? "Link público — mande por WhatsApp." : undefined}
+      </CardFooter>
     </Card>
   );
 }

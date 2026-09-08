@@ -1,5 +1,100 @@
 # Nina — status
 
+## S14 — período na URL, resumo do período, em viagem e roteiro público
+
+Os quatro fluxos do §S14 (handoff rafa-para-nina), no registro que já tinha —
+nenhum padrão visual novo: seletor é chip de filtro, relatório é tile e tabela,
+em viagem é linha de lista, roteiro é a linguagem editorial da proposta
+reaproveitada. `tsc --noEmit` verde, `next build` verde, contraste WCAG verde,
+guardas de direção 6/6 (`tests/design/guards.test.ts`), design-report sem
+desvio novo. O lint acumula os erros `react-hooks/set-state-in-effect`
+pré-existentes na main (11 no HEAD limpo; os effects novos seguem o MESMO
+padrão da casa de `setStatus` dentro de `.then` — não inventei variante).
+
+### §1 — O período mora na URL, não na memória
+
+`src/lib/ui/periodo.ts` é o codec único: parse/encode/validação do `?periodo=`
+e a chave de atalho. Decisões:
+
+- **"Este mês" não escreve parâmetro.** É o estado ausente, que o servidor já
+  entende como mês corrente. A URL que a agente abre quinze vezes por dia
+  continua limpa; o link de um recorte antigo carrega o recorte dentro dele.
+- **Mês civil exato codifica na forma curta** (`2026-09`), intervalo costurado
+  vai na faixa (`2026-01-01..2026-12-31`). Link curto, rótulo limpo.
+- **Param malformado nunca viaja ao servidor.** `PeriodoInvalidoCard` (fundo
+  warn) diz o que aconteceu e tem o botão "Limpar período" ao lado — e a leitura
+  segue no mês corrente, com o rótulo do backend dizendo qual é. O rótulo exibido
+  é sempre o de `ResumoDoMes.periodo`/`ResumoDoPeriodo.periodo`, humanizado
+  (`formatarRotuloPeriodo`: `set 2026`, `1 jan – 31 mar 2026`) — a tela nunca
+  inventa o recorte que está mostrando.
+- **"Escolher datas" abre painel inline, não Sheet.** É ajuste de leitura, não
+  tarefa; camada flutuante para duas datas é orçamento de modal gasto à toa.
+  O painel abre preenchido com o que está em vigor, nunca vazio.
+- Seletor em **/hoje, /vendas, /financeiro e /relatorios**, sempre no mesmo
+  lugar (logo abaixo do cabeçalho/tabs, `-mt-3` no hub). Trocar de período dá
+  `router.push(..., { scroll: false })` — não joga a agente de volta ao topo.
+- Rótulos que dependem do recorte mudam de "mês" para "período" quando o
+  parâmetro existe ("Fechado no mês" → "Fechado no período", "Este mês" →
+  "No período").
+
+### §2 — /relatorios, a terceira tab do hub
+
+`MoneyHubTabs` agora tem Vendas · Recebíveis · Resumo do período (~314px em
+390px, cabe). A tela é o registro silencioso à risca: quatro tiles de vendas,
+quatro de comissão (atrasada com tom warn e dot de estado, nunca azul), duas
+tabelas de duas linhas de hierarquia. Nenhuma pizza, nenhum sparkline — e
+`origem: null`/`motivo: null` viram linhas "Sem origem"/"Sem motivo
+registrado", porque o não classificado é a maior categoria de base nova e
+escondê-lo é maquiar número. `reserveFor` com os mesmos tetos calibrados dos
+MonthCards do /hoje (50M/5M/10M/20M) e máximo computado nas tabelas.
+
+### §3 — "Em viagem" no /hoje, entre aberturas e propostas paradas
+
+Três estados por linha, e o CTA existe num só: "Retornou há N dias" pede
+depoimento com mensagem pronta (`mensagemDepoimento`, `waMeLink` em
+`src/lib/ui/whatsapp.ts`). **Recorte de segurança que assumi sozinha:** o
+contrato dizia "contactWhatsapp vem pronto para o CTA", mas ele é texto cru
+como foi digitado — então o `waMeLink` sanitiza (10–15 dígitos) e devolve null
+para número duvidoso. Sem WhatsApp válido, a linha fica sem botão: link
+quebrado abre conversa com estranho, pior que ausência. "Viaja em ≤2 dias"
+usa `text-warn` (estado, não marca). Vazio = uma linha `compact`.
+
+### §4 — /r/[slug] e o "Gerar roteiro" no negócio ganho
+
+- Extraí `PublicBrandBar` e `PublicBlockSection` para `src/components/public/`
+  (server-compatible, sem `"use client"`) e a proposta pública agora os consome
+  — proposta e roteiro compartilham o MESMO vocabulário de bloco e a MESMA
+  barra de marca. Divergência entre as duas páginas públicas era o tipo de
+  coisa que ninguém decide: acontece.
+- `/r/[slug]` (`page.tsx` + `RoteiroPublicoScreen` + `not-found.tsx`) segue a
+  arquitetura da `/p/[slug]`: `cache()` na leitura, `robots noindex`, 404 que
+  não distingue token errado de roteiro inexistente, `FernPlate` discreta.
+  Capa tipográfica com `BiplanePlate` como marca d'água (a única prancha —
+  sem `ArchPlate` aqui), blocos via `PublicBlockSection`, rodapé "Feito com".
+- **Sem preço, por decisão:** a proposta é argumento de venda; o roteiro é
+  documento de viagem que o cliente abre na semana do embarque. Reaparecer
+  preço transformaria documento em nova negociação — e o snapshot público nem
+  traz o dado.
+- `RoteiroCard` no `/funil/[id]`, renderizado só em `stage === "ganho"`
+  (pós-venda, não argumento), entre PropostaCard e TimelineCard. Sem roteiro:
+  EmptyState compact + "Gerar roteiro" no rodapé. Com roteiro: título, cliente,
+  datas, link truncado; rodapé com UMA ação em destaque ("Copiar link", vira
+  "Copiado" por 2s) e "Abrir" como texto — a proporção capitel da casa. Toast
+  de geração traz a action "Copiar link" pronta. Erro de geração renderiza
+  inline com a `correcao` do servidor como hint (as recusas CONFLITO do Rafa
+  já chegam falando o que fazer).
+
+### Arquivos
+
+Novos: `src/lib/ui/periodo.ts`, `src/lib/ui/whatsapp.ts`,
+`src/components/app/PeriodoSeletor.tsx`, `src/components/public/{PublicBrandBar,PublicBlockSection}.tsx`,
+`src/app/(app)/relatorios/{page,RelatoriosScreen}.tsx`,
+`src/app/r/[slug]/{page,RoteiroPublicoScreen,not-found}.tsx`.
+Editados: `TodayScreen`/`hoje/page`, `VendasScreen`/`vendas/page`,
+`FinanceiroScreen`/`financeiro/page`, `MoneyHubTabs`, `NegocioScreen`
+(RoteiroCard), `PublicProposalScreen` (consome os componentes públicos),
+`src/lib/ui/format.ts` (`formatarFaixaDeDatas`).
+
 ## S13b — onboarding de primeira hora: os vazios guiam o caminho da primeira venda
 
 O problema do bater-o-molde não era falta de EmptyState — cada tela tinha o
