@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { RelatoriosScreen } from "./RelatoriosScreen";
 
-export const metadata: Metadata = { title: "Resumo do período" };
+export const metadata: Metadata = { title: "Relatórios" };
 
 export default async function RelatoriosPage({
   searchParams,

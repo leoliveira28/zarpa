@@ -18,7 +18,7 @@ import { cn } from "@/lib/ui/cn";
 const TABS = [
   { href: "/vendas", label: "Vendas" },
   { href: "/financeiro", label: "Recebíveis" },
-  { href: "/relatorios", label: "Resumo do período" },
+  { href: "/relatorios", label: "Relatórios" },
 ] as const;
 
 export function MoneyHubTabs() {
