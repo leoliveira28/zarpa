@@ -1,11 +1,12 @@
 "use client";
 
 import * as React from "react";
-import type { BlocoEdicao, OpcaoEdicao, PropostaEdicao } from "@/server";
+import type { BlocoEdicao, BlocoKind, OpcaoEdicao, PropostaEdicao } from "@/server";
 import { Badge } from "@/components/ui/Badge";
 import { Money } from "@/components/ui/Money";
 import { ArchPlate, Rule } from "@/components/plates";
 import { formatDayMonth } from "@/lib/ui/format";
+import { CONTENT_FIELDS } from "@/lib/ui/blockContent";
 
 /* =============================================================================
    Prévia — o registro editorial dentro do miolo silencioso
@@ -125,7 +126,17 @@ function OptionPreview({
 }
 
 function BlockPreview({ block, compact }: { block: BlocoEdicao; compact?: boolean }) {
-  const contentEntries = Object.entries(block.content).filter(([, v]) => typeof v === "string" && v.trim());
+  // Mesmo vocabulário, ordem e formato da proposta pública de verdade
+  // (`CONTENT_FIELDS`, em blockContent.ts). Iterar o objeto cru era renderizar
+  // a ordem de chaves do jsonb do Postgres (tamanho, depois alfabético) com
+  // rótulo em inglês — o "to sdu / from sjp / airline gol" do achado do PO.
+  const fields = CONTENT_FIELDS[block.kind as BlocoKind] ?? [];
+  const entries = fields
+    .map((field) => ({ label: field.label, value: block.content[field.key] }))
+    .filter(
+      (entry): entry is { label: string; value: string } =>
+        typeof entry.value === "string" && entry.value.trim() !== "",
+    );
 
   if (block.kind === "image" && block.images.length === 0 && !block.title && !block.body) return null;
 
@@ -136,12 +147,12 @@ function BlockPreview({ block, compact }: { block: BlocoEdicao; compact?: boolea
           {block.title}
         </h4>
       ) : null}
-      {contentEntries.length > 0 ? (
-        <dl className="flex flex-wrap gap-x-4 gap-y-1 text-13 text-muted">
-          {contentEntries.map(([key, value]) => (
-            <div key={key} className="flex gap-1">
-              <dt className="sr-only">{key}</dt>
-              <dd>{String(value)}</dd>
+      {entries.length > 0 ? (
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-1 text-13 sm:grid-cols-2">
+          {entries.map((entry) => (
+            <div key={entry.label} className="flex justify-between gap-3 sm:justify-start">
+              <dt className="text-muted">{entry.label}</dt>
+              <dd className="font-medium text-ink">{entry.value}</dd>
             </div>
           ))}
         </dl>

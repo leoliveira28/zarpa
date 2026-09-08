@@ -354,6 +354,11 @@ function BlockCard({
     if (next.title !== undefined) setTitle(next.title);
     if (next.body !== undefined) setBody(next.body);
     if (next.content !== undefined) setContent(next.content);
+    // Patch local IMEDIATO — o preview lê o state do pai e reflete a cada
+    // tecla; a rede é papel do autosave (debounce 700ms). Sem isto, editar um
+    // bloco só aparecia no preview depois do round-trip do servidor (achado
+    // do PO: "tem que atualizar a página?? precisa ser em tempo real").
+    onUpdated({ ...block, title: nextTitle, body: nextBody, content: nextContent });
     autosave.schedule({ title: nextTitle, body: nextBody, content: nextContent });
   }
 

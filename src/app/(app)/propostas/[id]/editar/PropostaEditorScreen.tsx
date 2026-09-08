@@ -496,7 +496,14 @@ function MetaCard({
         <div className="flex min-w-0 flex-1 items-baseline justify-between gap-3">
           <input
             value={title}
-            onChange={(event) => setTitle(event.target.value)}
+            onChange={(event) => {
+              // O preview lê o state do pai — patch local IMEDIATO a cada
+              // tecla; a rede é papel do autosave (commit no blur). O que o
+              // cliente vai ler não pode esperar 800ms de debounce (achado do
+              // PO: "pra atualizar o preview tem que atualizar a página?").
+              setTitle(event.target.value);
+              onPatched({ title: event.target.value });
+            }}
             onBlur={() => {
               if (title.trim() === titleSavedRef.current) return;
               titleSavedRef.current = title.trim();
@@ -518,7 +525,10 @@ function MetaCard({
             <Input
               type="date"
               value={validUntil}
-              onChange={(event) => setValidUntil(event.target.value)}
+              onChange={(event) => {
+                setValidUntil(event.target.value);
+                onPatched({ validUntil: event.target.value || null });
+              }}
               onBlur={() => void validAutosave.commit(validUntil)}
             />
             <FieldHint>Depois dessa data a proposta pública avisa que os valores podem ter mudado.</FieldHint>
@@ -540,6 +550,7 @@ function MetaCard({
             value={summary}
             onChange={(event) => {
               setSummary(event.target.value);
+              onPatched({ summary: event.target.value });
               summaryAutosave.schedule(event.target.value);
             }}
             onBlur={() => void summaryAutosave.commit(summary)}
@@ -557,6 +568,7 @@ function MetaCard({
             value={terms}
             onChange={(event) => {
               setTerms(event.target.value);
+              onPatched({ terms: event.target.value });
               termsAutosave.schedule(event.target.value);
             }}
             onBlur={() => void termsAutosave.commit(terms)}
@@ -705,6 +717,10 @@ function OptionRow({
 }) {
   const toast = useToast();
   const [name, setName] = React.useState(option.name);
+  // Último valor PERSISTIDO do nome — e não `option.name`, que passa a mudar
+  // a cada tecla quando o patch local alimenta o preview (mesma razão do
+  // titleSavedRef do MetaCard).
+  const nameSavedRef = React.useRef(option.name);
   const nameAutosave = useAutosave(async (value: string) => {
     const result = await atualizarOpcao(option.id, { name: value });
     if (result.ok) onUpdated(result.data);
@@ -766,9 +782,13 @@ function OptionRow({
           <Input
             size="sm"
             value={name}
-            onChange={(event) => setName(event.target.value)}
+            onChange={(event) => {
+              setName(event.target.value);
+              onUpdated({ ...option, name: event.target.value });
+            }}
             onBlur={() => {
-              if (name.trim() === option.name) return;
+              if (name.trim() === nameSavedRef.current) return;
+              nameSavedRef.current = name.trim();
               void nameAutosave.commit(name.trim());
             }}
             className="max-w-[14rem] font-medium"
