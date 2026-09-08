@@ -9,6 +9,7 @@ import {
   marcarParcelaPaga,
   type ComissaoStatus,
   type ParcelaResumo,
+  type PeriodoInput,
   type VendaResumo,
 } from "@/server";
 import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
@@ -28,7 +29,12 @@ import {
 import { SkeletonRow } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { MoneyHubTabs } from "@/components/app/MoneyHubTabs";
+import {
+  PeriodoInvalidoCard,
+  PeriodoSeletor,
+} from "@/components/app/PeriodoSeletor";
 import { cn } from "@/lib/ui/cn";
+import { parseParamPeriodo } from "@/lib/ui/periodo";
 import {
   COMISSAO_STATUS_LABEL,
   COMISSAO_STATUS_OPTIONS,
@@ -61,7 +67,7 @@ type Status = "loading" | "ready" | "error";
 
 type ParcelaComVenda = ParcelaResumo & { venda: VendaResumo };
 
-export function FinanceiroScreen() {
+export function FinanceiroScreen({ periodoParam }: { periodoParam?: string }) {
   const [status, setStatus] = React.useState<Status>("loading");
   const [vendas, setVendas] = React.useState<VendaResumo[]>([]);
   const [parcelas, setParcelas] = React.useState<ParcelaComVenda[]>([]);
@@ -69,11 +75,18 @@ export function FinanceiroScreen() {
   const [reloadToken, setReloadToken] = React.useState(0);
   const retry = React.useCallback(() => setReloadToken((token) => token + 1), []);
 
+  // O recorte de leitura mora na URL (`?periodo=...`) — o §1. As duas seções
+  // ("A receber" e "Comissão") derivam da MESMA lista de vendas, então o
+  // período entra uma vez aqui e recorta as duas juntas.
+  const periodo = React.useMemo(() => parseParamPeriodo(periodoParam), [periodoParam]);
+  const periodoInput: PeriodoInput | undefined = periodo.ok ? periodo.input : undefined;
+  const periodoKey = periodoParam ?? "";
+
   React.useEffect(() => {
     let active = true;
     setStatus((current) => (current === "ready" ? current : "loading"));
 
-    void listarVendas({ limite: 200 }).then(async (result) => {
+    void listarVendas({ limite: 200, periodo: periodoInput }).then(async (result) => {
       if (!active) return;
       if (!result.ok) {
         setStatus("error");
@@ -97,7 +110,8 @@ export function FinanceiroScreen() {
     return () => {
       active = false;
     };
-  }, [reloadToken]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `periodoInput` é derivado de `periodoKey`
+  }, [periodoKey, reloadToken]);
 
   function patchVenda(id: string, update: Partial<VendaResumo>) {
     setVendas((current) => current.map((v) => (v.id === id ? { ...v, ...update } : v)));
@@ -122,6 +136,15 @@ export function FinanceiroScreen() {
         <MoneyHubTabs />
       </header>
 
+      {/* O recorte de leitura — §1, mesmo seletor do /hoje e das outras tabs
+          do hub. Param inválido: aviso com correção, e a leitura segue no mês
+          corrente. */}
+      {periodo.ok ? (
+        <PeriodoSeletor param={periodoParam} className="-mt-3" />
+      ) : (
+        <PeriodoInvalidoCard />
+      )}
+
       {status === "loading" ? (
         <Card className="flex flex-col divide-y divide-line-subtle p-1">
           {[0, 1, 2].map((row) => (
@@ -139,8 +162,16 @@ export function FinanceiroScreen() {
         </Card>
       ) : (
         <>
-          <RecebiveisSection parcelas={parcelas} onUpdated={patchParcela} />
-          <ComissaoSection vendas={vendas} onPatched={patchVenda} />
+          <RecebiveisSection
+            parcelas={parcelas}
+            onUpdated={patchParcela}
+            periodoAtivo={periodoInput !== undefined}
+          />
+          <ComissaoSection
+            vendas={vendas}
+            onPatched={patchVenda}
+            periodoAtivo={periodoInput !== undefined}
+          />
         </>
       )}
     </div>
@@ -154,9 +185,11 @@ export function FinanceiroScreen() {
 function RecebiveisSection({
   parcelas,
   onUpdated,
+  periodoAtivo,
 }: {
   parcelas: ParcelaComVenda[];
   onUpdated: (parcela: ParcelaResumo) => void;
+  periodoAtivo: boolean;
 }) {
   const toast = useToast();
   const [showSettled, setShowSettled] = React.useState(false);
@@ -197,8 +230,12 @@ function RecebiveisSection({
       {open.length === 0 ? (
         <EmptyState
           compact
-          title="Nada a receber em aberto"
-          description="Parcelas geradas em cada venda aparecem aqui, atraso primeiro."
+          title={periodoAtivo ? "Nada a receber neste período" : "Nada a receber em aberto"}
+          description={
+            periodoAtivo
+              ? "Parcelas em aberto das vendas deste período. Troque o período acima para olhar outra janela."
+              : "Parcelas geradas em cada venda aparecem aqui, atraso primeiro."
+          }
         />
       ) : (
         <Card className="flex flex-col p-1">
@@ -285,9 +322,11 @@ function RecebivelRow({
 function ComissaoSection({
   vendas,
   onPatched,
+  periodoAtivo,
 }: {
   vendas: VendaResumo[];
   onPatched: (id: string, update: Partial<VendaResumo>) => void;
+  periodoAtivo: boolean;
 }) {
   const totals = COMISSAO_STATUS_OPTIONS.map((option) => ({
     status: option,
@@ -308,8 +347,12 @@ function ComissaoSection({
       {vendas.length === 0 ? (
         <EmptyState
           compact
-          title="Nenhuma comissão para conferir"
-          description="Assim que uma venda for gerada a partir de uma proposta aceita, a comissão prevista aparece aqui."
+          title={periodoAtivo ? "Nenhuma comissão neste período" : "Nenhuma comissão para conferir"}
+          description={
+            periodoAtivo
+              ? "Troque o período acima para olhar outra janela."
+              : "Assim que uma venda for gerada a partir de uma proposta aceita, a comissão prevista aparece aqui."
+          }
         />
       ) : (
         <>

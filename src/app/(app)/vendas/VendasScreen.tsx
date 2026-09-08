@@ -3,7 +3,12 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { listarVendas, type ComissaoStatus, type VendaResumo } from "@/server";
+import {
+  listarVendas,
+  type ComissaoStatus,
+  type PeriodoInput,
+  type VendaResumo,
+} from "@/server";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -12,8 +17,13 @@ import { Money } from "@/components/ui/Money";
 import { Rule } from "@/components/plates";
 import { SkeletonRow } from "@/components/ui/Skeleton";
 import { MoneyHubTabs } from "@/components/app/MoneyHubTabs";
+import {
+  PeriodoInvalidoCard,
+  PeriodoSeletor,
+} from "@/components/app/PeriodoSeletor";
 import { cn } from "@/lib/ui/cn";
 import { formatDayMonth } from "@/lib/ui/format";
+import { parseParamPeriodo } from "@/lib/ui/periodo";
 import {
   COMISSAO_STATUS_LABEL,
   COMISSAO_STATUS_OPTIONS,
@@ -40,7 +50,7 @@ import {
 type Status = "loading" | "ready" | "error";
 type Filtro = ComissaoStatus | "todas";
 
-export function VendasScreen() {
+export function VendasScreen({ periodoParam }: { periodoParam?: string }) {
   const router = useRouter();
   const [filtro, setFiltro] = React.useState<Filtro>("todas");
   const [status, setStatus] = React.useState<Status>("loading");
@@ -49,10 +59,17 @@ export function VendasScreen() {
   const [reloadToken, setReloadToken] = React.useState(0);
   const retry = React.useCallback(() => setReloadToken((token) => token + 1), []);
 
+  // O recorte de leitura mora na URL (`?periodo=...`) — o §1. A lista segue
+  // o período E o filtro de comissão juntos (`FiltroVendas` aceita os dois).
+  const periodo = React.useMemo(() => parseParamPeriodo(periodoParam), [periodoParam]);
+  const periodoInput: PeriodoInput | undefined = periodo.ok ? periodo.input : undefined;
+  const periodoKey = periodoParam ?? "";
+
   React.useEffect(() => {
     let active = true;
     setStatus((current) => (current === "ready" ? current : "loading"));
-    void listarVendas(filtro === "todas" ? {} : { comissaoStatus: filtro }).then((result) => {
+    const filtroBase = filtro === "todas" ? {} : { comissaoStatus: filtro };
+    void listarVendas({ ...filtroBase, periodo: periodoInput }).then((result) => {
       if (!active) return;
       if (!result.ok) {
         setStatus("error");
@@ -65,7 +82,8 @@ export function VendasScreen() {
     return () => {
       active = false;
     };
-  }, [filtro, reloadToken]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `periodoInput` é derivado de `periodoKey`
+  }, [filtro, periodoKey, reloadToken]);
 
   // Molde de largura comum às duas colunas numéricas: sem isto, cada linha
   // reserva a própria largura e a coluna perde o alinhamento vertical.
@@ -86,6 +104,15 @@ export function VendasScreen() {
         </div>
         <MoneyHubTabs />
       </header>
+
+      {/* O recorte de leitura — §1, mesmo seletor do /hoje e das outras tabs
+          do hub. Param inválido: aviso com correção, e a lista segue no mês
+          corrente. */}
+      {periodo.ok ? (
+        <PeriodoSeletor param={periodoParam} className="-mt-3" />
+      ) : (
+        <PeriodoInvalidoCard />
+      )}
 
       <div role="group" aria-label="Filtrar por status da comissão" className="flex flex-wrap gap-1.5">
         <FiltroChip active={filtro === "todas"} onClick={() => setFiltro("todas")}>
@@ -116,11 +143,19 @@ export function VendasScreen() {
       ) : vendas.length === 0 ? (
         <EmptyState
           plate
-          title={filtro === "todas" ? "Nenhuma venda ainda" : "Nenhuma venda com esse status"}
+          title={
+            periodoInput
+              ? "Nenhuma venda neste período"
+              : filtro === "todas"
+                ? "Nenhuma venda ainda"
+                : "Nenhuma venda com esse status"
+          }
           description={
-            filtro === "todas"
-              ? "Uma venda nasce quando o cliente aceita uma proposta: abra a proposta aceita e gere a venda por lá — fornecedor, valor, custo e comissão vêm fotografados da opção aceita."
-              : "Mude o filtro ou espere a conferência de comissão avançar."
+            periodoInput
+              ? "Troque o período acima para olhar outra janela — ou gere uma venda a partir de uma proposta aceita."
+              : filtro === "todas"
+                ? "Uma venda nasce quando o cliente aceita uma proposta: abra a proposta aceita e gere a venda por lá — fornecedor, valor, custo e comissão vêm fotografados da opção aceita."
+                : "Mude o filtro ou espere a conferência de comissão avançar."
           }
           preview={
             <Card className="flex items-center justify-between gap-3 p-3">

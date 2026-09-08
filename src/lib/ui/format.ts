@@ -170,6 +170,26 @@ export function formatRelativeShort(date: Date, now: Date = new Date()): string 
   return days === 1 ? "há 1 dia" : `há ${days} dias`;
 }
 
+/**
+ * Faixa de datas `AAAA-MM-DD` em uma linha — "12 mar – 20 mar 2027". As datas
+ * são lidas no fuso LOCAL (`T00:00:00` sem Z), como `formatDayMonth` já faz
+ * para `venceEm`/`departureOn` vindos do banco. Uma ponta só mostra a ponta;
+ * nenhuma mostra `null`.
+ */
+export function formatarFaixaDeDatas(
+  de: string | null | undefined,
+  ate: string | null | undefined,
+): string | null {
+  if (de && ate) {
+    return `${formatDayMonth(new Date(`${de}T00:00:00`))} – ${formatDayMonth(
+      new Date(`${ate}T00:00:00`),
+    )}`;
+  }
+  if (de) return formatDayMonth(new Date(`${de}T00:00:00`));
+  if (ate) return formatDayMonth(new Date(`${ate}T00:00:00`));
+  return null;
+}
+
 /** Iniciais para avatar textual — no máximo duas letras. */
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);

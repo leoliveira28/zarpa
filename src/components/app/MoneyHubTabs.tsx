@@ -6,18 +6,19 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/ui/cn";
 
 /* =============================================================================
-   MoneyHubTabs — o segmented control que liga /vendas e /financeiro
+   MoneyHubTabs — o segmented control que liga /vendas, /financeiro e /relatorios
    -----------------------------------------------------------------------------
    Mesma gramática visual do `ViewToggle` do construtor de proposta
-   (editar/prévia): duas rotas de verdade, cada uma com seu Server Action
-   próprio, que a agente enxerga como UMA pergunta ("fechei, me pagaram?").
-   Ver a nota em `AppShell.tsx` (`NavItem.activeMatch`) sobre por que isso
-   não virou um sexto ícone na barra inferior.
+   (editar/prévia): três rotas de verdade, cada uma com seu Server Action
+   próprio, que a agente enxerga como UMA pergunta ("fechei, me pagaram? —
+   e de onde veio?"). Ver a nota em `AppShell.tsx` (`NavItem.activeMatch`)
+   sobre por que isso não virou um sexto ícone na barra inferior.
    ========================================================================== */
 
 const TABS = [
   { href: "/vendas", label: "Vendas" },
   { href: "/financeiro", label: "Recebíveis" },
+  { href: "/relatorios", label: "Resumo do período" },
 ] as const;
 
 export function MoneyHubTabs() {

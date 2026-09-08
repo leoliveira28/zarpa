@@ -3,6 +3,11 @@ import { FinanceiroScreen } from "./FinanceiroScreen";
 
 export const metadata: Metadata = { title: "Financeiro" };
 
-export default function FinanceiroPage() {
-  return <FinanceiroScreen />;
+export default async function FinanceiroPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ periodo?: string }>;
+}) {
+  const sp = await searchParams;
+  return <FinanceiroScreen periodoParam={sp.periodo} />;
 }
