@@ -10,6 +10,7 @@ import {
   exportarResumoDoMesCsv,
   listarAberturasRecentes,
   listarContatos,
+  listarEmViagem,
   listarNegocios,
   listarProximasTarefas,
   listarTarefasDeHoje,
@@ -17,16 +18,25 @@ import {
   obterResumoDoPipeline,
   type AberturaProposta,
   type ContatoResumo,
+  type EmViagemGrupos,
   type PropostaParada,
   type ResumoDoMes,
   type ResumoDoPipeline,
   type TarefaDeHoje,
+  type ViagemEmCurso,
 } from "@/server";
 import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { cn } from "@/lib/ui/cn";
 import { useTransitionPreset } from "@/lib/ui/motion";
 import { useDeferredDelete } from "@/lib/ui/useDeferredDelete";
-import { formatDayMonth, formatRelativeShort, formatTime } from "@/lib/ui/format";
+import {
+  formatarFaixaDeDatas,
+  formatDayMonth,
+  formatRelativeShort,
+  formatTime,
+} from "@/lib/ui/format";
+import { formatarRotuloPeriodo, parseParamPeriodo } from "@/lib/ui/periodo";
+import { mensagemDepoimento, waMeLink } from "@/lib/ui/whatsapp";
 import { useSession } from "@/lib/auth/client";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -49,6 +59,10 @@ import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { NovoNegocioSheet } from "@/components/app/NovoNegocioSheet";
 import {
+  PeriodoInvalidoCard,
+  PeriodoSeletor,
+} from "@/components/app/PeriodoSeletor";
+import {
   CakeIcon,
   ChatIcon,
   ChevronRightIcon,
@@ -58,6 +72,7 @@ import {
   OpenedIcon,
   PassportIcon,
   PlusIcon,
+  TodayIcon,
 } from "@/components/app/icons";
 
 /* =============================================================================
@@ -95,31 +110,20 @@ import {
 
 type Status = "loading" | "ready" | "error";
 
-const MONTHS_SHORT = [
-  "jan",
-  "fev",
-  "mar",
-  "abr",
-  "mai",
-  "jun",
-  "jul",
-  "ago",
-  "set",
-  "out",
-  "nov",
-  "dez",
-];
-
-/** `"2026-09"` → `"set 2026"`. Para o rótulo do mês no `SectionHeading`. */
-function formatMonthYear(mes: string): string {
-  const [year, month] = mes.split("-");
-  return `${MONTHS_SHORT[Number(month) - 1]} ${year}`;
-}
-
-export function TodayScreen() {
+export function TodayScreen({ periodoParam }: { periodoParam?: string }) {
   const router = useRouter();
   const toast = useToast();
   const transition = useTransitionPreset();
+
+  // O recorte de leitura mora na URL (`?periodo=...`) — link compartilhável,
+  // Voltar restaura. A página (server) lê o searchParams e passa para cá; o
+  // parâmetro cru é a chave dos efeitos: trocou a URL, os dados do período
+  // recarregam. Param inválido mostra o aviso com correção e lê o mês
+  // corrente por baixo — o rótulo devolvido pelo backend diz qual é.
+  const periodo = React.useMemo(() => parseParamPeriodo(periodoParam), [periodoParam]);
+  const periodoInput = periodo.ok ? periodo.input : undefined;
+  const periodoKey = periodoParam ?? "";
+  const periodoAtivo = periodoInput !== undefined;
 
   // O nome vem da sessão — nunca de uma constante. Uma agente que acabou de
   // criar a conta e lê o nome de outra pessoa na primeira tela desconfia do
@@ -244,7 +248,7 @@ export function TodayScreen() {
   React.useEffect(() => {
     let active = true;
     setPipelineStatus((current) => (current === "ready" ? current : "loading"));
-    void obterResumoDoPipeline().then((result) => {
+    void obterResumoDoPipeline(periodoInput).then((result) => {
       if (!active) return;
       if (!result.ok) {
         setPipelineStatus("error");
@@ -257,7 +261,8 @@ export function TodayScreen() {
     return () => {
       active = false;
     };
-  }, [pipelineReload]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `periodoInput` é derivado de `periodoKey`
+  }, [periodoKey, pipelineReload]);
 
   // O mês — uma chamada só (`obterResumoDoMes`) alimenta duas seções: a lista
   // inline de "Propostas paradas" (`month.paradas.itens`) e os 4 cards de
@@ -278,7 +283,7 @@ export function TodayScreen() {
   React.useEffect(() => {
     let active = true;
     setMonthStatus((current) => (current === "ready" ? current : "loading"));
-    void obterResumoDoMes().then((result) => {
+    void obterResumoDoMes(periodoInput).then((result) => {
       if (!active) return;
       if (!result.ok) {
         setMonthStatus("error");
@@ -291,7 +296,8 @@ export function TodayScreen() {
     return () => {
       active = false;
     };
-  }, [monthReload]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `periodoInput` é derivado de `periodoKey`
+  }, [periodoKey, monthReload]);
 
   // Exportar CSV — blob no cliente, sem rota de servidor. O `conteudo` já vem
   // com BOM UTF-8 e `;` como delimitador (Excel pt-BR abre direto); só montar o
@@ -301,7 +307,7 @@ export function TodayScreen() {
 
   async function handleExport() {
     setExporting(true);
-    const result = await exportarResumoDoMesCsv();
+    const result = await exportarResumoDoMesCsv(periodoInput);
     setExporting(false);
     if (!result.ok) {
       toast.show({
@@ -383,7 +389,17 @@ export function TodayScreen() {
         status={pipelineStatus}
         error={pipelineError}
         onRetry={retryPipeline}
+        periodoAtivo={periodoAtivo}
       />
+
+      {/* O recorte de leitura — §1. Um seletor por tela, no topo; o rótulo do
+          que está sendo visto mora na seção de números (abaixo), que lê
+          `periodo.rotulo` da resposta do backend. */}
+      {periodo.ok ? (
+        <PeriodoSeletor param={periodoParam} className="-mt-4" />
+      ) : (
+        <PeriodoInvalidoCard className="-mt-4" />
+      )}
 
       {/* A primeira hora — o único elo que faltava guiar. Conta nova, a tela
           abre com UM caminho (cliente → negócio → proposta → WhatsApp) e o
@@ -645,6 +661,11 @@ export function TodayScreen() {
         )}
       </section>
 
+      {/* Em viagem — §3. O pós-venda que sustenta a recompra: a última chamada
+          antes de embarcar, a viagem em curso (presença, sem CTA) e quem já
+          voltou — o único CTA é pedir depoimento. */}
+      <EmViagemSection />
+
       <section aria-labelledby="hoje-paradas">
         <SectionHeading
           action={
@@ -698,9 +719,12 @@ export function TodayScreen() {
         <SectionHeading
           action={
             <div className="flex items-center gap-3">
+              {/* O rótulo do recorte vem do BACKEND (`periodo.rotulo`) — a tela
+                  nunca duvida de qual janela está vendo, e o rótulo da tela
+                  acompanha o seletor sem uma segunda fonte de verdade. */}
               {monthStatus === "ready" && month ? (
-                <span className="text-13 tabular-nums text-muted">
-                  {formatMonthYear(month.mes)}
+                <span data-numeric className="text-13 tabular-nums text-muted">
+                  {formatarRotuloPeriodo(month.periodo)}
                 </span>
               ) : null}
               <Button
@@ -716,7 +740,7 @@ export function TodayScreen() {
             </div>
           }
         >
-          <span id="hoje-mes">Este mês</span>
+          <span id="hoje-mes">{periodoAtivo ? "No período" : "Este mês"}</span>
         </SectionHeading>
 
         {monthStatus === "loading" ? (
@@ -900,6 +924,7 @@ function Greeting({
   status,
   error,
   onRetry,
+  periodoAtivo,
 }: {
   /** Primeiro nome da sessão. Sem sessão legível, sem nome — nunca um nome
    * inventado no lugar (era o "Camila" hardcoded). */
@@ -908,6 +933,9 @@ function Greeting({
   status: Status;
   error: { mensagem: string; correcao?: string } | null;
   onRetry: () => void;
+  /** Um período explícito está na URL — "fechado no mês" vira "fechado no
+   * período", porque o número passou a seguir o recorte escolhido. */
+  periodoAtivo: boolean;
 }) {
   const now = new Date();
   const hour = now.getHours();
@@ -950,7 +978,7 @@ function Greeting({
           onRetry={onRetry}
         />
         <PipelineStat
-          label="Fechado no mês"
+          label={periodoAtivo ? "Fechado no período" : "Fechado no mês"}
           cents={pipeline?.fechadoNoMesCents ?? null}
           tone="ok"
           status={status}
@@ -1135,6 +1163,172 @@ function MonthCard({
     >
       {children}
     </Card>
+  );
+}
+
+/* =============================================================================
+   Em viagem — §3, o pós-venda do /hoje
+   -----------------------------------------------------------------------------
+   A venda fecha e o cliente some do produto; a viagem em curso é o momento
+   de maior risco (emergência) e maior oportunidade (depoimento, recompra).
+   Tudo alimentado por `listarEmViagem()` (S14), que já classifica cada
+   negócio `ganho` com data de ida em um — e só um — de três estados:
+
+     "Viaja em N dias"   última chamada discreta (documentos, check-in);
+                         0 = viaja hoje. Nada é clicável: aviso, não tarefa.
+     "Em viagem até..."  UMA linha, SEM CTA — presença, não ruído.
+     "Retornou há N"     o ÚNICO CTA da seção: pedir depoimento, mensagem
+                         pronta no WhatsApp do contato (`contactWhatsapp`,
+                         viagem do próprio tenant — nunca em superfície
+                         pública).
+
+   Sem WhatsApp cadastrado, a linha "retornou" fica em silêncio: um link
+   `wa.me` com número duvidoso abre conversa com estranho — pior que não
+   abrir. Vazio = UMA linha discreta (`compact`): esta tela já tem quatro
+   outras seções, não cabe um pranto de estado vazio grande aqui.
+   ========================================================================== */
+
+type ViagemLinha = ViagemEmCurso &
+  (
+    | { estado: "partindo"; diasRestantes: number }
+    | { estado: "andamento" }
+    | { estado: "retornou"; diasDesdeRetorno: number }
+  );
+
+function EmViagemSection() {
+  const [status, setStatus] = React.useState<Status>("loading");
+  const [linhas, setLinhas] = React.useState<ViagemLinha[]>([]);
+  const [errorInfo, setErrorInfo] = React.useState<{
+    mensagem: string;
+    correcao?: string;
+  } | null>(null);
+  const [reloadToken, setReloadToken] = React.useState(0);
+  const retry = React.useCallback(() => setReloadToken((token) => token + 1), []);
+
+  React.useEffect(() => {
+    let active = true;
+    setStatus((current) => (current === "ready" ? current : "loading"));
+    void listarEmViagem().then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setStatus("error");
+        setErrorInfo({ mensagem: result.mensagem, correcao: result.correcao });
+        return;
+      }
+      const grupos: EmViagemGrupos = result.data;
+      setLinhas([
+        ...grupos.partindo.map((v) => ({ ...v, estado: "partindo" as const })),
+        ...grupos.emViagem.map((v) => ({ ...v, estado: "andamento" as const })),
+        ...grupos.retornou.map((v) => ({ ...v, estado: "retornou" as const })),
+      ]);
+      setStatus("ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, [reloadToken]);
+
+  const maxValor = Math.max(1, ...linhas.map((linha) => linha.valueCents));
+
+  return (
+    <section aria-labelledby="hoje-viagem">
+      <SectionHeading>
+        <span id="hoje-viagem">Em viagem</span>
+      </SectionHeading>
+
+      {status === "loading" ? (
+        <Card className="flex flex-col gap-4 p-4">
+          {[0, 1].map((row) => (
+            <SkeletonRow key={row} />
+          ))}
+        </Card>
+      ) : status === "error" ? (
+        <Card className="flex flex-col items-start gap-3 p-4">
+          <FieldError>{errorInfo?.mensagem}</FieldError>
+          <Button variant="secondary" size="sm" onClick={retry}>
+            {errorInfo?.correcao ?? "Tentar de novo"}
+          </Button>
+        </Card>
+      ) : linhas.length === 0 ? (
+        <EmptyState
+          compact
+          title="Nenhuma viagem em curso"
+          description="Negócios fechados com data de ida aparecem aqui — a última chamada antes de embarcar, a viagem em curso e quem já voltou."
+        />
+      ) : (
+        <Card className="overflow-hidden">
+          <ul className="divide-y divide-line-subtle">
+            {linhas.map((linha) => (
+              <ViagemRow key={linha.id} item={linha} reserveFor={maxValor} />
+            ))}
+          </ul>
+        </Card>
+      )}
+    </section>
+  );
+}
+
+function ViagemRow({
+  item,
+  reserveFor,
+}: {
+  item: ViagemLinha;
+  reserveFor: number;
+}) {
+  const rotulo =
+    item.estado === "partindo"
+      ? item.diasRestantes === 0
+        ? "Viaja hoje"
+        : item.diasRestantes === 1
+          ? "Viaja amanhã"
+          : `Viaja em ${item.diasRestantes} dias`
+      : item.estado === "andamento"
+        ? item.returnOn
+          ? `Em viagem até ${formatarFaixaDeDatas(item.returnOn, null)}`
+          : "Em viagem"
+        : item.diasDesdeRetorno === 1
+          ? "Retornou ontem"
+          : `Retornou há ${item.diasDesdeRetorno} dias`;
+
+  const urgente = item.estado === "partindo" && item.diasRestantes <= 2;
+  const Icone =
+    item.estado === "partindo" ? PassportIcon : item.estado === "andamento" ? TodayIcon : ChatIcon;
+
+  const linkDepoimento =
+    item.estado === "retornou"
+      ? waMeLink(item.contactWhatsapp, mensagemDepoimento(item.contactName, item.destination))
+      : null;
+
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-15 font-medium text-ink">
+          {item.contactName}
+          {item.destination ? (
+            <span className="font-normal text-muted"> · {item.destination}</span>
+          ) : null}
+        </span>
+        <span
+          className={cn(
+            "flex items-center gap-1.5 text-13",
+            urgente ? "text-warn" : "text-muted",
+          )}
+        >
+          <Icone className="size-3.5 shrink-0" />
+          {rotulo}
+        </span>
+      </span>
+
+      <Money cents={item.valueCents} size="13" tone="muted" align="right" reserveFor={reserveFor} />
+
+      {linkDepoimento ? (
+        <Button size="sm" variant="secondary" asChild>
+          <a href={linkDepoimento} target="_blank" rel="noopener noreferrer">
+            Pedir depoimento
+          </a>
+        </Button>
+      ) : null}
+    </li>
   );
 }
 
