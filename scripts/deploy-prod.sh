@@ -18,7 +18,8 @@ cd "$(dirname "$0")/.."
 PROJETO_NEON="gentle-bread-99525731"
 BRANCH_NEON="br-old-poetry-ac4g99ub"
 VERCEL_SCOPE="lp-development"
-URL_PROD="https://zarpa.vercel.app"
+# zarpa.vercel.app é de um TERCEIRO — o alias real do projeto é zarpa-wheat:
+URL_PROD="https://zarpa-wheat.vercel.app"
 
 echo "── 0/5 Repo público no GitHub (idempotente)"
 gh repo create zarpa --public --source=. --push \
