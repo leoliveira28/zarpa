@@ -781,3 +781,147 @@ Pontos para virar teste:
 6. **O gate não muda** — consentimento não interfere no veredito de assinatura;
    `vereditoDaAssinatura` e os testes de `gate-dunning.test.ts` seguem verdes sem
    alteração.
+
+---
+
+## S14 — os 4 fluxos de `docs/PROPOSTAS_PRODUTO.md` (período, relatórios, em viagem, roteiro)
+
+Migration nova: **`drizzle/0013_roteiro_publico.sql`** (idx 13 no `_journal.json`) — tabela
+`itineraries` + função `public.roteiro_publica(text)`. Apliquei no banco de teste (o
+`globalSetup` do vitest aplica do zero a cada rodada) e rodei smoke manual contra
+`zarpa_test` (script descartável, apagado) — saída completa em `docs/status/rafa.md`.
+
+### 1. REGRESSÃO ESPERADA — uma linha no `KNOWN_ESCAPE_HATCHES` (desbloqueia o portão)
+
+```
+FALHA  rls-enabled.test.ts > nenhuma policy permissiva nova ignora o tenant
+  public.itineraries: policy PERMISSIVA nova que ignora tenant_id: itineraries_public_read[SELECT]
+```
+
+É o escape hatch da leitura pública, mesmo fluxo das 6 policies de `app.proposal_public_context`
+(S7) e das auth_service: `FOR SELECT` ligado ao GUC `app.roteiro_public_context`, que só é
+setado DENTRO de `roteiro_publica` (`set_config(..., true)`, local à transação). Basta
+acrescentar em `tests/security/rls-checks.ts`:
+
+```ts
+{ table: 'public.itineraries', policy: 'itineraries_public_read' },
+```
+
+Escolhi o GUC novo em vez de reusar `app.proposal_public_context` de propósito: um GUC de
+proposta não pode abrir tabela de roteiro — se um dia uma das duas funções mudar, o alcance
+de cada escape hatch fica auditável separadamente. Rejeitei "consertar" a policy acrescentando
+`tenant_id IS NOT NULL` ao `USING` para passar no seu teste: seria teatro — com o GUC ligado,
+`tenant_id` não filtra nada de verdade (a função é anônima, não há tenant para conferir), e a
+auditoria do Téo merece a linha real na allowlist, não uma policy que finge ser mais apertada
+do que é. A proteção de COLUNA é a lista explícita dentro da função; a de LINHA é o token.
+
+Sem migration de enum nem campo novo de motivo de perda — `deals.lostReason` já existia, então
+não houve o PARE do §2.
+
+### 2. SEGUNDA regressão esperada — falso positivo do scanner contra o seed sintético
+
+A suíte completa acusa (o arquivo isolado passa verde — é estado de banco da ordem de
+execução):
+
+```
+FALHA  public-proposal.test.ts > resposta da proposta pública não carrega dado sensível
+  public.roteiro_publica:
+    - [padrao-no-valor] [0].payload.roteiro.title → telefone BR: 111111-1111
+    - [padrao-no-valor] [0].payload.roteiro.clientName → telefone BR: 111111-1111
+```
+
+Mecanismo, passo a passo (confirmei cada elo):
+
+1. Seu `findPublicProposalRoutines` varre por catálogo (`propos|public`) e agora alcança
+   `roteiro_publica` — funcionando como desenhado, é exatamente o que eu queria quando
+   segui o padrão de nome da `proposta_publica`.
+2. O `seedTenantRows` genérico (`tests/helpers/db.ts`) insere uma linha sintética em CADA
+   tabela de tenant, inclusive a nova `itineraries`; valores sintéticos de texto embutem o
+   uuid do tenant (`zarpa-qa-11111111-1111-4111-...-title`).
+3. Na suíte completa, `tenant-isolation.test.ts` roda antes do `public-proposal` (vitest
+   ordena por tamanho de arquivo). `plantCanaries` pega `select public_token from proposals
+   limit 1` SEM ordem — recai na linha sintética, cujo token bate com a linha sintética de
+   `itineraries`.
+4. `proposta_publica(sintético)` devolve ZERO linhas — a policy interna dela exige
+   `status <> 'draft' AND sent_at IS NOT NULL`, e a linha sintética nasce `draft` sem
+   `sent_at`. Por isso esse falso positivo NUNCA apareceu na proposta. `roteiro_publica`
+   não tem essa guarda DE PROPÓSITO: roteiro não tem rascunho — é pós-venda, o token é o
+   único portão — então devolve a linha sintética e o `PHONE_BR_RE` casa o trecho
+   "111111-1111" DENTRO do uuid do `TENANT_A`.
+
+Não é vazamento real: o valor que "vaza" é dado sintético de teste atravessando um campo
+público por desenho (`title`/`clientName` são texto da agente). Duas saídas, a segunda é a
+que eu recomendo:
+
+- **Mínima**: no `plantCanaries`, preferir o token da fixture real antes do `limit 1`
+  (`where public_token = 'teo-fixture-proposta-publica-...'`, caindo para `limit 1` se
+  vazia) — `roteiro_publica` volta 0 linhas e o sweep dela fica vago.
+- **Melhor** (fecha o mesmo buraco que o item 7 abaixo pede): semear UMA roteiro fixture
+  de verdade (tenant + contato + deal `ganho` + proposta `accepted` com canário em
+  `cost_cents`/`commission_cents` + linha em `itineraries` com token fixo conhecido),
+  para o scanner exercitar o payload do roteiro DE VERDADE. E vale considerar uma guarda
+  no scanner: string que contenha um uuid (`/^[0-9a-f-]{36}$/` ou contains) não devia
+  alimentar os `VALUE_PATTERNS` — o seed sintético sempre vai embutir uuid, e qualquer
+  tabela nova volta a gerar esse susto.
+
+### 3. Smoke que eu rodei ao vivo (vale virar teste permanente)
+
+Fixtures: tenant A + tenant B, contato, deal `ganho` com datas, proposta `accepted` com opção
+(`cost_cents`/`commission_cents` preenchidos como canário) e 2 blocos (um `option_id null`,
+um da opção aceita), roteiro gerado. Resultado, tudo verde:
+
+1. `INSERT` em `itineraries` dentro do tenant passa; `INSERT` com `tenant_id` de OUTRO tenant
+   é recusado pelo `WITH CHECK`.
+2. `SELECT count(*)` sem `app.tenant_id` → **0 linhas** (FORCE RLS falha fechado para o dono).
+3. Tenant B vê 0 linhas do A.
+4. `select payload from public.roteiro_publica(<token>)` devolve: `roteiro.title/clientName/
+   currency/departureOn/returnOn/createdAt`, `brand` RESHAPED (`whatsappLink`, sem chave
+   `whatsapp`), `blocks` em 2, ordenados por `position`, sem `id`/`optionId` — e **nenhuma
+   chave** casando `cost|custo|commission|comissao|markup|margin|price|preco` em profundidade
+   nenhuma do payload (varri o objeto inteiro recursivamente).
+5. Token inexistente → 0 linhas (não erro).
+
+Detalhe de fixture que me mordeu (evita meia hora sua): passar JSON como **string** para uma
+coluna `jsonb` via parâmetro texto do driver o DUPLICA-ENCODEIA (o CHECK
+`itineraries_blocks_is_array_check` recusa com `jsonb_typeof = 'string'`). Use o helper
+`sql.json(objeto)`/`tx.json(objeto)` ou o Drizzle normal — nunca `${string}::jsonb`.
+
+### 4. Pontos para virar teste além do smoke
+
+1. **Idempotência de `gerarRoteiro`** — chamar duas vezes devolve o MESMO roteiro (uma linha
+   na tabela); sob `Promise.all`, o índice único `itineraries_deal_id_key` + `onConflictDoNothing`
+   + reselect garante 1 linha e as duas respostas idênticas. Teste o COUNT no banco, não o retorno.
+2. **Recusas com mensagem certa** — deal `cotando` → `CONFLITO` ("Só dá para gerar roteiro de
+   negócio fechado como ganho"); deal `ganho` sem proposta aceita → `CONFLITO` ("Registrar o
+   aceite..."); dealId inexistente/de outro tenant → `NAO_ENCONTRADO` (RLS transforma em
+   "não existe", nunca erro de permissão).
+3. **Fotografia, não vista** — gere o roteiro, depois EDITE os blocos da proposta e gere
+   `obterRoteiroPublico` de novo: o payload público NÃO muda (é `blocks_snapshot`, não JOIN com
+   `proposal_blocks`). Blocos de opção NÃO aceita ficam de fora; `option_id null` (compartilhado)
+   entra.
+4. **RESTRICT** — `DELETE` no deal/proposta que tem roteiro falha no banco (roteiro é documento
+   entregue; mesmo desenho de `sales`).
+5. **Isolamento padrão** — varredura por catálogo deve pegar `itineraries` sozinha (tem
+   `tenant_id` + RLS); B não lê, não escreve, não apaga roteiro do A; `listarRoteiros()` do B
+   não vê o do A.
+6. **`listarEmViagem`/`resumoDoPeriodo`/`resolverPeriodo`** — os contratos completos estão no
+   handoff da Nina; para você o que interessa: `resolverPeriodo` (`src/server/periodo.ts`) é
+   função PURA de `new Date()` + input — dá para testar sem banco, incluindo as recusas
+   (`mes` + `de/ate` juntos, faixa sem um dos lados, `de > ate`, `2026-02-30`, `2026-13`).
+   Classificação de viagem é EXCLUSIVA: partida hoje conta em `partindo` com `diasRestantes: 0`
+   (não em `emViagem`); `returnOn` null e partida passada fica em `emViagem` para sempre
+   (fail-open consciente — viagem sem data de volta não pode sumir da lista).
+7. **Scanner no `/r/[slug]`** — quando a rota nascer, o payload de `roteiro_publica` merece
+   o mesmo tratamento do `/p/[slug]`: canários de CPF/e-mail/telefone/passaporte/nascimento
+   plantados nas fixtures + `cost_cents`/`commission_cents` na opção aceita. A chave
+   `brand.whatsappLink` já é allowlist sua (S7) — o roteiro reusa EXATAMENTE o mesmo reshape,
+   então não deve precisar de allowlist nova de valor.
+8. **`registrarVisita` NÃO existe no roteiro** — diferente da proposta, não há rastreio de
+   abertura (não pedido no §4). Não escreva teste esperando `proposal_views` de roteiro.
+
+### 5. O que NÃO tem (não teste o que não existe)
+
+- Sem regeneração de roteiro (fotografia do fechado — regenerar seria mudar documento
+  entregue; se produto pedir, é decisão nova do PO e o token deve mudar junto).
+- Sem edição de roteiro, sem exclusão de roteiro (só gerar e listar, mais a leitura pública).
+- `resumoDoPeriodo` não tem export CSV (só o JSON — se a Nina/PO quiser, é ação nova).

@@ -1,5 +1,156 @@
 # Status — Rafa (backend / plataforma)
 
+## 2026-09-07 — S14: os 4 fluxos de `docs/PROPOSTAS_PRODUTO.md` (período, relatórios, em viagem, roteiro)
+
+**Veredito: PRONTO no meu lado, com o portão vermelho por DUAS falhas esperadas que moram
+em `tests/**` (fronteira do Téo)** — a allowlist de `itineraries_public_read` e um falso
+positivo do scanner contra o seed sintético. Ambas documentadas passo a passo em
+`docs/handoffs/rafa-para-teo.md` §S14. `tsc` limpo, 484/486 testes passando, smoke manual
+de RLS + vazamento do roteiro 100% verde contra `zarpa_test`.
+
+### O que ficou pronto, por §
+
+1. **§1 Período** — `src/server/periodo.ts` (novo, sem `'use server'` de propósito: helper
+   puro compartilhado). `PeriodoInput` = `{ mes }` OU `{ de, ate }`, zod; ausente/vazio =
+   mês corrente UTC (comportamento atual preservado). `resolverPeriodo(agora, input)` é
+   função pura, testável sem banco. Quatro actions de leitura passam a aceitar o período:
+   `obterResumoDoMes`, `exportarResumoDoMesCsv` (nome de arquivo e rótulo do CSV seguem o
+   período), `obterResumoDoPipeline`, `listarVendas` (`FiltroVendas.periodo`). Zero tabela
+   nova, zero migration. `ResumoDoMes` ganhou `periodo: { de, ate, rotulo }` na resposta;
+   `fechadoNoMesCents` manteve o NOME (UI não quebra) mas o significado virou "no período".
+2. **§2 Relatórios** — `src/server/money.ts` (novo): `resumoDoPeriodo(periodoInput?)`
+   devolve vendas (total, receita bruta, taxa de serviço, ticket médio), comissão
+   (prevista/recebida/atrasada/total), `porOrigem` (vendas agrupadas por
+   `contacts.source`, maior receita primeiro, `null` = "sem origem") e `motivosDePerda`
+   (deals `perdido` por `closedAt`, agrupados por `deals.lostReason`, maior valor primeiro,
+   `null` = "sem motivo registrado"). **O campo existe desde o funil (S4) — não houve o
+   PARE do §2 nem migration de enum.** Ticket médio = `0` quando não há venda (nunca NaN).
+3. **§3 Em viagem** — `src/server/viagens.ts` (novo): `listarEmViagem()` devolve três
+   grupos mutuamente exclusivos de deals `ganho` com `departureOn`: `partindo`
+   (`diasRestantes`, inclui HOJE com 0), `emViagem` (hoje entre partida e retorno;
+   `returnOn` null = sem volta marcada, segue em viagem), `retornou` (`diasDesdeRetorno`).
+   Ordenados por proximidade. Inclui `contactWhatsapp` pronto para o CTA de depoimento.
+   Zero tabela nova.
+4. **§4 Roteiro** — o único com migration: **`drizzle/0013_roteiro_publico.sql`** (idx 13
+   no `_journal.json`). Tabela `itineraries` (schema `src/db/schema/itineraries.ts`) com
+   snapshot JSON dos blocos + marca congelados, token público único 128 bits
+   (`randomBytes(16).base64url`), único índice global; `ENABLE`+`FORCE RLS` e policy
+   `itineraries_isolation` (`USING`+`WITH CHECK` contra `app.tenant_id`) NA MESMA
+   migration; índice em toda FK + `(tenant_id, created_at)`; CHECK de datas coerentes e de
+   `blocks_snapshot` ser array. Função `public.roteiro_publica(token)` SECURITY DEFINER
+   (`SET search_path = public, pg_temp`, `REVOKE ... FROM PUBLIC`, `GRANT ... TO
+   current_user`) devolve SÓ título, nome do cliente, datas, blocos do snapshot e marca
+   RESHAPED (`whatsappLink`) — nunca custo/comissão/preço/PII de passageiro, nunca JOIN
+   com as tabelas ao vivo (o snapshot é a fonte única). Actions: `gerarRoteiro(dealId)`
+   (gate de dunning na primeira linha; recusa não-ganho e sem proposta aceita com
+   `CONFLITO` e `correcao`; idempotente via `itineraries_deal_id_key` +
+   `onConflictDoNothing` + reselect do estado persistido; audit `itinerary.created`) e
+   `listarRoteiros()`; leitura pública `obterRoteiroPublico(slug)` em
+   `src/server/publicItineraries.ts` (mesmo padrão do `obterPropostaPublica`:
+   `unsafeSqlWithoutTenant` → `roteiro_publica`, token inválido → `null`). Todos os
+   exports no barril `@/server`. A página `/r/[slug]` é da Nina — contrato completo no
+   handoff dela.
+
+### Prova ao vivo (script descartável contra `zarpa_test`, apagado depois)
+
+Roteiro: dois tenants, contato, deal `ganho`, proposta aceita com canário de custo/comissão
+e dois blocos, roteiro gerado. Tudo verde:
+
+```
+PASS  INSERT dentro do tenant passa (WITH CHECK)
+PASS  INSERT com tenant_id alheio é recusado
+PASS  SELECT sem app.tenant_id devolve 0 linhas (FORCE RLS)
+PASS  SELECT no tenant B não vê linha do A (isolamento)
+PASS  roteiro_publica(token) devolve payload
+PASS  roteiro.title/clientName/datas presentes
+PASS  brand reshapeada com whatsappLink
+PASS  blocks ordenados por position e sem id/optionId
+PASS  payload não tem custo/comissão/preço em NENHUMA chave
+PASS  roteiro_publica com token errado devolve 0 linhas
+SMOKE: tudo verde
+```
+
+A varredura de chaves proibidas foi recursiva no payload inteiro (`cost|custo|
+commission|comissao|markup|margin|price|preco` em qualquer profundidade).
+
+### Decisões que tomei sozinha
+
+- **GUC NOVO (`app.roteiro_public_context`) em vez de reusar `app.proposal_public_context`.**
+  Um escape hatch de proposta não pode abrir tabela de roteiro: se um dia uma função mudar,
+  o alcance de cada hatch fica auditável em separado. Segue o padrão 0004/0010 e precisa da
+  linha no `KNOWN_ESCAPE_HATCHES` (pedido aberto).
+- **Nada de "regenerar roteiro"** — fotografia do fechado; substituir documento entregue
+  silenciosamente seria pior que não deixar. Se o produto pedir, é decisão nova do PO e o
+  token deve mudar junto.
+- **Marca congelada na geração** (cópia de `proposals.brand_snapshot` com fallback para
+  `tenants` por chave vazia) — `roteiro_publica` não faz JOIN com `tenants`: o que sai
+  público é exatamente o que estava no snapshot, e nada a mais.
+- **FKs `RESTRICT` em `deal_id`/`proposal_id`** — roteiro é documento entregue; apagar
+  negócio/proposta com roteiro exige apagar o roteiro primeiro (mesma doutrina de `sales`).
+- **`emViagem` fail-open com `returnOn` null** — viagem sem data de volta não pode sumir da
+  lista do agente; sai só quando ele preencher o retorno.
+- **"Vendas do período" por `sales.createdAt`, "motivos de perda" por `deals.closedAt`** —
+  mesmos proxies do S10, agora parametrizados; sem coluna nova, sem reescrever histórico.
+- **`obterRoteiroPublico` sem registro de visita** — §4 não pede "sabe quando abriu" para
+  roteiro; não inventei métrica.
+- **Sufixo `.json()` do driver no smoke** — descobri que passar JSON como string para
+  coluna `jsonb` via parâmetro texto DUPLICA-ENCODEIA (CHECK de array recusa com
+  `jsonb_typeof = 'string'`). Só afeta fixture em SQL cru; documentado no handoff do Téo.
+
+### O que NÃO fiz (fora da fronteira / não pedido)
+
+- **UI** — nina: seletor de período, tab de relatórios, seção Em viagem no `/hoje`, página
+  `/r/[slug]` e botão "Gerar roteiro" (contrato em `rafa-para-nina.md` §S14).
+- **Testes permanentes** — teo: 8 pontos + as 2 regressões esperadas em `rafa-para-teo.md` §S14.
+- **Não toquei em `src/components`, `src/app`, `tests/`, `package.json`. NADA commitado.**
+
+### Verificação (números reais)
+
+- `npx tsc --noEmit` — limpo.
+- `npx vitest run` — **484/486**, 2 falhas esperadas, ambas em `tests/security/` e ambas
+  com causa raiz confirmada elo a elo:
+  1. `rls-enabled.test.ts` → `itineraries_public_read` (escape hatch novo, padrão 0004) —
+     resolve com UMA linha no `KNOWN_ESCAPE_HATCHES`.
+  2. `public-proposal.test.ts` → `roteiro_publica` flagado com "telefone BR" em
+     `roteiro.title`/`clientName` — FALSO POSITIVO: o seeder sintético do Téo embute o uuid
+     do tenant (`zarpa-qa-11111111-1111-...`) em títulos/nomes, e `PHONE_BR_RE` casa o
+     trecho "111111-1111" dentro do uuid. `proposta_publica` nunca sofreu disso porque a
+     guarda `status <> 'draft' AND sent_at IS NOT NULL` dela zera a linha sintética;
+     `roteiro_publica` não tem essa guarda DE PROPÓSITO (roteiro não tem rascunho — token é
+     o portão). Arquivo isolado passa verde; só a ordem da suíte completa (seed antes do
+     scan) expõe. Resolução recomendada no handoff: fixture de roteiro real para o scanner
+     exercitar + guarda de uuid no scanner.
+- O varredor por catálogo pegou a função nova SOZINHO (regex `propos|public`) — prova de
+  que a disciplina "nome no padrão" funciona.
+- Migration aplica limpa do zero (o `globalSetup` aplicou as 14 a cada rodada de teste).
+
+### Riscos
+
+- **O portão fica vermelho até o Téo pousar as duas mudanças** — quem rodar `vitest run`
+  nesse estado vai ver as 2 falhas acima; não são defeito do produto, e o diagnóstico
+  completo está no handoff.
+- **Página `/r/[slug]` ainda não existe** — o token público só vazaria por brute force de
+  128 bits; sem a página, nenhum caminho público novo está exposto hoje.
+- GUC forjável por SQL arbitrário continua o risco estrutural de sempre — escopo mantido
+  mínimo (uma policy, `FOR SELECT`, numa tabela cujas colunas públicas já são publicáveis
+  por desenho; a lista de colunas está explícita dentro da função).
+- `resumoDoPeriodo` agrega em JS (não `sum()` SQL) — seguro no volume MEI documentado;
+  revisitar se um tenant crescer ordens de grandeza.
+
+### O que precisa dos outros
+
+- **Téo**: (1) `{ table: 'public.itineraries', policy: 'itineraries_public_read' }` no
+  `KNOWN_ESCAPE_HATCHES`; (2) fixture de roteiro real para o scanner + possível guarda de
+  uuid em `VALUE_PATTERNS`; (3) os 8 pontos de teste do §S14.
+- **Nina**: contrato completo em `rafa-para-nina.md` §S14 — seletor de período compartilhado
+  (`PeriodoInput` é uma forma só para as 4 actions + relatório), tab de relatórios, Em
+  viagem, `/r/[slug]` e "Gerar roteiro".
+- **PO**: decidir se o roteiro ganha "sabe quando abriu" (hoje não existe) e se quer
+  regeneração (hoje deliberadamente proibida). Para o deploy: a 0013 é neutra de role
+  (`TO current_user`), segue o fluxo das anteriores no Neon.
+
+---
+
 ## 2026-09-07 — S13b: /termos, /privacidade e consentimento LGPD no cadastro
 
 **Veredito: PRONTO no meu lado.** `tsc` e `npm run build` do repositório INTEIRO ficam

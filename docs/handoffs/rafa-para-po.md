@@ -169,3 +169,21 @@ Pedido: alguém com Docker funcionando nesta máquina (ou no CI) rode a migratio
 antes de considerar a entrega fechada — detalhe completo em
 `docs/handoffs/rafa-para-teo.md`, seção "S9". Se isso se repetir em rodadas futuras, vale
 investigar se é específico desta sessão/sandbox ou algo mais estrutural no ambiente.
+
+---
+
+## S14 — os 4 fluxos do `PROPOSTAS_PRODUTO.md` (backend pronto): 3 avisos
+
+1. **Portão vermelho de propósito até o Téo pousar duas mudanças em `tests/**`** (uma linha
+   de allowlist de RLS + fixture de roteiro para o scanner). As 2 falhas são esperadas,
+   diagnosticadas elo a elo e não são defeito do produto — detalhe em
+   `docs/handoffs/rafa-para-teo.md` §S14 e em `docs/status/rafa.md` §S14. `tsc` limpo,
+   484/486 testes, smoke de RLS/vazamento 100% verde.
+2. **Deploy da `drizzle/0013_roteiro_publico.sql`** — mesma regra de sempre: neutra de role
+   (`GRANT ... TO current_user`), `ENABLE`+`FORCE RLS` na mesma migration, aplica igual no
+   Neon (o journal já está no índice 13).
+3. **Duas decisões de produto em aberto, não bloqueiam**: (a) roteiro NÃO registra
+   "sabe quando abriu" (só a proposta registra — se quiser para roteiro também, é feature
+   nova); (b) roteiro não pode ser regenerado (é fotografia do fechado — regenerar
+   substituiria documento entregue; se quiser, é decisão explícita e o token público muda
+   junto).

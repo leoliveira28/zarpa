@@ -1538,3 +1538,122 @@ type CriarContaInput = {
   derivado do nome da agência com sufixo automático.
 - Gate de dunning e `ASSINATURA_INATIVA`: nada a ver com consentimento — uma coisa não
   toca na outra.
+
+---
+
+# S14 — os 4 fluxos de `docs/PROPOSTAS_PRODUTO.md`: período, relatórios, em viagem, roteiro
+
+Backend completo. Nada de UI foi tocado — tudo abaixo é action pronta para religar. Erros
+sempre chegam como `{ ok: false, codigo, mensagem, campo?, correcao? }` — nunca como 500.
+
+## 1. Período opcional (§1) — uma forma só, `PeriodoInput`, em quatro actions
+
+```ts
+type PeriodoInput = { mes?: string } | { de?: string; ate?: string }
+```
+
+- `{ mes: '2026-09' }` (AAAA-MM) OU `{ de: '2026-01-01', ate: '2026-03-31' }` (AAAA-MM-DD,
+  pontas inclusivas). NÃO mande os dois ao mesmo tempo: `DADOS_INVALIDOS`, `campo: 'periodo'`,
+  mensagem "Informe o mês OU o intervalo — não os dois.". Faixa com só uma ponta também
+  recusa. Data que não existe (`2026-02-30`) recusa com mensagem pronta, `correcao: 'Corrigir o período'`.
+- **Ausente, `null` ou `{}` = mês corrente** — o comportamento que as telas já tinham, preservado.
+- Tudo em UTC, convenção do S10.
+
+Actions que aceitam o período (todas `ServiceResult`):
+
+| Action | Input |
+|---|---|
+| `obterResumoDoMes(periodoInput?)` | hub Dinheiro — resumo inteiro vira do período |
+| `exportarResumoDoMesCsv(periodoInput?)` | nome do arquivo e rótulo internos seguem o período |
+| `obterResumoDoPipeline(periodoInput?)` | `/hoje` — `fechadoNoMesCents` vira "fechado no período" (nome do campo mantido de propósito — UI existente não quebra; se o período vier, o rótulo da tela deve dizer "no período", não "este mês") |
+| `listarVendas(filtro)` | `FiltroVendas.periodo?: PeriodoInput` — pode combinar com `status`/busca existentes |
+
+`ResumoDoMes` ganhou `periodo: { de, ate, rotulo }` na resposta — mostre `rotulo`
+(`2026-09` ou `2026-01-01..2026-03-31`) como subtítulo da tela para o usuário nunca duvidar
+de qual recorte está vendo. Sugestão de seletor: chips "Este mês / mês passado / escolher
+mês / intervalo" — os dois últimos mapeiam direto no input.
+
+## 2. Relatórios (§2) — `resumoDoPeriodo(periodoInput?)` em `src/server/money.ts`
+
+Mesmo `PeriodoInput` da seção 1 (reaproveite o mesmo seletor de período). Retorno:
+
+```ts
+type ResumoDoPeriodo = {
+  periodo: { de: string; ate: string; rotulo: string };
+  vendas: { total: number; receitaBrutaCents: number; taxaServicoCents: number; ticketMedioCents: number };
+  comissao: { previstaCents: number; recebidaCents: number; atrasadaCents: number; totalCents: number };
+  porOrigem: { origem: string | null; vendas: number; receitaBrutaCents: number }[];
+  motivosDePerda: { motivo: string | null; negocios: number; valorCents: number }[];
+};
+```
+
+- Vendas do período = linhas de `sales` por `createdAt`; motivos de perda = deals
+  `perdido` por `closedAt` (o carimbo de quando perdeu — qualquer edição depois não muda o recorte).
+- `porOrigem` vem ordenado por receita (maior primeiro); `origem: null` = "sem origem"
+  (`contacts.source` é opcional no cadastro — mostre como linha própria, não filtre fora).
+- `motivosDePerda` vem ordenado por valor perdido (maior primeiro); `motivo: null` =
+  "sem motivo registrado" (dado antigo/importado — o funil hoje obriga motivo ao mover
+  para `perdido`).
+- Todo valor é centavos integer: use `tabular-nums` + largura reservada (regra do design system).
+
+## 3. Em viagem (§3) — `listarEmViagem()`, sem argumento
+
+```ts
+type EmViagemGrupos = {
+  partindo: (ViagemEmCurso & { diasRestantes: number })[];   // partida futura — inclui HOJE (diasRestantes 0)
+  emViagem: (ViagemEmCurso & { returnOn: string | null })[]; // hoje entre partida e retorno; returnOn null = sem volta marcada
+  retornou: (ViagemEmCurso & { diasDesdeRetorno: number })[]; // returnOn no passado
+};
+type ViagemEmCurso = {
+  id: string; title: string; destination: string | null;
+  contactId: string; contactName: string; contactWhatsapp: string | null;
+  valueCents: number; departureOn: string | null; returnOn: string | null;
+};
+```
+
+- Classificação é EXCLUSIVA (uma viagem em um grupo só): partida hoje = `partindo` com
+  `diasRestantes: 0`, nunca em `emViagem` no mesmo dia.
+- Ordenação por proximidade: `partindo` pela partida mais próxima; `emViagem` pelo retorno
+  mais próximo (sem volta vai para o fim); `retornou` pelo mais recente.
+- `contactWhatsapp` vem pronto para montar o CTA de WhatsApp (pedir depoimento/avaliação —
+  `https://wa.me/<dígitos>` quando preenchido). Deals `ganho` sem `departureOn` NÃO aparecem.
+- CTA único do fluxo (pedido do PO): pedir depoimento de quem já voltou — não inventei
+  action para isso; o texto vai no WhatsApp, sem backend novo.
+
+## 4. Roteiro (§4) — pós-venda com link público `/r/[slug]`
+
+Autenticado:
+
+- `gerarRoteiro(dealId)` → `RoteiroResumo` (id, dealId, proposalId, `publicToken`,
+  title, clientName, currency, departureOn, returnOn, createdAt). Botão na tela de negócio
+  `ganho` (e depois do aceite). Recusas prontas: negócio não ganho → `CONFLITO` "Só dá para
+  gerar roteiro de negócio fechado como ganho."; sem proposta aceita → `CONFLITO` "Este
+  negócio fechado não tem proposta aceita." (correção: "Registrar o aceite da proposta antes
+  de gerar o roteiro"). Idempotente: chamar de novo devolve o MESMO roteiro — não há
+  regenerar (fotografia do fechado), então o botão pode ficar clicável sem medo.
+- `listarRoteiros()` → `RoteiroResumo[]`, mais recente primeiro — a lista de roteiros
+  enviados.
+
+Público (página `/r/[slug]`, fora do login — mesmo padrão de `/p/[slug]`):
+
+- Action: `obterRoteiroPublico(slug)` → `RoteiroPublico | null` (token inválido/inexistente
+  = `null` → renderize 404 discreto, não erro). `slug` = o `publicToken` do `RoteiroResumo`.
+
+```ts
+type RoteiroPublico = {
+  roteiro: { title: string; clientName: string; currency: string;
+             departureOn: string | null; returnOn: string | null; createdAt: string | null };
+  brand: { name: string | null; logoUrl: string | null; primaryColor: string | null;
+           secondaryColor: string | null; whatsappLink: string | null; instagram: string | null };
+  blocks: { kind: string; position: number; title: string | null; body: string | null;
+            images: string[]; content: Record<string, unknown> }[];
+};
+```
+
+- `brand` é a MESMA forma da proposta pública (`whatsappLink` já vem pronto como
+  `https://wa.me/...`) — reutilize o componente de marca da `/p/[slug]`.
+- Editorial pleno vale aqui como na proposta (capa de proposta), mas o CONTEÚDO é outro:
+  sem opções, sem preço, sem aceite — é roteiro de viagem, não cotação. Blocos vêm
+  ordenados por `position`; renderize por `kind` como o editor já faz.
+- NÃO há registro de visita no roteiro (não existe "sabe quando abriu" aqui — não é bug).
+- A rota `/r/[slug]` em si é sua (como a `/p/[slug]` é) — o backend já responde via action.
