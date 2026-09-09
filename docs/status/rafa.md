@@ -1,5 +1,456 @@
 # Status — Rafa (backend / plataforma)
 
+## 2026-09-09 — Assinatura do agente (0017): "Agência · por Agente" + "via {APP_NAME}"
+
+**Veredito: PRONTO.** `npx tsc --noEmit` limpo, `npm run db:migrate` aplicando limpa (25
+tabelas, RLS habilitado e forçado em todas; policies de `tenants` inalteradas — 2), suíte
+**568/568** (24 arquivos; as 556 que já estavam + 12 novas, todas num arquivo NOVO,
+`tests/brand/assinatura.test.ts`; nenhum teste existente editado). Seed re-executado com
+sucesso (idempotente, `limparDemo`) e **prova de ponta a ponta no `zarpa_dev`**: os
+payloads públicos `/p/` e `/r/` dos dois tenants demo saem com `agentDisplayName` próprio
+("Volta ao Mundo · por Carolina Vasques" / "Maré Alta · por Rodrigo Sanhudo") e nada mais
+além do brand de sempre. Nada commitado.
+
+### Pronto
+
+1. **`drizzle/0017_assinatura_do_agente.sql`** (idx 17 no journal) —
+   `tenants.agent_display_name text` (anulável; null/'' = assinatura só com brand_name;
+   dado de EXIBIÇÃO — sem cifra, sem CHECK; zod de `atualizarMarca` valida trim/máx. 80)
+   + `CREATE OR REPLACE` das duas leituras públicas: `proposta_publica` (corpo da 0004)
+   e `roteiro_publica` (corpo da 0013), ambas passando a devolver
+   `brand.agentDisplayName`. Mesma assinatura, mesmos grants (REVOKE/GRANT reemitidos,
+   padrão 0014). Nenhuma tabela nova, nenhuma policy nova, NENHUM GUC novo — nada a
+   acrescentar no `KNOWN_ESCAPE_HATCHES`. RLS de `tenants` intocado (coluna segue a
+   linha que a policy já cerca).
+2. **Schema + action** — `agentDisplayName` no `src/db/schema/tenants.ts`;
+   `marcaInput` aceita `agentDisplayName` (zod, mesmo padrão dos demais — instagram e
+   whatsapp já eram cobertos); `atualizarMarca` normaliza `''` → NULL ("limpar" nunca
+   deixa string em branco) e mantém `undefined` = não toque; `TenantAtual` ganha
+   `agentDisplayName` e `contactEmail`.
+3. **Congelamento** — `enviarProposta` (`proposals.ts`) leva a assinatura para
+   `proposals.brand_snapshot` (a marca congela NO MOMENTO DO ENVIO, como as outras
+   chaves); `gerarRoteiro` (`itineraries.ts`) segue a mesma cadeia de sempre:
+   snapshot da proposta aceita → fallback para o cadastro do tenant (proposta antiga,
+   agente que configurou o nome depois — o roteiro novo NASCE assinado).
+4. **Helper único** — `src/lib/assinatura.ts` (PURO: sem `'use server'`, sem banco;
+   importável por Server e Client Component; FORA do barril `@/server` pela lição do
+   `subscriptionGate`). `linhaDeAssinatura` / `linhaViaApp` / `assinaturaDaMarca` /
+   `textoComAssinatura` (o corpo do `?text=` do WhatsApp). Aceita `{ brandName,
+   agentDisplayName }` (o tenant) ou `{ name, agentDisplayName }` (o payload público) —
+   ninguém precisa lembrar qual nome vem de onde.
+5. **`src/lib/config.ts`** — o token `APP_NAME` finalmente mora onde o CLAUDE.md sempre
+   mandou. Constante de código, NÃO env: variável que não é `NEXT_PUBLIC_*` não chega ao
+   navegador e a mesma tela assinaria diferente no servidor e no cliente.
+6. **Seed** — `MarcaSeed` ganhou `agentDisplayName` (propaga para as colunas do tenant E
+   para os dois snapshots, que nunca divergem no seed); re-executado, idempotente.
+7. **Contratos documentados** — `docs/handoffs/rafa-para-nina.md` §11 (shapes exatos,
+   helper, a opcionalidade da chave) e `docs/handoffs/rafa-para-teo.md` (novo arquivo; o
+   ponto de whitelist dele, sem portão vermelho).
+
+### Decisões que tomei sozinha
+
+- **Emissão CONDICIONAL da chave** (jsonb `||` condicional: sem assinatura no snapshot, o
+  `brand` é byte a byte o de antes da 0017). Duas razões, as duas boas por si: (a)
+  FOTOGRAFIA — proposta/roteiro entregues antes de o agente configurar o nome não mudam
+  de cara por causa desta migration, o link que já foi pelo WhatsApp continua igual; (b)
+  o portão de forma do Téo (`public-roteiro.test.ts`) fixa em whitelist EXATA as chaves
+  de `brand` — e `tests/**` é fronteira dele, que eu não edito. Com a emissão
+  condicional, o caso "sem assinatura" (a fixture dele) continua batendo e a suíte fica
+  verde sem ninguém ceder fronteira; o caso "com assinatura" está fixado no meu teste.
+  Custo assumido e documentado: `agentDisplayName?: string | null` no tipo (opcional),
+  e a forma do payload variar com DADO — regra fixada em teste nos dois lados.
+- **Snapshot, não JOIN.** A assinatura chega ao público via `brand_snapshot` (congelada
+  no envio/geração), preservando a disciplina de 0004/0013: as funções continuam sem
+  `select *`, sem JOIN com `tenants`/`contacts`/`travelers` — nem o e-mail/CPF do agente
+  chega perto. Consequência aceita: proposta só ganha a assinatura em REENVIO; roteiro
+  só na geração (nunca — não há regeneração).
+- **`contactEmail` no `TenantAtual`** — o campo já era aceito pelo `MarcaInput` desde
+  sempre mas não vinha na leitura; campo de autosave que nasce vazio com valor no banco
+  é mentira para quem edita. Adição read-only, sem mudança de escrita.
+- **`''` vira NULL na gravação** (só para a coluna nova; o comportamento das demais
+  chaves de marca não foi tocado) — null/''/undefined significam a mesma coisa para quem
+  exibe, mas o banco não guarda string em branco.
+- **`atualizarMarca` continua devolvendo `ServiceResult<null>`** — o pedido foi aceitar
+  o campo novo; a leitura do estado é `obterTenantAtual` (que agora traz tudo o que a
+  tela edita). Mudar o retorno seria contrato maior que a rodada.
+- **`APP_NAME` como constante, não `process.env`** — ver item 5 acima; o fallback
+  `process.env.APP_NAME ?? 'Zarpa'` do Better Auth (`src/lib/auth/auth.ts`) continua
+  como está (config de infra do auth, não token de interface).
+- **Teste em arquivo NOVO** (`tests/brand/`) — fronteira do Téo respeitada (12 casos:
+  helper puro, emissão com/sem assinatura, fallback do roteiro, gravação/limpeza,
+  cross-tenant cego).
+
+### Riscos
+
+- **Proposta/roteiro antigos não assinam** até reenvio (proposta) — roteiro nunca. É a
+  fotografia funcionando, mas o PO pode ouvir "a assinatura não apareceu" de agente com
+  link antigo; a resposta é reenviar. Registrado no §11 da Nina.
+- **Chave opcional no payload**: quem consumir `brand.agentDisplayName` direto precisa
+  tolerar ausência — o helper já tolera (ausente/null/'' = uma linha a menos), e é o
+  caminho recomendado.
+- **`agent_display_name` sem CHECK de comprimento no banco** (o teto de 80 é do zod) —
+  mesma régua de `brand_name`; snapshots/imports podem carregar valor maior e o helper
+  não trunca de propósito (não inventei reticência).
+- **Duplicação transitória de `APP_NAME`** — `src/lib/ui/brand.ts` ainda tem a própria
+  constante até a Nina reexportar de `@/lib/config` (arquivo dela, pedido já anotado no
+  §11). Duas strings iguais hoje; drift só se alguém mudar uma e não a outra.
+- Risco estrutural de sempre inalterado: nenhum GUC novo; os existentes continuam
+  forjáveis por SQL arbitrário (pedido do role dedicado segue em `rafa-para-po.md`).
+
+### O que precisa dos outros
+
+- **Nina**: `docs/handoffs/rafa-para-nina.md` §11 é o contrato da tela "Sua marca" e das
+  pontas — helper em `@/lib/assinatura`, `TenantAtual`/`MarcaInput` estendidos, e a
+  opcionalidade de `brand.agentDisplayName` nas páginas públicas. E, quando quiser,
+  fazer `brand.ts` reexportar `APP_NAME` de `@/lib/config`.
+- **Téo**: `docs/handoffs/rafa-para-teo.md` — um ponto OPCIONAL (fixar o caso "com
+  assinatura" na whitelist dele) e o registro de que NADA entra no
+  `KNOWN_ESCAPE_HATCHES`. Suíte verde sem nenhuma ação dele.
+- **PO**: nada blocking. Para decidir com calma: se propostas antigas devem assinar sem
+  reenvio, é rodada de backend (migrar snapshots ou JOIN controlado) — hoje é
+  deliberadamente fotografia.
+
+---
+
+## 2026-09-09 — Destravadora do editor de roteiro + `reabrirEstagio` (o desfazer do arquivar)
+
+
+**Veredito: PRONTO.** `npx tsc --noEmit` limpo na árvore inteira (inclusive com os arquivos
+em voo da Nina — os dois erros que ela tinha aberto em `src/lib/ui/roteiroApi.ts` e
+`RoteiroBlocos.tsx` já fechados por ela), suíte **556/556** (23 arquivos; as 544 que já
+estavam + 12 novas, todas em DOIS arquivos NOVOS: `tests/itineraries/conteudo-do-roteiro.test.ts`
+e `tests/deals/reabrir-estagio.test.ts`). **Nenhuma migration** — nada para o
+`db:migrate`. Nada commitado. Contrato completo e já atualizado para a Nina em
+`docs/handoffs/rafa-para-nina.md` §2 (`reabrirEstagio`) e §10 (editor).
+
+### Pronto
+
+1. **`atualizarConteudoDoRoteiro(dealId, blocos)`** (`src/server/itineraries.ts`) — a
+   escrita que faltava: reescreve SÓ `blocks_snapshot` de um roteiro JÁ GERADO.
+   `public_token`, `proposal_id`, título, cliente, moeda, datas e `brand_snapshot`
+   intocáveis — o link que já foi pelo WhatsApp continua válido. Lista COMPLETA de blocos
+   (mesmo contrato do `reordenarEstagios`), máx. 100; devolve o estado PERSISTIDO;
+   audita `itinerary.updated` com `dealId` no metadata; gate de dunning na primeira linha
+   da transação. **Idempotência barata para o autosave**: mesmo conteúdo (comparação
+   canônica, imune à reordenação de chaves do jsonb — o Postgres NÃO preserva ordem de
+   chave) é no-op, sem UPDATE e sem audit novo.
+2. **A PORTARIA** — a exigência do pedido ("recuse qualquer coisa que cheire a
+   preço/custo/comissão") virou guarda de escrita em `CHAVES_PROIBIDAS` +
+   `acharChaveProibida`: recursiva em `content` de qualquer profundidade, recusa com
+   `campo: 'blocos[2].content.preco'` e correção pronta. Três decisões dentro dela (ver
+   "Decisões"): a família `preço` é ESTRITEZ DAQUI (o scanner não pode banir preço — a
+   proposta pública é cotação; o roteiro não), camelCase é repartido antes de testar
+   (`custoTransfer` não escapa), e a portaria corre DEPOIS do atalho de no-op para não
+   tijolar re-salva de snapshot legado.
+3. **As leituras apontadas** — `listarRoteiroDoNegocio(dealId)` →
+   `ServiceResult<RoteiroResumo | null>` (exatamente a assinatura combinada; `null` =
+   sem roteiro, mesma resposta de deal de outro tenant); `obterPropostaAceitaDoNegocio(dealId)`
+   → `ServiceResult<{ proposalId; title } | null>` (compartilha a query
+   `propostaAceitaRecente` com o `gerarRoteiro` — aponta a MESMA proposta que ele
+   fotografaria; o `gerarRoteiro` foi refatorado para usar a mesma função, zero mudança
+   de comportamento); e `obterConteudoDoRoteiro(dealId)` →
+   `ServiceResult<BlocoDoRoteiro[] | null>` — **ADITIVA, não estava no contrato do
+   Pedro**: o editor precisa CARREGAR o conteúdo autenticado e o `RoteiroResumo` não
+   traz blocos; sem ela a tela teria que ler o payload PÚBLICO para montar formulário.
+4. **`reabrirEstagio({ id })`** (`src/server/pipelineStages.ts`) — o par do
+   `arquivarEstagio`. Volta NO FIM DO ABERTO (`posicaoFimDoAberto`, o mesmo lugar de uma
+   coluna nova — extraído e adotado pelo `criarEstagio` também); rótulo em conflito com
+   coluna ativa volta com sufixo `"(arquivada)"`… a MESMA regra feia-de-propósito da
+   semente da 0016 (nunca derruba no índice único parcial); fim de funil ocupado volta
+   sem a marca (inalcançável pelas actions de hoje, guarda barata para linha que um dia
+   exista por outro caminho); idempotente; teto de 12 ATIVAS; audit
+   `pipeline_stage.reopened` com `{ de, para, position }`. Aviso repassado: **a Nina pode
+   converter a faixa de confirmação do arquivar em toast com desfazer de 8s** — desfazer
+   é isto.
+5. **Bug de passagem consertado: o teto do `criarEstagio` contava coluna ARQUIVADA**
+   (`contarEstagios` não filtrava `archived_at`). Consequência: a própria correção que o
+   estouro devolve — "Arquivar uma coluna antes de criar outra" — nunca funcionava; o
+   teto era paredão sem porta. Criada `contarEstagiosAtivos`
+   (`pipelineStagesDefaults.ts`, filtro `isNull(archivedAt)`) e o teto do `criarEstagio`
+   usa ela; `reabrirEstagio` já nascia com a régua certa (`ativos.length`);
+   `contarEstagios` (total) segue só na cura de semente do `listarEstagios`, que é o
+   único lugar onde total é o número certo. Meu teste do teto do reabrir pega a diferença
+   de verdade (12 ativas com uma arquivada por baixo).
+
+### Decisões que tomei sozinha
+
+- **§4 do pedido (kinds novos): caminho A** — `kind` fica no vocabulário do CHECK
+  `proposal_blocks_kind_check` (os 9, espelhados em `KINDS_DE_BLOCO`, com mensagem de
+  recusa própria); semântica nova viaja DENTRO do `content` (jsonb). `kind` NOVO é
+  migration alterando o CHECK — decisão de schema, não parâmetro de tela. Sem migration
+  nesta rodada, como o pedido preferiu.
+- **`obterConteudoDoRoteiro` fora do contrato do Pedro, mesmo assim** — as assinaturas
+  combinadas ficaram INTACTAS; aditei uma leitura. O editor sem ela leria o payload
+  público (`obterRoteiroPublico`) para montar formulário autenticado — trocar o dono do
+  dado de lugar para economizar uma action era errado. Documentada como "a que o editor
+  abre" no handoff.
+- **Família `preço` só na portaria, não no scanner** — `preco|price|valor|amount|montante|
+  tarifa|rate|diaria` como CHAVE de `content` é recusada; o leak-scanner do Téo continua
+  como está. O scanner varre payloads que incluem a proposta pública, onde preço de opção
+  é conteúdo legítimo; o roteiro é que não é cotação. Portaria mais estrita que a rede é
+  a direção segura. Conferi o vocabulário real de `content` que existe hoje
+  (`CONTENT_FIELDS` do `blockContent.ts`, `details` da biblioteca, blocos do seed) contra
+  as 8 famílias antes de endurecer — nada legítimo colide.
+- **Portaria DEPOIS do no-op, ANTES do UPDATE** — meu primeiro corte rodava a portaria
+  antes da transação (recusa não custa conexão), mas isso tijolava o editor num caso real:
+  `content` de bloco de proposta é `record` livre, um snapshot legado pode ter nascido com
+  chave proibida, e a re-salva IGUAL (o que o autosave faz) seria recusada para sempre.
+  Agora: re-salvar igual é no-op (nada novo entra); mudança REAL com chave proibida é
+  recusada com o campo exato. Observável que importa preservado (snapshot parado, audit
+  parado) e o teste continua provando.
+- **Repartir camelCase na portaria** (`custoTransfer` → `custo_Transfer`) — o espelho crú
+  das regex do scanner deixaria `custoTransfer` passar (as famílias terminam em fronteira
+  `_`/fim). Portaria mais estrita que a rede, de novo na direção segura;
+  `flightNumber`/`checkIn`/`hotelName` não colidem.
+- **Telefone de emergência no `body`, não em chave** — `whatsapp` como chave é recusada
+  (família telefone, espelho do scanner); no PROSA do bloco passa. É a decisão certa das
+  duas maneiras: para o cliente, o telefone do guia É conteúdo; para o vazamento, o
+  scanner canário é por VALOR e continua varrendo o payload público inteiro. Está escrito
+  no handoff da Nina porque é ela quem modela o campo.
+- **`[]` (zerar o conteúdo) é aceito** — apagar todo o conteúdo é edição legítima, não
+  estado inválido; a página pública mostra o roteiro vazio. Se o produto quiser bloquear,
+  a trava é de UI. Registrado no handoff.
+- **`contarEstagios` mantém o nome e vira total de novo documentado** — em vez de
+  trocar a semântica por baixo dos dois consumidores, separei (`contarEstagiosAtivos`) e
+  apontei cada consumidor para a régua certa. Menos esperteza, mais explícito.
+
+### Verificação
+
+- `npx tsc --noEmit` — limpo (na árvore inteira, no fim da rodada).
+- `npx vitest run` (suíte inteira) — **556/556**, 23 arquivos. Nenhum teste existente
+  editado; meus 12 em dois arquivos novos. O globalSetup recria o `zarpa_test` e aplica
+  as 17 migrations — nenhuma nova.
+- Sem migration → nada de `db:migrate` nesta rodada (a 0016 já aplicada segue válida).
+- Smoke pelo dev server: **pulada de propósito** — os arquivos de UI da rota estavam em
+  edição paralela pela Nina durante a rodada (o `tsc` chegou a pegar dois erros dela no
+  meio, já fechados); o comportamento da action está coberto por teste de Postgres real
+  (RLS incluído), que é sinal mais forte que smoke de dev server.
+- Duas armadilhas que a rodada revelou (para constar): o cache de transform do vitest
+  (`.vite`) serviu módulo velho depois de eu editar o guard — limpei o cache e o
+  resultado mudou; e `custoTransfer` não casa com as regex do scanner por camelCase — o
+  achado virou decisão (acima), não só detalhe de teste.
+
+### Riscos
+
+- **Portaria vs. scanner agora divergem de dois jeitos documentados** (família `preço` a
+  mais; camelCase repartido). Divergência entre portaria e rede é onde vazamento mora
+  quando uma das duas muda sozinha — o comentário no código aponta os dois lados; se o
+  Téo endurecer o scanner, a portaria quer o mesmo remendo.
+- **Snapshot legado com chave proibida continua público até alguém editá-lo** — a portaria
+  impede ENTRADA nova; não varre o que já está lá (isso é trabalho do scanner na suíte e
+  do payload público que já nasceu). Se o produto quiser varredura de cura, é rodada à
+  parte.
+- **`atualizarConteudoDoRoteiro` reescreve o snapshot inteiro por salvamento** — no
+  volume do autosave isso é um UPDATE de jsonb por batida de teclado (debounce do cliente
+  é quem segura; o no-op canônico cobre a batida sem mudança). Se um dia martelar de
+  verdade, o caminho é delta por bloco — não construí isso sem necessidade.
+- `[]` aceito significa roteiro publicamente vazio — decisão consciente, registrada.
+
+### O que precisa dos outros
+
+- **Nina**: §10 do `rafa-para-nina.md` é o contrato vivo do editor (incluindo: conteúdo
+  vem de `obterConteudoDoRoteiro`, NÃO do `listarRoteiroDoNegocio` — o `roteiroApi.ts`
+  dela chegou a tipar blocos no listar durante a rodada; se sobrou resquício, é este o
+  ajuste). E §2: a faixa de confirmação do arquivar já pode virar toast com desfazer de
+  8s via `reabrirEstagio`.
+- **Téo**: os 12 casos novos já entraram na suíte (arquivos novos, nada editado). Vale
+  registrar a divergência portaria/scanner como ponto de atenção quando ele mexer no
+  `leak-scanner` — a portaria é espelho DELIBERADO com duas diferenças documentadas.
+- **PO**: nada blocking. Para decidir com calma depois: bloquear "salvar roteiro vazio" é
+  trava de UI se o produto quiser; e regeneração de roteiro continua deliberadamente
+  proibida (a escrita nova não muda isso — conteúdo muda, fotografia comercial não).
+
+---
+
+## 2026-09-09 — S16: o negócio aponta para a coluna (`deals.stage_id`, 0016) + o filtro de proposta por negócio
+
+**Veredito: pronto.** `npx tsc --noEmit` limpo, `npm run db:migrate` aplicando limpa (25
+tabelas em public, todas com RLS habilitado E forçado), suíte **544/544** (as 540 que já
+estavam + 4 novas deste round, em `tests/proposals/filtro-deal.test.ts`). Nada commitado —
+o usuário commita. O código da rodada já estava no working tree verificado; aqui eu o
+REVISI, o re-verifiquei contra o banco e completei os dois furos que faltavam (ver item 6).
+
+### Pronto
+
+1. **`drizzle/0016_negocio_aponta_para_estagio.sql`** (idx 16 no `_journal.json`) — `deals`
+   ganha `stage_id uuid NOT NULL` → `pipeline_stages(id)`, com backfill por `legacy_stage`
+   no mesmo arquivo. O que cada peça da estratégia é e por que está assim:
+
+   - **AS DUAS COLUNAS CONVIVEM, SINCRONIZADAS POR TRIGGER NO BANCO.** `deals.stage` (o
+     enum de 6 valores, com CHECK) NÃO saiu — virou PROJEÇÃO de `stage_id`, mantida pelo
+     trigger `deals_estagio_sync` (BEFORE INSERT OR UPDATE OF stage, stage_id). A regra,
+     para QUALQUER escritor: quem grava `stage_id` → o trigger deriva `stage` (o id manda);
+     quem grava só `stage` → o trigger resolve `stage_id` pelo `legacy_stage`; quem não
+     toca em nenhum dos dois → early return. Motivo de não simplesmente trocar tudo para
+     `stage_id` num commit: havia código escrevendo/lendo `deals.stage` em seis lugares de
+     `src/server/**`, no seed, em SEIS arquivos de teste que são fronteira do Téo e no seed
+     sintético do scanner de isolamento — estratégia que exige que todos mudem juntos é
+     aposta, não migração. `UPDATE OF stage, stage_id` no trigger: autosave que só mexe em
+     título/valor não paga nem a entrada da função.
+   - **FONTE DE VERDADE DE "FECHOU COMO GANHO/PERDIDO" = `pipeline_stages.is_won`/`is_lost`.**
+     O enum é derivado DELES (`coalesce(legacy_stage, case when is_won then 'ganho' when
+     is_lost then 'perdido' else 'negociando' end)`). Consequência: `deals.stage = 'ganho'`
+     passou a ser verdadeiro SE E SOMENTE SE o negócio está no estágio `is_won` do tenant —
+     e é por isso que as comparações literais que sobraram em outros arquivos continuam
+     corretas sem reescrita (são um teste de `is_won` escrito em outra sintaxe). Reescrevi
+     MESMO ASSIM as de `src/server/**` para lerem `is_won`/`is_lost` pelo join (explícito é
+     melhor); o trigger é o cinto de segurança para o resto (seed, testes, importação).
+   - **FALLBACK `'negociando'` PARA COLUNA CRIADA PELA AGENTE.** Estágio sem `legacy_stage`
+     precisa de ALGUM valor de enum (o CHECK de `deals.stage` continua valendo). Escolhi um
+     valor ABERTO — a única propriedade que importa para consumidor legado é "não é ganho
+     nem perdido", e `negociando` é o último aberto antes do fim de funil.
+   - **FK `DEFERRABLE INITIALLY DEFERRED` + `SET CONSTRAINTS ALL IMMEDIATE` antes do fim.**
+     Deferred porque `tenants` apaga em cascata `deals` E `pipeline_stages` — com checagem
+     imediata, a ordem em que o Postgres processa as duas cascatas no mesmo comando pode
+     fazer a RI reclamar de linha de `deals` prestes a sumir (foi o erro real da primeira
+     tentativa: 55006, pending trigger events). `NO ACTION` e não CASCADE de propósito:
+     apagar uma coluna do funil não pode apagar os negócios dela. O `SET CONSTRAINTS ALL
+     IMMEDIATE` no meio do arquivo força a checagem do backfill DENTRO da migration, não
+     no commit — e resolve o 55006 que o `ALTER TABLE ... SET NOT NULL` daria.
+   - **BACKFILL RESPEITANDO RLS.** Sem desligar RLS e sem superuser (o role é NOBYPASSRLS
+     por desenho): entra no contexto de cada tenant via `set_config('app.tenant_id', ...,
+     true)`, exatamente como a aplicação faria; para ler a lista de tenants usa
+     `app.auth_context` (mesmo canal e justificativa da 0015; local à transação, apagado no
+     fim). Os ids são materializados em array ANTES do laço — o GUC muda a cada volta e a
+     visibilidade do cursor não pode depender da volta em que ele está. A verificação final
+     é o próprio `ALTER TABLE ... SET NOT NULL`: roda como dono, vê a tabela inteira (um
+     `SELECT ... WHERE stage_id IS NULL` num `DO` block só enxergaria o tenant do GUC
+     corrente e daria um "está tudo certo" FALSO) e falha alto e claro se sobrou buraco.
+   - **SEMEAR POR VALOR FALTANTE — o bug de ordem de arquivo que a sonda derrubou.** A
+     primeira versão de `semear_estagios_padrao` semeava só se o tenant estivesse VAZIO. O
+     seed sintético do scanner de isolamento (`tests/helpers/db.ts`) cria UMA coluna de
+     funil por tenant, sem `legacy_stage`: com ela lá, "tem alguma coluna" era verdade, a
+     semente não rodava e o INSERT em `deals` com o enum morria — MAS SÓ quando aquele
+     arquivo rodava sozinho (na suíte inteira, outro teste semeava o tenant antes e o
+     defeito sumia). Falha dependente de ordem de arquivo é a que mais custa caro depois; a
+     função agora semeia por VALOR FALTANTE (um `CONTINUE WHEN EXISTS` por `legacy_stage`),
+     idempotente, `ON CONFLICT DO NOTHING`. Dois desvios de rota para nunca derrubar um
+     insert de negócio: rótulo já usado → entra como `"Enviada (proposta_enviada)"` (feio
+     de propósito); fim de funil já ocupado → a linha nasce SEM a marca (ver Riscos).
+   - **SEGURANÇA INVOKER, não definer.** As duas funções rodam com os direitos de quem
+     escreveu no `deals`, sob o mesmo `app.tenant_id`, e as policies de `pipeline_stages`
+     valem dentro delas — é o que faz `stage_id` de OUTRO tenant simplesmente NÃO SER
+     ENCONTRADO na resolução (a policy some com a linha) e o INSERT morrer com 23503, em
+     vez de gravar referência cruzada. O FK sozinho não garantiria isso: FK não sabe o que
+     é tenant. Nenhum GUC novo, nada a acrescentar em `KNOWN_ESCAPE_HATCHES`. O trigger
+     não valida arquivamento de propósito: recusar "mover para coluna arquivada" é regra
+     de produto e mora em `moverEstagioDoNegocio`, onde dá para devolver mensagem que a
+     agente entende.
+   - **ORDEM:** coluna → índices → funções → trigger → backfill → `SET CONSTRAINTS` →
+     `SET NOT NULL`. Índices novos: `deals_stage_id_idx` (serve a checagem de RI e a
+     contagem de `arquivarEstagio`) e `deals_tenant_stage_id_idx` (o board lê por tenant +
+     coluna; `deals_tenant_stage_idx` da 0000 continua servindo o enum).
+
+2. **`src/server/deals.ts`** — `DestinoDeEstagio = DealStage | { stageId: }` (união no MESMO
+   parâmetro de `moverEstagioDoNegocio` em vez de action nova: as duas fariam a mesma coisa
+   e duplicata é onde regra vira duas implementações meio diferentes); `resolverEstagio`
+   resolve os dois destinos na linha do tenant (pelo enum: semeia se o tenant não tem funil,
+   mesmo comportamento do trigger; pelo id: recusa arquivada); `espelhoDoEnum` bit a bit o
+   mesmo `CASE` do trigger (se divergirem, vale o banco — ele roda por último); queries de
+   leitura passam a ler `is_won`/`is_lost` pelo join com `pipeline_stages`;
+   `listarNegociosDoFunil` devolve `stageId`/`stageLabel`/`stagePosition` além do enum;
+   guarda de concorrência do UPDATE por `stage_id` (a coluna de verdade); `atualizarNegocio`
+   (patch de autosave campo a campo, datas aceitam `''` = limpar e `undefined` = não mexe,
+   devolve o `NegocioDetalhe` reconciliado) — o item 4.2 do handoff antigo da Nina, feito.
+   `criarNegocio` aceita `stageId` e recusa fim de funil ("Um negócio não nasce fechado").
+
+3. **`src/server/pipelineStages.ts`** — a contagem de negócios por coluna passou a ser por
+   `deals.stage_id` (era por `legacy_stage`, o único vínculo que existia antes) — é o que
+   faz `arquivarEstagio` proteger TAMBÉM as colunas que a agente criou. `listarEstagios`
+   curas idempotente no outro extremo do trigger: sem semente, semeia na mesma transação
+   quando alguém abre a tela de configuração.
+
+4. **`src/server/pipelineStagesDefaults.ts`** — `ESTAGIOS_PADRAO` virou documentação e tipo;
+   quem semeia DE VERDADE é `public.semear_estagios_padrao` (o trigger também precisa
+   semear, e duas listas divergiriam no primeiro dia em que alguém mudasse um rótulo). O
+   wrapper `semearEstagiosPadrao(tx, tenantId)` chama a função SQL com o id parametrizado.
+
+5. **Queries que deixaram de comparar literal** — `itineraries.ts` (`gerarRoteiro` recusa
+   por `!isWon`), `money.ts` (perdido do período = `is_lost` da coluna) e `viagens.ts`
+   (`listarEmViagem` = `is_won` com `departure_on`). Continuariam corretas sem reescrita
+   (o trigger deriva o enum dos booleanos, nunca o contrário) — reescrevi porque explícito
+   é melhor e porque o dia em que a agente renomear "Perdida" para "Não rolou", o relatório
+   continua batendo.
+
+6. **`listarPropostas({ dealId })` — o filtro JÁ EXISTIA, e não foi desta rodada.** Está
+   commitado desde a rodada de 2026-09-07 (entrada abaixo, `FiltroPropostas` já exportado
+   no barril). O que faltava era o **zod**: um uuid malformado chegava ao Postgres como
+   erro cru de driver (22P02), virava o envelope genérico "Não consegui completar essa
+   ação agora" + ruído no `console.error`. Agora valida ANTES de abrir transação (chamada
+   mal formada não custa conexão — mesma ordem de `moverEstagioDoNegocio`) e responde
+   `DADOS_INVALIDOS`/`campo: 'dealId'` com correção. uuid VÁLIDO de outro tenant continua
+   devolvendo lista vazia: o corte é do RLS, não daqui. Também exportei
+   `type DestinoDeEstagio` no barril `@/server` (existia em `deals.ts`, mas a Nina não o
+   via de lá) e escrevi o teste novo das 4 pontas do filtro
+   (`tests/proposals/filtro-deal.test.ts` — arquivo NOVO, nenhum teste existente editado;
+   até hoje `listarPropostas` não tinha NENHUM teste direto).
+
+7. **`contactWhatsapp` em `PropostaParada`** (`src/server/dashboard.ts`) — o pedido S15 da
+   Nina (item 0 do handoff antigo), mesmo working tree. WhatsApp CRU como foi digitado,
+   mesma disciplina de `listarEmViagem`: o servidor não normaliza; quem monta o link usa
+   `waMeLink` no cliente.
+
+### Decisões que tomei sozinha
+
+- **Zod só no `dealId`, não no filtro inteiro.** `busca`/`ids`/`limite` seguem como estão
+  (commitados, consumidos por telas que funcionam — mexer neles é escopo que o pedido não
+  pedia); `dealId` é o único que recebia valor de fora sem NENHUMA validação, e é o único
+  com tipo rígido do banco esperando. Se um dia o filtro virar schema zod inteiro, é
+  decisão maior do que esta rodada.
+
+- **Teste novo em `tests/`** (fronteira do Téo): o pedido permite arquivo novo quando o
+  filtro precisa, e "sem teste provando o isolamento, o isolamento não existe" — o filtro
+  não tinha NENHUM teste e a prova de RLS (item 3 do arquivo) é exatamente o critério de
+  aceite da S1 em versão de action. Nenhum teste existente foi editado.
+- **`DestinoDeEstagio` no barril** — type é apagado na compilação (não vira export runtime
+  de módulo `'use server'`); sem ele a Nina teria que redeclarar a união na mão ou importar
+  de `@/server/deals` direto, furando o barril que o contrato manda usar.
+- **`atualizarNegocio` não aceita `stageId`.** Trocar a coluna pela ficha é trabalho do
+  `moverEstagioDoNegocio`, que é onde estão motivo de perda, `closedAt`, activity e
+  auditoria. Dois caminhos para a mesma escrita é regressão esperando auditoria torta.
+
+### Riscos
+
+- **Fim de funil ocupado por outra coluna ativa**: a linha semeada nasce SEM a marca e o
+  enum `'ganho'` deixa de coincidir com `is_won`. Só acontece com coluna criada fora do
+  caminho do produto (`criarEstagio` nunca cria fim de funil, e índice único parcial
+  garante um só de cada por tenant). Registrado no SQL; a alternativa (recusar o INSERT do
+  negócio) seria trocar inconsistência de relatório por perda de dado da agente.
+- **Efeito colateral conhecido e aceito** (é o que a rodada da Nina fecha): enquanto
+  `/funil` montar as colunas pela lista fixa `COLUNAS_DO_FUNIL`, negócio numa coluna
+  customizada aparece embaixo de "Negociando" (é o espelho que o banco dá a coluna sem
+  `legacy_stage`). Some no minuto em que a tela passar a usar `stageId`/`stageLabel`, que
+  `listarNegociosDoFunil` já devolve. Contrato completo em
+  `docs/handoffs/rafa-para-nina.md` (novo — o antigo foi para `old_nao_abrir/`).
+- Os riscos estruturais já registrados continuam valendo: GUCs (`app.tenant_id`,
+  `app.auth_context` e irmãos) são forjáveis por SQL arbitrário — mitigação estrutural
+  (role dedicado) pedida ao PO em `docs/handoffs/rafa-para-po.md`, item 5.
+
+### Verificação
+
+- `npx tsc --noEmit`: limpo.
+- `npm run db:migrate`: ok — 25 tabelas em public, todas com RLS habilitado e forçado.
+- `npm test`: **544/544** (21 arquivos; 540 que já estavam + 4 novas do filtro). O global
+  setup recria o schema do `zarpa_test` e aplica as 17 migrations — o trigger da 0016 é
+  atravessado por todo teste que insere negócio (inclusive os meus, que plantam `deals`
+  só com o enum e dependem de ele resolver `stage_id` semeando o funil).
+- Não toquei em `src/components`, `src/styles`, `src/app`, `package.json` — fronteira
+  respeitada. `tests/` só arquivo NOVO, conforme autorizado.
+
+### O que precisa dos outros
+
+- **Nina**: a rodada de UI do funil configurável — é o contrato inteiro de
+  `docs/handoffs/rafa-para-nina.md`. Inclui trocar o provisório da ficha do negócio
+  (`limite: 200` + filtro no cliente) por `listarPropostas({ dealId })`.
+- **Téo**: a suíte está verde e o caso do seed sintético está coberto de fato (o scanner
+  roda contra o trigger), mas vale teste NOMEADO para a garantia nova da semente — "tenant
+  com UMA coluna sem `legacy_stage` recebe os seis valores faltantes sem recusar insert" —
+  para virar contrato e não depender de o scanner continuar semeando assim. Registrado
+  aqui, não em handoff — o scanner já cobre o comportamento, o teste nomeado é para quando
+  ele mudar.
+
+---
+
 ## 2026-09-08 — S15: contador de visita em dobro (0014) + alicerce do funil configurável (0015)
 
 **Veredito: as DUAS tarefas prontas e verificadas.** `npx tsc --noEmit` limpo, `npm run
