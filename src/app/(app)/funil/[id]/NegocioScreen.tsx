@@ -5,12 +5,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   atualizarNegocio,
+  listarEquipe,
   listarEstagios,
+  listarNegociosDoFunil,
   listarPropostas,
   listarViajantes,
   moverEstagioDoNegocio,
   obterNegocio,
   type AtividadeDoNegocio,
+  type EquipeResumo,
   type EstagioDoFunil,
   type NegocioDetalhe,
   type NegocioMovido,
@@ -21,6 +24,7 @@ import {
 } from "@/server";
 import { listarRoteiroDoNegocio } from "@/lib/ui/roteiroApi";
 import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
+import { cn } from "@/lib/ui/cn";
 import {
   resultadoDaViagem,
   urlDoCsvDePassageiros,
@@ -37,9 +41,17 @@ import {
   CardTitle,
 } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Field, FieldError, Label, SavedMark } from "@/components/ui/Field";
+import { Field, FieldError, FieldHint, Label, SavedMark } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { CentsInput, MoneyStat } from "@/components/ui/Money";
+import { Monogram } from "@/components/ui/Monogram";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/Select";
 import { Skeleton, SkeletonRow, SkeletonText } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { DealStageMenu, LossReasonDialog } from "@/components/app/DealStageMenu";
@@ -607,9 +619,207 @@ function ViagemCard({
             return result;
           }}
         />
+
+        {/* Fase 3 (§13.6) — de quem é este negócio. Só o dono vê: reatribuir
+            é decisão dele (o guard está no servidor e o erro DADOS_INVALIDOS
+            de lá é a verdade, não este sumiço). */}
+        <VendedorField negocio={negocio} dealId={dealId} />
       </CardBody>
     </Card>
   );
+}
+
+/* -----------------------------------------------------------------------------
+   VendedorField — reatribuição de negócio (§13.6), dono only
+   -------------------------------------------------------------------------
+   Duas leituras extra, com precedente na própria ficha (a PropostaCard lê
+   `listarPropostas` e filtra por `dealId` no cliente):
+
+   1. `listarEquipe()` diz SE eu sou o dono (o membro cujo `userId` é o
+      `solicitanteUserId` com papel 'owner') e quem são os membros — o
+      cardápio do select. Não-dono: o campo nem nasce.
+
+   2. `NegocioDetalhe` NÃO carrega `agentId`/`agentName` — furo de contrato
+      registrado em docs/handoffs/nina-para-rafa.md. O contorno honesto é ler
+      o valor ATUAL do quadro (`listarNegociosDoFunil`, que tem os dois) e
+      achar o negócio pelo id. Em negócio PERDIDO o quadro não o devolve, e o
+      campo diz isso: sem fingir valor que não sei, sem esconder o controle.
+
+   Commit no change (select não tem blur útil), "Salvo" discreto como todo
+   campo da ficha, e o desfazer do toast devolve o vendedor anterior.
+   ------------------------------------------------------------------------- */
+
+/** Valor sentinela do select — Radix não aceita `value=""` num item. */
+const SEM_VENDEDOR = "sem-vendedor";
+
+function VendedorField({
+  negocio,
+  dealId,
+}: {
+  negocio: NegocioDetalhe;
+  dealId: string;
+}) {
+  const toast = useToast();
+
+  const [status, setStatus] = React.useState<"loading" | "indisponivel" | "pronto">("loading");
+  const [membros, setMembros] = React.useState<EquipeResumo["membros"]>([]);
+  /** `{ agentId, agentName }` do negócio — `null` quando não dá para saber. */
+  const [atual, setAtual] = React.useState<{ agentId: string | null; agentName: string | null } | null>(null);
+  const [valor, setValor] = React.useState<string>(SEM_VENDEDOR);
+  const [state, setState] = React.useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [erro, setErro] = React.useState<{ mensagem: string; correcao?: string } | null>(null);
+
+  React.useEffect(() => {
+    let active = true;
+    void Promise.all([listarEquipe(), listarNegociosDoFunil()]).then(
+      ([equipeResult, quadroResult]) => {
+        if (!active) return;
+        if (!equipeResult.ok) {
+          setStatus("indisponivel");
+          return;
+        }
+        const resumo = equipeResult.data;
+        const eu = resumo.membros.find((m) => m.userId === resumo.solicitanteUserId);
+        if (eu?.role !== "owner") {
+          setStatus("indisponivel"); // agente/admin não reatribuem — campo nem nasce
+          return;
+        }
+        setMembros(resumo.membros);
+        if (quadroResult.ok) {
+          const meu = quadroResult.data.find((item) => item.id === negocio.id);
+          if (meu) {
+            setAtual({ agentId: meu.agentId, agentName: meu.agentName });
+            setValor(meu.agentId ?? SEM_VENDEDOR);
+          }
+        }
+        setStatus("pronto");
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [negocio.id]);
+
+  /** Grava a atribuição. `anunciar` é falso no caminho do DESFAZER — o toast
+      que o chamou já é a mensagem; um segundo toast repetindo a volta é
+      ruído (mesmo critério do `reopenAt` do quadro). */
+  async function salvar(proximo: string, anunciar: boolean) {
+    const anterior = valor;
+    setValor(proximo);
+    setState("saving");
+    setErro(null);
+    const result = await atualizarNegocio(dealId, {
+      agentId: proximo === SEM_VENDEDOR ? null : proximo,
+    });
+    if (!result.ok) {
+      // O erro do servidor é a verdade (§13.6): o select volta e o campo
+      // diz o que aconteceu com o conserto ao lado.
+      setValor(anterior);
+      setState("error");
+      setErro({ mensagem: result.mensagem, correcao: result.correcao });
+      return;
+    }
+    setState("saved");
+    setAtual({
+      agentId: proximo === SEM_VENDEDOR ? null : proximo,
+      agentName:
+        proximo === SEM_VENDEDOR
+          ? null
+          : (membros.find((m) => m.userId === proximo)?.name ?? null),
+    });
+    if (!anunciar) return;
+    toast.undo(
+      proximo === SEM_VENDEDOR
+        ? "Vendedor removido do negócio"
+        : `Reatribuído para ${primeiroNomeDe(nomeDe(proximo) ?? "novo vendedor")}`,
+      () => void salvar(anterior, false),
+      { tone: "ok" },
+    );
+  }
+
+  function nomeDe(userId: string): string | null {
+    return membros.find((m) => m.userId === userId)?.name ?? null;
+  }
+
+  if (status === "loading") {
+    // Esqueleto na MESMA altura do campo que vem: o card não pula quando a
+    // equipe chega — número que muda de altura ao carregar é bug como número
+    // que muda de largura.
+    return (
+      <Field className="mt-4" aria-busy="true">
+        <div className="flex items-baseline justify-between gap-2">
+          <Label>Vendedor</Label>
+        </div>
+        <Skeleton className="h-9 w-full rounded-sm" />
+      </Field>
+    );
+  }
+  if (status === "indisponivel") return null;
+
+  const semValorConhecido = atual === null;
+
+  return (
+    <Field invalid={state === "error"} className="mt-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <Label>Vendedor</Label>
+        <SavedMark state={state} />
+      </div>
+      <Select
+        value={valor}
+        onValueChange={(proximo) => void salvar(proximo, true)}
+      >
+        <SelectTrigger
+          aria-invalid={state === "error" || undefined}
+          aria-label="Vendedor do negócio"
+        >
+          <SelectValue placeholder="Escolher vendedor" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={SEM_VENDEDOR}>Sem vendedor</SelectItem>
+          {membros.map((membro) => (
+            <SelectItem key={membro.memberId} value={membro.userId}>
+              <span className="flex items-center gap-2">
+                <Monogram
+                  name={membro.name ?? membro.email}
+                  size="sm"
+                  className="text-muted"
+                />
+                <span className={cn("truncate", membro.name ? undefined : "text-muted")}>
+                  {membro.name ?? membro.email}
+                </span>
+              </span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {state === "error" && erro ? (
+        <FieldError
+          action={
+            <button
+              type="button"
+              className="font-medium text-danger underline underline-offset-2"
+              onClick={() => void salvar(valor, true)}
+            >
+              {erro.correcao ?? "Tentar de novo"}
+            </button>
+          }
+        >
+          {erro.mensagem}
+        </FieldError>
+      ) : semValorConhecido ? (
+        // Negócio perdido: o quadro não devolve o vendedor atual (furo do
+        // contrato). O hint diz o que o campo faz — não finge que sabe.
+        <FieldHint>
+          De quem era não aparece em negócio perdido — escolher aqui reatribui.
+        </FieldHint>
+      ) : null}
+    </Field>
+  );
+}
+
+/** Primeiro nome para frases — registro, não chamada formal. */
+function primeiroNomeDe(nome: string): string {
+  return nome.trim().split(/\s+/)[0] ?? nome;
 }
 
 /** Campo de texto com salvamento automático no blur — igual ao de `ContatoScreen`/`VendaScreen`. */

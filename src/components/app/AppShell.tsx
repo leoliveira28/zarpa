@@ -19,6 +19,7 @@ import {
   PlusIcon,
   ProposalIcon,
   SlidersIcon,
+  TeamIcon,
   TodayIcon,
 } from "./icons";
 
@@ -127,7 +128,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       ? "Kitchen sink"
       : pathname.startsWith("/configuracoes")
         ? "Sua marca"
-        : APP_NAME);
+        : pathname.startsWith("/equipe")
+          ? "Equipe"
+          : APP_NAME);
 
   return (
     <div
@@ -217,6 +220,14 @@ function SideNav({ activeHref }: { activeHref: string | null }) {
       </nav>
 
       <div className="mt-auto flex flex-col gap-3 border-t border-hairline p-3">
+        {/* Fase 3 — a Equipe é a primeira do grupo de gestão: quem entra nela
+            mexe em gente e assento, que é o que decide quanto se paga. */}
+        <Link
+          href="/equipe"
+          className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
+        >
+          Equipe
+        </Link>
         <Link
           href="/configuracoes"
           className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
@@ -332,7 +343,16 @@ function TopBar({ title }: { title: string }) {
           </span>
           {/* No desktop, "Sua marca" mora na lateral. No celular a lateral não
               existe e a barra inferior já está no limite de cinco alvos — o
-              caminho é aqui, um ícone quieto ao lado do tema. */}
+              caminho é aqui, um ícone quieto ao lado do tema. A Equipe entra
+              ao lado com o mesmo peso (Fase 3): dois ícones quietos, nenhum
+              disputando o "+" principal. */}
+          <Link
+            href="/equipe"
+            aria-label="Equipe"
+            className="grid size-9 place-items-center rounded-md text-muted hover:bg-surface-3 hover:text-ink lg:hidden"
+          >
+            <TeamIcon className="size-5" />
+          </Link>
           <Link
             href="/configuracoes"
             aria-label="Sua marca"

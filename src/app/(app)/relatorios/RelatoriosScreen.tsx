@@ -2,12 +2,18 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { resumoDoPeriodo, type PeriodoInput, type ResumoDoPeriodo } from "@/server";
+import {
+  resumoDoPeriodo,
+  type PeriodoInput,
+  type QuebraPorVendedor,
+  type ResumoDoPeriodo,
+} from "@/server";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, SectionHeading } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Money } from "@/components/ui/Money";
+import { Monogram } from "@/components/ui/Monogram";
 import { SkeletonRow } from "@/components/ui/Skeleton";
 import {
   Table,
@@ -84,7 +90,10 @@ export function RelatoriosScreen({
 
   React.useEffect(() => {
     let active = true;
-    setStatus((current) => (current === "ready" ? current : "loading"));
+    // Sem setStatus síncrono aqui: trocar de período mantém o que já está em
+    // tela até o número novo chegar (o painel não pisca skeleton), e num
+    // retry o cartão de erro permanece até a resposta — some só quando há
+    // o que mostrar no lugar.
     void resumoDoPeriodo(periodoInput).then((result) => {
       if (!active) return;
       if (!result.ok) {
@@ -170,6 +179,14 @@ function PainelResumo({
       {status === "ready" && resumo ? (
         <p data-numeric className="-mt-4 text-13 tabular-nums text-muted">
           {formatarRotuloPeriodo(resumo.periodo)}
+          {/* De quem são estes números (Fase 3, §13.4): o rótulo vem do
+              `resumo.escopo` que o SERVIDOR mandou — o dono não tem alternador
+              (vê a agência inteira, sempre) e o membro não tem toggle (vê o
+              dele). Número sem dizer de quem é, em time, é número que briga. */}
+          <span className="text-subtle">
+            {" · "}
+            {resumo.escopo === "tenant" ? "Time" : "Meus"}
+          </span>
         </p>
       ) : null}
 
@@ -286,6 +303,15 @@ function PainelResumo({
               antes deles, seria um número sem a conta que o sustenta. */}
           <ResultadoDasViagens periodoInput={periodoInput} periodoParam={periodoParam} />
 
+          {/* --- Vendas por vendedor (Fase 3, §13.5) -------------------- */}
+          {/* Depois de Resultado das viagens: a quebra responde QUEM produziu
+              o resultado que o bloco anterior acabou de mostrar. Quando o
+              plano não abre a quebra, a frase é honesta e curta — nada de
+              banner de upsell gritando numa tela de leitura. Membro sozinho
+              (Pro de uma pessoa): a seção some INTEIRA — dizer "você é o
+              único vendedor" seria narrar o óbvio todo mês. */}
+          <VendasPorVendedor porVendedor={resumo.porVendedor} />
+
           {/* --- Receita por origem ------------------------------------- */}
           <section aria-labelledby="relatorio-origem" className="flex flex-col gap-3">
             <SectionHeading>
@@ -380,6 +406,70 @@ function PainelResumo({
         </>
       )}
     </>
+  );
+}
+
+/**
+ * Vendas por vendedor — a quebra do §13.5. Cada linha é uma PESSOA, então
+ * monograma (contorno, nunca cor por pessoa) junto do nome; "Sem vendedor" é
+ * linha de verdade (`agentId: null` — dado de antes da fase, e venda não
+ * classificada é categoria, não ruído). Dinheiro com largura reservada pelo
+ * maior valor da tabela: número que não pula entre linhas.
+ */
+function VendasPorVendedor({ porVendedor }: { porVendedor: QuebraPorVendedor }) {
+  if (!porVendedor.disponivel) {
+    if (porVendedor.motivo === "membro_unico") return null;
+    return (
+      <section aria-labelledby="relatorio-vendedores" className="flex flex-col gap-3">
+        <SectionHeading>
+          <span id="relatorio-vendedores">Vendas por vendedor</span>
+        </SectionHeading>
+        <p className="text-13 text-subtle">A quebra por vendedor é do Studio.</p>
+      </section>
+    );
+  }
+
+  const maxReceita = Math.max(1, ...porVendedor.linhas.map((l) => l.receitaBrutaCents));
+
+  return (
+    <section aria-labelledby="relatorio-vendedores" className="flex flex-col gap-3">
+      <SectionHeading>
+        <span id="relatorio-vendedores">Vendas por vendedor</span>
+      </SectionHeading>
+      <TableFrame>
+        <Table>
+          <THead>
+            <TR>
+              <TH>Vendedor</TH>
+              <TH numeric className="w-16">
+                Vendas
+              </TH>
+              <TH numeric>Receita bruta</TH>
+            </TR>
+          </THead>
+          <TBody>
+            {porVendedor.linhas.map((linha) => (
+              <TR key={linha.agentId ?? "sem-vendedor"}>
+                <TD>
+                  <span className="flex items-center gap-2.5">
+                    {linha.nome ? (
+                      <Monogram name={linha.nome} size="sm" className="text-muted" />
+                    ) : null}
+                    {linha.nome ?? <span className="text-muted">Sem vendedor</span>}
+                  </span>
+                </TD>
+                <TD numeric className="text-13 text-muted">
+                  {linha.vendas}
+                </TD>
+                <TD numeric>
+                  <Money cents={linha.receitaBrutaCents} size="15" reserveFor={maxReceita} />
+                </TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
+      </TableFrame>
+    </section>
   );
 }
 

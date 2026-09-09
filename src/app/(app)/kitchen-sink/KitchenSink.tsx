@@ -56,6 +56,7 @@ import {
 } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { Money, MoneyStat } from "@/components/ui/Money";
+import { Monogram } from "@/components/ui/Monogram";
 import {
   Select,
   SelectContent,
@@ -110,6 +111,7 @@ export function KitchenSink() {
 
       <ButtonSection />
       <BadgeSection />
+      <MonogramSection />
       <CardSection />
       <EmptyStateSection />
       <TableSection />
@@ -286,6 +288,84 @@ function BadgeSection() {
               {tone}
             </Badge>
           ))}
+        </div>
+      </TwoThemes>
+    </section>
+  );
+}
+
+/* =============================================================================
+   Monogram
+   ========================================================================== */
+
+function MonogramSection() {
+  return (
+    <section className="flex flex-col gap-4">
+      <Heading note="§8 — identidade de agente NUNCA leva cor: círculo de CONTORNO em currentColor (a gramática do <Rule /> fechado), iniciais de initials(). Quem é o usuário atual diz o PESO do nome ao lado (semibold + “· você”), nunca uma pílula. aria-hidden de propósito: o nome completo mora ao lado.">
+        Monogram — três tamanhos, herança de cor, o “você” em peso
+      </Heading>
+      <TwoThemes>
+        <div className="flex flex-wrap items-center gap-4">
+          <span className="flex items-center gap-2 text-13 text-muted">
+            sm
+            <Monogram name="Marina Albuquerque" size="sm" className="text-ink" />
+          </span>
+          <span className="flex items-center gap-2 text-13 text-muted">
+            md
+            <Monogram name="Marina Albuquerque" size="md" className="text-ink" />
+          </span>
+          <span className="flex items-center gap-2 text-13 text-muted">
+            lg
+            <Monogram name="Marina Albuquerque" size="lg" className="text-ink" />
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-4">
+          <span className="flex items-center gap-2 text-13 text-muted">
+            herda text-muted
+            <Monogram name="Caio Freitas" size="md" className="text-muted" />
+          </span>
+          <span className="flex items-center gap-2 text-13 text-muted">
+            herda text-subtle
+            <Monogram name="Caio Freitas" size="md" className="text-subtle" />
+          </span>
+          <span className="flex items-center gap-2 text-13 text-muted">
+            nome longo
+            <Monogram
+              name="Constança de Villas-Boas Amorim"
+              size="md"
+              className="text-ink"
+            />
+          </span>
+        </div>
+      </TwoThemes>
+
+      {/* A linha de lista da Equipe — o padrão inteiro montado: monograma de
+          contorno, nome com peso para o usuário atual, papel à direita. */}
+      <TwoThemes>
+        <div className="max-w-sm">
+          <ul className="flex flex-col divide-y divide-line-subtle">
+            <li className="flex items-center gap-3 px-1 py-3">
+              <Monogram name="Leandro Prado" size="md" className="text-muted" />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-15 font-semibold text-ink">
+                  Leandro Prado
+                  <span className="font-normal text-muted"> · você</span>
+                </span>
+                <span className="truncate text-13 text-muted">leandro@agencia.com.br</span>
+              </span>
+              <span className="shrink-0 text-13 text-muted">Dono(a)</span>
+            </li>
+            <li className="flex items-center gap-3 px-1 py-3">
+              <Monogram name="Marina Albuquerque" size="md" className="text-muted" />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-15 font-medium text-ink">
+                  Marina Albuquerque
+                </span>
+                <span className="truncate text-13 text-muted">marina@agencia.com.br</span>
+              </span>
+              <span className="shrink-0 text-13 text-muted">Agente</span>
+            </li>
+          </ul>
         </div>
       </TwoThemes>
     </section>

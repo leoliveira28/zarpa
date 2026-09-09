@@ -75,6 +75,19 @@ export function ClientsIcon(props: IconProps) {
   );
 }
 
+/** Equipe — duas pessoas, a de trás sugerida em arco (não é o ClientsIcon:
+    ali a frente é UMA pessoa, o cliente; aqui são duas de carne e osso, o time). */
+export function TeamIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="5.75" cy="5" r="2.4" />
+      <path d="M1.5 13.75a4.25 4.25 0 0 1 8.5 0" />
+      <path d="M11.1 2.9a2.4 2.4 0 0 1 0 4.6" />
+      <path d="M11.8 9.9a4.2 4.2 0 0 1 2.7 3.85" />
+    </Icon>
+  );
+}
+
 /** Mais — para a ação principal. */
 export function PlusIcon(props: IconProps) {
   return (

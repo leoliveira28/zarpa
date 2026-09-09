@@ -26,6 +26,7 @@ import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { FieldError } from "@/components/ui/Field";
 import { Money } from "@/components/ui/Money";
+import { Monogram } from "@/components/ui/Monogram";
 import { Rule } from "@/components/plates";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
@@ -240,7 +241,9 @@ export function FunnelScreen() {
 
   React.useEffect(() => {
     let active = true;
-    setStatus((current) => (current === "ready" ? current : "loading"));
+    // Sem setStatus síncrono: num reload o quadro que já está em tela fica
+    // até o dado novo chegar (o quadro não pisca skeleton), e num retry o
+    // cartão de erro permanece até a resposta — some só quando há quadro.
     void Promise.all([listarNegociosDoFunil(), listarEstagios()]).then(
       ([negocios, colunas]) => {
         if (!active) return;
@@ -320,6 +323,17 @@ export function FunnelScreen() {
     CARD_MONEY_FLOOR,
     ...items.map((item) => item.valueCents),
   );
+
+  /**
+   * Fase 3 (§13.6): a atribuição no card só existe quando o quadro tem MAIS
+   * DE UM vendedor. Em escopo `own` (membro) todos os cards carregam o mesmo
+   * `agentId` — o dele —, então a linha nasce e morre sozinha: o membro não
+   * vê um rótulo redundante em cada card, e o dono de conta recém-saída do
+   * Solo também não (um vendedor não precisa de etiqueta). O funil já vem
+   * escopado do servidor; nada aqui filtra de novo.
+   */
+  const variosVendedores =
+    new Set(items.map((item) => item.agentId)).size > 1;
 
   const openCents = React.useMemo(
     () =>
@@ -671,6 +685,7 @@ export function FunnelScreen() {
                           dragging={dragging === deal.id}
                           hideSignal={closed}
                           moneyCeiling={cardMoneyCeiling}
+                          mostrarVendedor={variosVendedores}
                           reducedMotion={reducedMotion}
                           colunas={colunasDoQuadro}
                           onDragStart={(rect, point) => {
@@ -732,6 +747,7 @@ export function FunnelScreen() {
                   deal={lift.deal}
                   hideSignal={false}
                   moneyCeiling={cardMoneyCeiling}
+                  mostrarVendedor={variosVendedores}
                   inert
                 />
               </div>
@@ -856,6 +872,7 @@ function FunnelCard({
   dragging,
   hideSignal = false,
   moneyCeiling,
+  mostrarVendedor,
   reducedMotion,
   colunas,
   onDragStart,
@@ -870,6 +887,8 @@ function FunnelCard({
   /** Coluna de fechamento não é estado a monitorar: sem sinal de abertura/estagnação. */
   hideSignal?: boolean;
   moneyCeiling: number;
+  /** Quadro com 2+ vendedores: o card diz de quem é (monograma + nome). */
+  mostrarVendedor: boolean;
   reducedMotion: boolean;
   /** Colunas ativas do tenant, na ordem do quadro — o cardápio do menu. */
   colunas: EstagioDoFunil[];
@@ -941,6 +960,7 @@ function FunnelCard({
         deal={deal}
         hideSignal={hideSignal}
         moneyCeiling={moneyCeiling}
+        mostrarVendedor={mostrarVendedor}
         menu={
           <DealStageMenu
             contactName={deal.contactName}
@@ -965,12 +985,17 @@ function CardBody({
   deal,
   hideSignal,
   moneyCeiling,
+  mostrarVendedor = false,
   menu,
   inert = false,
 }: {
   deal: NegocioDoFunil;
   hideSignal: boolean;
   moneyCeiling: number;
+  /** Quadro com 2+ vendedores: a quarta linha, com o monograma de contorno
+      (§8 — nunca preenchido, nunca uma cor por pessoa; a cor do quadro segue
+      dizendo só onde se clica). */
+  mostrarVendedor?: boolean;
   menu?: React.ReactNode;
   /** No sobrevoo não há menu: o card está no ar, não há o que clicar. */
   inert?: boolean;
@@ -1003,8 +1028,32 @@ function CardBody({
         />
         {hideSignal ? null : <Signal deal={deal} />}
       </div>
+
+      {mostrarVendedor ? (
+        <p className="mt-1.5 flex min-w-0 items-center gap-1.5 text-13 text-muted">
+          {deal.agentName ? (
+            <>
+              <Monogram
+                name={deal.agentName}
+                size="sm"
+                className="text-subtle"
+              />
+              <span className="truncate">{primeiroNome(deal.agentName)}</span>
+            </>
+          ) : (
+            // Negócio sem vendedor é linha de verdade (dado antigo/importado):
+            // o quadro diz o que falta, não finge que a atribuição existe.
+            <span className="truncate">sem vendedor</span>
+          )}
+        </p>
+      ) : null}
     </>
   );
+}
+
+/** Nome de chamada: o que a equipe usa para falar da colega, não o registro. */
+function primeiroNome(nome: string): string {
+  return nome.trim().split(/\s+/)[0] ?? nome;
 }
 
 /**
