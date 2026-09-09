@@ -25,6 +25,16 @@ export function waMeLink(
 }
 
 /**
+ * Link de ENVIO sem destinatário: `wa.me` aceita só `?text=` e abre o WhatsApp
+ * na tela de escolher conversa. É o caminho de quem manda o link do roteiro —
+ * a agente sabe COMO é a conversa; o produto não precisa (nem pode) saber para
+ * quem. Com destinatário conhecido, use `waMeLink` acima.
+ */
+export function whatsappShareLink(texto: string): string {
+  return `https://wa.me/?text=${encodeURIComponent(texto)}`;
+}
+
+/**
  * Mensagem pronta do "Cobrar" das propostas paradas (/hoje). Não cobra: retoma.
  * Quem some depois de receber a proposta quase nunca decidiu não — perdeu o
  * fio. A mensagem devolve o fio e oferece a saída fácil ("me diz o que ajusto"),

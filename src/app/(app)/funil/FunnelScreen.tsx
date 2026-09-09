@@ -6,10 +6,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, type PanInfo } from "motion/react";
 import {
-  COLUNAS_DO_FUNIL,
+  listarEstagios,
   listarNegociosDoFunil,
   moverEstagioDoNegocio,
-  type EstagioDeFunil,
+  type EstagioDoFunil,
   type NegocioDoFunil,
 } from "@/server";
 import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
@@ -29,63 +29,58 @@ import { Money } from "@/components/ui/Money";
 import { Rule } from "@/components/plates";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import { CheckIcon, ClockIcon, PlusIcon } from "@/components/app/icons";
-import { DealStageMenu, LossReasonDialog } from "@/components/app/DealStageMenu";
+import { CheckIcon, ClockIcon, PlusIcon, SlidersIcon } from "@/components/app/icons";
+import {
+  DealStageMenu,
+  LossReasonDialog,
+} from "@/components/app/DealStageMenu";
+import { EditarColunasSheet } from "@/components/app/EditarColunasSheet";
 import { NovoNegocioSheet } from "@/components/app/NovoNegocioSheet";
 
 /* =============================================================================
-   Funil — quadro de cinco estágios
+   Funil — o quadro do tenant, não o de fábrica
    -----------------------------------------------------------------------------
-   v3. S4 — o quadro ligado ao servidor (`src/server/deals.ts`, contrato completo
-   em docs/handoffs/rafa-para-nina.md). O que muda em relação à v2
-   (docs/design/funil-v2.md), que ainda lia `src/lib/ui/sample-data.ts`:
+   v4. S16 — as colunas passam a ser AS COLUNAS REAIS do funil deste tenant:
+   `listarEstagios()` (`src/server/pipelineStages.ts`) substitui a lista fixa
+   `COLUNAS_DO_FUNIL`, e cada cartão entra na coluna do seu `stageId` — a FK
+   de verdade (`drizzle/0016_negocio_aponta_para_estagio.sql`), não o enum que
+   é projeção dela. Fim do defeito que motivou esta rodada: negócio numa
+   coluna criada pela agente aparecia embaixo de "Negociando" (o espelho que o
+   trigger dá a `deals.stage` para coluna sem `legacy_stage`).
 
-   1. VOCABULÁRIO DE ESTÁGIO VEM DO SERVIDOR. `COLUNAS_DO_FUNIL` (5 colunas —
-      `perdido` não é coluna, é saída do funil) substitui `STAGES` local. Uma
-      segunda lista aqui desalinharia do enum do banco de novo — foi
-      exatamente essa divergência que o comentário de `deals.ts` documenta.
+   O que muda em relação à v3 (S4), e o que NÃO muda:
 
-   2. "MARCAR COMO PERDIDA" NÃO É ALVO DE ARRASTO. O servidor exige motivo (≥3
-      caracteres) antes de aceitar `stage: 'perdido'`; um drop target não tem
-      como coletar texto no meio do gesto. A saída vive no menu do card (☰ →
-      "Marcar como perdida…"), que abre um DIÁLOGO — não um sheet, porque isto
-      é decisão que exige informação nova antes de continuar (a doutrina de
-      `Dialog.tsx`), não confirmação de "tem certeza?". Depois de confirmado,
-      o card sai do quadro e vira um toast com DESFAZER de 8s — a parte
-      destrutiva da ação (o card sumiu da tela) segue a regra normal do
-      produto, só a captação do motivo é que precisou de modal.
+   1. DUAS LEITURAS, UM ESTADO. `listarNegociosDoFunil()` e `listarEstagios()`
+      chegam juntos (Promise.all) — coluna sem negócio existe, negócio sem
+      coluna não. É `EstagioDoFunil` que manda: `label` real (a agente pode
+      ter renomeado), `position` (ordem do quadro), `isWon` (coluna de
+      fechamento — check, dinheiro em tom de estado, card sem sinal de
+      estagnação), `isLost` (saída do funil: NÃO vira coluna, como "Perdida"
+      nunca foi — o próprio servidor já devolve o quadro sem elas, filtrando
+      por `is_lost`), e `totalNegocios` (o número que a Sheet de edição usa
+      para NÃO oferecer arquivar em coluna cheia).
 
-   3. TODA CHAMADA AO SERVIDOR É OTIMISTA E REVERSÍVEL. Mover por arrasto ou
-      pelo menu atualiza a tela na hora (o toque não pode esperar rede) e só
-      confirma depois; se o servidor recusar, o card volta sozinho para onde
-      estava, com toast de erro — nunca fica um estado que a tela mostra e o
-      banco não tem. O desfazer (para movimento normal OU para perda) chama o
-      servidor de novo para voltar ao estágio anterior; se ESSA chamada falhar
-      (rede caiu duas vezes seguidas — raro, mas existe), a tela reconsulta o
-      quadro inteiro em vez de tentar adivinhar o estado certo sozinha.
+   2. MOVER É POR `{ stageId }`. `moverEstagioDoNegocio` aceita o enum antigo
+      e o id (tipo `DestinoDeEstagio`); a UI passa o id — para coluna
+      customizada o enum não existe. A física otimista da v3 está intacta: o
+      cartão obedece o gesto (e herda a velocidade dele via `projectThrow`),
+      reconcilia com o servidor, e recusa reverte sozinha com toast.
 
-   4. O SELO DE "ABRIU O LINK" SAIU DO CARD. `NegocioDoFunil` não carrega
-      `opens`/`lastOpenHours` — é sinal de PROPOSTA, não de negócio, e
-      `contactId` não é 1:1 com `dealId` (um contato pode ter duas propostas
-      em negócios diferentes). Cruzar por contato inflaria o selo errado no
-      card errado. `Signal` ficou só com "parada há N dias" / "hoje".
+   3. "MARCAR COMO PERDIDA" SEGUE SENDO DIÁLOGO, AGORA COM DESTINO REAL. O
+      motivo é obrigatório quando `isLost` da COLUNA (não mais `=== 'perdido'`)
+      — se a agente renomeou "Perdida" para "Não rolou", a regra é a mesma.
+      O movimento usa o id da coluna `isLost` do tenant.
 
-   5. "+ NOVO NEGÓCIO" NO CABEÇALHO (docs/status/nina.md). Auditoria ao vivo
-      achou o bloqueio nº1 do produto: não existia NENHUM jeito de criar um
-      negócio pela interface — `criarNegocio` já funcionava no servidor desde
-      o S4, mas nenhuma tela chamava. `NovoNegocioSheet`
-      (`src/components/app/`) é a mesma Sheet usada na ficha do contato; aqui
-      ela busca o contato por nome, lá ele já vem decidido. O retorno de
-      `criarNegocio` é o MESMO shape de `listarNegociosDoFunil` — o card entra
-      direto em `items`, cai na coluna "Novo contato" por conta do
-      `useMemo` de `columns`, sem reconsultar o quadro.
+   4. EDITAR COLUNAS ENTRA NO CABEÇALHO DO QUADRO (`EditarColunasSheet`):
+      reordenar (subir/descer — dentro de sheet, arrasto brigaria com o
+      scroll), renomear inline, arquivar em dois toques (não existe
+      "desarquivar" no servidor, então o primeiro toque diz o que acontece) e
+      criar no fim, antes do fim de funil. As mudanças aplicam no MESMO
+      estado `estagios` desta tela — o quadro atrás da sheet atualiza na hora.
 
-   6. CONTA NOVA, QUADRO VAZIO (bater-o-molde). Cinco colunas sem um card não
-      ensinam o funil — ensinam que está vazio. `quadroVazio` troca o quadro
-      por um EmptyState com o primeiro passo real ("Criar primeiro negócio",
-      a mesma Sheet do cabeçalho) e o quadro reaparece no instante em que o
-      card entra, otimista, em "Novo contato". A dica de gesto cala enquanto
-      não há card algum para arrastar.
+   5. COLUNA VAZIA: as de fábrica mantêm a copy da v3 (por `legacyStage`);
+      as que a agente criou têm a genérica digna — "Nenhuma viagem aqui
+      ainda". Vocabulário do pedido, não jargão de pipeline.
 
    O que NÃO mudou, porque já estava certo: a raia é um campo preenchido do
    topo à base da coluna; card e card se separam por um fio interno; card
@@ -101,21 +96,24 @@ const CARD_MONEY_FLOOR = 1_000_000;
 /** Piso do teto de largura das somas de coluna (R$ 100.000,00). */
 const COLUMN_MONEY_FLOOR = 10_000_000;
 
-/** Estágio terminal — soma em tinta de estado, sem sinal de estagnação no card. */
-const CLOSED_STAGE: EstagioDeFunil = "ganho";
-
 /**
- * `COLUNAS_DO_FUNIL` traz `estagio` + `label`; o texto de coluna vazia é copy
- * de interface, não contrato de servidor — por isso mora aqui, não em
- * `deals.ts` ("eu não tenho essa string, é copy sua", Rafa).
+ * Copy de coluna vazia. As de fábrica têm a frase que descreve o que ali
+ * acontece; a de coluna criada pela agente é a genérica — não dá para inventar
+ * semântica que só ela conhece. Chave é o `legacy_stage` (nulo na customizada).
  */
-const HINT_BY_STAGE: Record<EstagioDeFunil, string> = {
+const HINT_BY_LEGACY: Record<string, string> = {
   novo: "chegou, ainda não virou proposta",
   cotando: "roteiro em construção",
   proposta_enviada: "link no WhatsApp do cliente",
   negociando: "ajuste de valor ou data",
   ganho: "venda confirmada",
 };
+
+const HINT_CUSTOM = "Nenhuma viagem aqui ainda";
+
+function hintDaColuna(estagio: EstagioDoFunil): string {
+  return (estagio.legacyStage && HINT_BY_LEGACY[estagio.legacyStage]) || HINT_CUSTOM;
+}
 
 function sumValueCents(list: NegocioDoFunil[]): number {
   return list.reduce((total, deal) => total + deal.valueCents, 0);
@@ -138,7 +136,7 @@ function readHintSeen(): boolean {
 
 /**
  * A dica de gesto é de primeiro uso, não subtítulo de página (a v1 errou
- * nisto: ocupava ~24px do cabeçalho toda vez que a agente abria a tela, a
+ * nisto: ocupava ~24px do cabeçalho toda vez que a agente abriu a tela, a
  * quinquagésima vez incluída). `useSyncExternalStore` — não `useEffect` +
  * `setState` — para ler o localStorage: o snapshot do servidor é sempre
  * "não vista" (bate com o HTML do servidor, sem flash), e o do cliente lê o
@@ -167,6 +165,12 @@ function useDragHint(): [boolean, () => void] {
 
 type Status = "loading" | "ready" | "error";
 
+/** O que o desfazer precisa guardar do card antes de movê-lo. */
+type PosicaoAnterior = Pick<
+  NegocioDoFunil,
+  "stageId" | "stageLabel" | "diasParado"
+>;
+
 export function FunnelScreen() {
   const router = useRouter();
   const toast = useToast();
@@ -174,6 +178,7 @@ export function FunnelScreen() {
 
   const [status, setStatus] = React.useState<Status>("loading");
   const [items, setItems] = React.useState<NegocioDoFunil[]>([]);
+  const [estagios, setEstagios] = React.useState<EstagioDoFunil[]>([]);
   const [loadError, setLoadError] = React.useState<{
     mensagem: string;
     correcao?: string;
@@ -195,7 +200,7 @@ export function FunnelScreen() {
     x: number;
     y: number;
   } | null>(null);
-  const [target, setTarget] = React.useState<EstagioDeFunil | null>(null);
+  const [target, setTarget] = React.useState<string | null>(null);
   const [hintSeen, dismissHint] = useDragHint();
 
   const [lossDialog, setLossDialog] = React.useState<NegocioDoFunil | null>(
@@ -203,68 +208,108 @@ export function FunnelScreen() {
   );
 
   // "+ Novo negócio" — o ponto de entrada que faltava (docs/status/nina.md).
-  // `criarNegocio` já devolve o MESMO shape de `listarNegociosDoFunil`, então
-  // o card entra direto na coluna "Novo contato" sem reconsultar o quadro.
+  // `criarNegocio` devolve o MESMO shape de `listarNegociosDoFunil`, então
+  // o card entra direto na coluna dele (`stageId`) sem reconsultar o quadro.
   const [negocioSheetOpen, setNegocioSheetOpen] = React.useState(false);
 
-  const columnRefs = React.useRef(new Map<EstagioDeFunil, HTMLElement>());
+  // Editar colunas — gestão do próprio quadro (S16).
+  const [colunasSheetOpen, setColunasSheetOpen] = React.useState(false);
+
+  const columnRefs = React.useRef(new Map<string, HTMLElement>());
 
   const registerColumn = React.useCallback(
-    (stage: EstagioDeFunil) => (node: HTMLElement | null) => {
-      if (node) columnRefs.current.set(stage, node);
-      else columnRefs.current.delete(stage);
+    (stageId: string) => (node: HTMLElement | null) => {
+      if (node) columnRefs.current.set(stageId, node);
+      else columnRefs.current.delete(stageId);
     },
     [],
   );
 
   /** Qual coluna contém (ou está mais perto de) uma coordenada X da viewport. */
-  const columnAtX = React.useCallback((x: number): EstagioDeFunil | null => {
-    let best: { stage: EstagioDeFunil; distance: number } | null = null;
-    for (const [stage, node] of columnRefs.current) {
+  const columnAtX = React.useCallback((x: number): string | null => {
+    let best: { stageId: string; distance: number } | null = null;
+    for (const [stageId, node] of columnRefs.current) {
       const rect = node.getBoundingClientRect();
-      if (x >= rect.left && x <= rect.right) return stage;
+      if (x >= rect.left && x <= rect.right) return stageId;
       const center = rect.left + rect.width / 2;
       const distance = Math.abs(center - x);
-      if (!best || distance < best.distance) best = { stage, distance };
+      if (!best || distance < best.distance) best = { stageId, distance };
     }
-    return best?.stage ?? null;
+    return best?.stageId ?? null;
   }, []);
 
   React.useEffect(() => {
     let active = true;
     setStatus((current) => (current === "ready" ? current : "loading"));
-    void listarNegociosDoFunil().then((result) => {
-      if (!active) return;
-      if (!result.ok) {
-        setStatus("error");
-        setLoadError({ mensagem: result.mensagem, correcao: result.correcao });
-        return;
-      }
-      setItems(result.data);
-      setStatus("ready");
-    });
+    void Promise.all([listarNegociosDoFunil(), listarEstagios()]).then(
+      ([negocios, colunas]) => {
+        if (!active) return;
+        if (!negocios.ok) {
+          setStatus("error");
+          setLoadError({
+            mensagem: negocios.mensagem,
+            correcao: negocios.correcao,
+          });
+          return;
+        }
+        if (!colunas.ok) {
+          setStatus("error");
+          setLoadError({
+            mensagem: colunas.mensagem,
+            correcao: colunas.correcao,
+          });
+          return;
+        }
+        setItems(negocios.data);
+        setEstagios(colunas.data);
+        setStatus("ready");
+      },
+    );
     return () => {
       active = false;
     };
   }, [reloadToken]);
 
+  /** Reler as colunas sem piscar o quadro — a correção da Sheet de edição. */
+  const refreshEstagios = React.useCallback(() => {
+    void listarEstagios().then((result) => {
+      if (result.ok) setEstagios(result.data);
+    });
+  }, []);
+
+  const colunaPorId = React.useMemo(
+    () => new Map(estagios.map((estagio) => [estagio.id, estagio])),
+    [estagios],
+  );
+
+  /** A saída do funil ("Perdida", ou o nome que a agente deu a ela). */
+  const colunaPerdida = React.useMemo(
+    () => estagios.find((estagio) => estagio.isLost) ?? null,
+    [estagios],
+  );
+
+  /** O quadro: todas as colunas menos as `isLost` — saída do funil, não lugar onde negócio fica. */
+  const colunasDoQuadro = React.useMemo(
+    () => estagios.filter((estagio) => !estagio.isLost),
+    [estagios],
+  );
+
   const columns = React.useMemo(
     () =>
-      COLUNAS_DO_FUNIL.map(({ estagio, label }) => {
-        const cards = items.filter((item) => item.stage === estagio);
+      colunasDoQuadro.map((estagio) => {
+        const cards = items.filter((item) => item.stageId === estagio.id);
         return {
           estagio,
-          label,
-          hint: HINT_BY_STAGE[estagio],
+          hint: hintDaColuna(estagio),
           cards,
           cents: sumValueCents(cards),
         };
       }),
-    [items],
+    [items, colunasDoQuadro],
   );
 
-  // Uma reserva de largura para as cinco somas: o alinhamento entre colunas é
-  // o que transforma cinco números em uma comparação.
+  // Uma reserva de largura para as somas: o alinhamento entre colunas é
+  // o que transforma vários números em uma comparação.
   const columnCeiling = Math.max(
     COLUMN_MONEY_FLOOR,
     ...columns.map((column) => column.cents),
@@ -277,12 +322,15 @@ export function FunnelScreen() {
   );
 
   const openCents = React.useMemo(
-    () => sumValueCents(items.filter((item) => item.stage !== CLOSED_STAGE)),
-    [items],
+    () =>
+      sumValueCents(
+        items.filter((item) => !colunaPorId.get(item.stageId)?.isWon),
+      ),
+    [items, colunaPorId],
   );
 
   /**
-   * Conta recém-criada: o quadro de cinco colunas vazias não ensina o funil —
+   * Conta recém-criada: o quadro de colunas vazias não ensina o funil —
    * ensina que está vazio. No lugar dele, UM painel com o primeiro passo real
    * ("Criar primeiro negócio"); o quadro volta na hora em que `onCreated`
    * insere o card, e a agente vê a própria viagem ganhar o lugar que o vazio
@@ -292,26 +340,29 @@ export function FunnelScreen() {
   const quadroVazio = status === "ready" && items.length === 0;
 
   /**
-   * Reabre um negócio num estágio aberto — o desfazer de um movimento normal
+   * Reabre um negócio numa coluna aberta — o desfazer de um movimento normal
    * E o desfazer de "marcar como perdida" caem aqui, porque as duas coisas
-   * são a mesma operação vista do servidor (voltar para um `EstagioDeFunil`).
+   * são a mesma operação vista do servidor (voltar para um `stageId`).
    * Reinsere otimisticamente (o item pode ter saído da lista, se veio de uma
    * perda) e só then confirma; se o servidor recusar essa SEGUNDA chamada
    * (rede caiu de novo, bem raro), a tela não tenta adivinhar — reconsulta o
    * quadro inteiro para não arriscar divergir do banco silenciosamente.
    */
-  async function reopenAt(
-    deal: NegocioDoFunil,
-    stage: EstagioDeFunil,
-    diasParado: number,
-  ) {
+  async function reopenAt(deal: NegocioDoFunil, anterior: PosicaoAnterior) {
     setItems((current) => {
-      const patched: NegocioDoFunil = { ...deal, stage, diasParado };
+      const patched: NegocioDoFunil = {
+        ...deal,
+        stageId: anterior.stageId,
+        stageLabel: anterior.stageLabel,
+        diasParado: anterior.diasParado,
+      };
       return current.some((item) => item.id === deal.id)
         ? current.map((item) => (item.id === deal.id ? patched : item))
         : [...current, patched];
     });
-    const result = await moverEstagioDoNegocio(deal.id, stage);
+    const result = await moverEstagioDoNegocio(deal.id, {
+      stageId: anterior.stageId,
+    });
     if (!result.ok) {
       avisarRecusaDeEscrita(result);
       toast.show({
@@ -325,23 +376,30 @@ export function FunnelScreen() {
 
   async function moveTo(
     deal: NegocioDoFunil,
-    stage: EstagioDeFunil,
+    destino: { stageId: string },
     viaGesture: boolean,
   ) {
-    if (stage === deal.stage) return;
+    if (destino.stageId === deal.stageId) return;
     dismissHint();
-    const previousStage = deal.stage;
-    const previousIdle = deal.diasParado;
+    const anterior: PosicaoAnterior = {
+      stageId: deal.stageId,
+      stageLabel: deal.stageLabel,
+      diasParado: deal.diasParado,
+    };
+    const label = colunaPorId.get(destino.stageId)?.label ?? destino.stageId;
 
-    // otimista: o toque não espera a rede.
+    // otimista: o toque não espera a rede. `stage` (o enum, projeção do
+    // banco) fica como está de propósito — aqui quem posiciona é o `stageId`;
+    // o valor reconciliado do enum volta do servidor e nada na tela o lê.
     setItems((current) =>
       current.map((item) =>
-        item.id === deal.id ? { ...item, stage, diasParado: 0 } : item,
+        item.id === deal.id
+          ? { ...item, stageId: destino.stageId, stageLabel: label, diasParado: 0 }
+          : item,
       ),
     );
 
-    const label = COLUNAS_DO_FUNIL.find((c) => c.estagio === stage)?.label ?? stage;
-    const result = await moverEstagioDoNegocio(deal.id, stage);
+    const result = await moverEstagioDoNegocio(deal.id, destino);
 
     if (!result.ok) {
       avisarRecusaDeEscrita(result);
@@ -349,7 +407,12 @@ export function FunnelScreen() {
       setItems((current) =>
         current.map((item) =>
           item.id === deal.id
-            ? { ...item, stage: previousStage, diasParado: previousIdle }
+            ? {
+                ...item,
+                stageId: anterior.stageId,
+                stageLabel: anterior.stageLabel,
+                diasParado: anterior.diasParado,
+              }
             : item,
         ),
       );
@@ -357,14 +420,15 @@ export function FunnelScreen() {
         title: `Não consegui mover ${deal.contactName}`,
         description: result.mensagem,
         tone: "danger",
-        action: result.correcao ? { label: result.correcao, onClick: reload } : undefined,
+        action:
+          result.correcao ? { label: result.correcao, onClick: reload } : undefined,
       });
       return;
     }
 
     toast.undo(
       `${deal.contactName} → ${label}`,
-      () => void reopenAt(deal, previousStage, previousIdle),
+      () => void reopenAt(deal, anterior),
       {
         description: viaGesture ? undefined : "Movida pelo menu do card",
         tone: "ok",
@@ -385,20 +449,23 @@ export function FunnelScreen() {
   function handleLost(dealId: string, motivo: string) {
     const deal = lossDialog;
     if (!deal || deal.id !== dealId) return; // não deveria divergir — proteção, não fluxo esperado
-    const previousStage = deal.stage;
-    const previousIdle = deal.diasParado;
+    const anterior: PosicaoAnterior = {
+      stageId: deal.stageId,
+      stageLabel: deal.stageLabel,
+      diasParado: deal.diasParado,
+    };
     setItems((current) => current.filter((item) => item.id !== deal.id));
     setLossDialog(null);
 
     toast.undo(
-      `${deal.contactName} → Perdida`,
-      () => void reopenAt(deal, previousStage, previousIdle),
+      `${deal.contactName} → ${colunaPerdida?.label ?? "Perdida"}`,
+      () => void reopenAt(deal, anterior),
       { description: `Motivo: ${motivo}`, tone: "warn" },
     );
   }
 
   /** Onde o card PARARIA — não onde o dedo está agora. */
-  function projectedStage(info: PanInfo): EstagioDeFunil | null {
+  function projectedStage(info: PanInfo): string | null {
     return columnAtX(info.point.x + projectThrow(info.velocity.x));
   }
 
@@ -406,8 +473,8 @@ export function FunnelScreen() {
     setDragging(null);
     setLift(null);
     setTarget(null);
-    const stage = projectedStage(info);
-    if (stage) void moveTo(deal, stage, true);
+    const stageId = projectedStage(info);
+    if (stageId) void moveTo(deal, { stageId }, true);
   }
 
   return (
@@ -415,22 +482,36 @@ export function FunnelScreen() {
       {/* cabeçalho de PÁGINA: só o título, do mesmo tamanho das outras telas.
           Nem subtítulo de instrução, nem total — os dois comiam altura do
           quadro na v1, e nenhum dos dois é conteúdo da página: são conteúdo
-          do quadro (abaixo). */}
+          do quadro (abaixo). A edição de colunas mora aqui — é tarefa do
+          funil, não do TopBar. */}
       <header className="flex items-center justify-between gap-3 lg:shrink-0">
         <h2 className="text-32 font-semibold text-ink">Funil</h2>
-        <Button
-          variant="primary"
-          iconOnly
-          aria-label="Novo negócio"
-          onPointerDown={() => setNegocioSheetOpen(true)}
-        >
-          <PlusIcon className="size-4" />
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="quiet"
+            iconOnly
+            aria-label="Editar colunas do funil"
+            onPointerDown={() => {
+              setColunasSheetOpen(true);
+              refreshEstagios(); // contagens frescas — é delas que o arquivar depende
+            }}
+          >
+            <SlidersIcon className="size-4" />
+          </Button>
+          <Button
+            variant="primary"
+            iconOnly
+            aria-label="Novo negócio"
+            onPointerDown={() => setNegocioSheetOpen(true)}
+          >
+            <PlusIcon className="size-4" />
+          </Button>
+        </div>
       </header>
 
       {/* faixa do QUADRO: o total "Em aberto" mora aqui, não na página — é o
           que o conecta ao que ele soma, em vez de flutuar solto num canto. A
-          cornija por baixo dela é a mesma que sublinha os cinco cabeçalhos de
+          cornija por baixo dela é a mesma que sublinha os cabeçalhos de
           coluna: o total e as colunas são uma coisa só. */}
       <div className="lg:shrink-0">
         <div className="flex items-baseline justify-between gap-3">
@@ -471,7 +552,7 @@ export function FunnelScreen() {
         <EmptyState
           plate
           title="Nenhuma viagem em negociação"
-          description="Cada negócio é uma viagem em negociação: entra aqui em “Novo contato” e você arrasta pelo funil até fechar. Todo negócio nasce de um cliente já cadastrado."
+          description="Cada negócio é uma viagem em negociação: entra na primeira coluna e você arrasta pelo funil até fechar. Todo negócio nasce de um cliente já cadastrado."
           preview={<NegocioPreview />}
           action={
             <Button
@@ -493,32 +574,33 @@ export function FunnelScreen() {
         />
       ) : (
         /* celular: um scroller com encaixe por coluna, o polegar manda.
-           desktop: cinco colunas de altura cheia. A largura mínima de 11rem é
-           o que impede a coluna de virar tira ilegível: abaixo dela o QUADRO
-           rola na horizontal em vez de espremer. As cinco cabem inteiras a
-           partir de 1280px, que é o laptop mais comum — abaixo disso o
-           quadro rola, e a coluna continua legível. */
+           desktop: colunas de altura cheia. A largura mínima de 11rem é o
+           que impede a coluna de virar tira ilegível: abaixo dela a LINHA
+           rola na horizontal em vez de espremer. O quadro agora tem o número
+           de colunas do tenant — de cinco de fábrica até o teto de doze —
+           então a linha é flex em todo tamanho de tela: poucas colunas
+           esticam, muitas rolam. */
         <div
           className={cn(
             "-mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-2",
             "sm:-mx-6 sm:px-6",
             "[scrollbar-width:thin]",
             "lg:mx-0 lg:min-h-0 lg:flex-1 lg:snap-none lg:px-0 lg:pb-0",
-            "lg:grid lg:grid-cols-[repeat(5,minmax(11rem,1fr))] lg:overflow-y-hidden",
             "2xl:gap-6",
           )}
         >
           {columns.map((column, columnIndex) => {
-            const active = dragging !== null && target === column.estagio;
-            const closed = column.estagio === CLOSED_STAGE;
+            const active = dragging !== null && target === column.estagio.id;
+            const closed = column.estagio.isWon;
             return (
               <section
-                key={column.estagio}
-                ref={registerColumn(column.estagio)}
-                aria-label={column.label}
+                key={column.estagio.id}
+                ref={registerColumn(column.estagio.id)}
+                aria-label={column.estagio.label}
                 className={cn(
                   "flex w-[78vw] shrink-0 snap-start flex-col",
-                  "sm:w-[20rem] lg:w-auto lg:min-h-0",
+                  "sm:w-[20rem]",
+                  "lg:w-auto lg:min-w-[11rem] lg:flex-1 lg:min-h-0",
                   // a raia é um campo preenchido do topo à base, sempre — não
                   // só enquanto um card está no ar. Cantos retos de
                   // propósito: a raia é estrutura; o card é que vira objeto
@@ -536,7 +618,7 @@ export function FunnelScreen() {
                 <header className="flex shrink-0 flex-col gap-1 px-3 pt-2 pb-2">
                   <div className="flex items-baseline justify-between gap-2">
                     <h3 className="flex min-w-0 items-center gap-1 truncate text-13 font-semibold tracking-[0.04em] text-muted uppercase">
-                      {column.label}
+                      {column.estagio.label}
                       {closed ? (
                         <CheckIcon className="size-3 shrink-0 text-ok" />
                       ) : null}
@@ -590,6 +672,7 @@ export function FunnelScreen() {
                           hideSignal={closed}
                           moneyCeiling={cardMoneyCeiling}
                           reducedMotion={reducedMotion}
+                          colunas={colunasDoQuadro}
                           onDragStart={(rect, point) => {
                             setDragging(deal.id);
                             setLift({
@@ -602,9 +685,9 @@ export function FunnelScreen() {
                             });
                           }}
                           onDrag={(info) => {
-                            const stage = projectedStage(info);
+                            const stageId = projectedStage(info);
                             setTarget((current) =>
-                              current === stage ? current : stage,
+                              current === stageId ? current : stageId,
                             );
                             setLift((current) =>
                               current
@@ -613,7 +696,9 @@ export function FunnelScreen() {
                             );
                           }}
                           onDragEnd={(info) => handleDragEnd(deal, info)}
-                          onMove={(stage) => void moveTo(deal, stage, false)}
+                          onMove={(stageId) =>
+                            void moveTo(deal, { stageId }, false)
+                          }
                           onRequestLoss={() => openLossDialog(deal)}
                           onOpen={() => router.push(`/funil/${deal.id}`)}
                         />
@@ -655,14 +740,25 @@ export function FunnelScreen() {
           )
         : null}
 
-      <LossReasonDialog
-        deal={
-          lossDialog
-            ? { id: lossDialog.id, contactName: lossDialog.contactName }
-            : null
-        }
-        onOpenChange={handleLossDialogChange}
-        onLost={handleLost}
+      {colunaPerdida ? (
+        <LossReasonDialog
+          deal={
+            lossDialog
+              ? { id: lossDialog.id, contactName: lossDialog.contactName }
+              : null
+          }
+          destinoPerdida={colunaPerdida.id}
+          onOpenChange={handleLossDialogChange}
+          onLost={handleLost}
+        />
+      ) : null}
+
+      <EditarColunasSheet
+        open={colunasSheetOpen}
+        onOpenChange={setColunasSheetOpen}
+        estagios={estagios}
+        onApply={setEstagios}
+        onRefresh={refreshEstagios}
       />
 
       <NovoNegocioSheet
@@ -679,7 +775,11 @@ export function FunnelScreen() {
 
 /* ------------------------------------------------------------------ carregando */
 
-/** Skeleton, nunca spinner — mesma armação de coluna do quadro real. */
+/**
+ * Skeleton, nunca spinner — mesma armação de coluna do quadro real. Cinco
+ * colunas de força: a contagem verdadeira só existe depois da leitura, e um
+ * skeleton com rótulo de coluna mentiria o que ainda não veio.
+ */
 function FunnelSkeleton() {
   return (
     <div
@@ -688,18 +788,15 @@ function FunnelSkeleton() {
         "-mx-4 flex gap-4 overflow-x-hidden px-4 pb-2",
         "sm:-mx-6 sm:px-6",
         "lg:mx-0 lg:min-h-0 lg:flex-1 lg:px-0 lg:pb-0",
-        "lg:grid lg:grid-cols-[repeat(5,minmax(11rem,1fr))]",
       )}
     >
-      {COLUNAS_DO_FUNIL.map(({ estagio, label }) => (
+      {[0, 1, 2, 3, 4].map((i) => (
         <section
-          key={estagio}
-          className="flex w-[78vw] shrink-0 flex-col bg-inset sm:w-[20rem] lg:w-auto"
+          key={i}
+          className="flex w-[78vw] shrink-0 flex-col bg-inset sm:w-[20rem] lg:w-auto lg:min-w-[11rem] lg:flex-1"
         >
           <header className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-2">
-            <span className="truncate text-13 font-semibold tracking-[0.04em] text-muted uppercase">
-              {label}
-            </span>
+            <Skeleton className="h-3.5 w-20 rounded-xs" />
             <Skeleton className="h-5 w-24 rounded-xs" />
           </header>
           <Rule className="mx-3" />
@@ -760,6 +857,7 @@ function FunnelCard({
   hideSignal = false,
   moneyCeiling,
   reducedMotion,
+  colunas,
   onDragStart,
   onDrag,
   onDragEnd,
@@ -769,14 +867,16 @@ function FunnelCard({
 }: {
   deal: NegocioDoFunil;
   dragging: boolean;
-  /** Fechada não é estado a monitorar: sem sinal de abertura/estagnação. */
+  /** Coluna de fechamento não é estado a monitorar: sem sinal de abertura/estagnação. */
   hideSignal?: boolean;
   moneyCeiling: number;
   reducedMotion: boolean;
+  /** Colunas ativas do tenant, na ordem do quadro — o cardápio do menu. */
+  colunas: EstagioDoFunil[];
   onDragStart: (rect: DOMRect, point: { x: number; y: number }) => void;
   onDrag: (info: PanInfo) => void;
   onDragEnd: (info: PanInfo) => void;
-  onMove: (stage: EstagioDeFunil) => void;
+  onMove: (stageId: string) => void;
   onRequestLoss: () => void;
   /** Abre a ficha do negócio — tudo que o card não resolve sozinho (histórico, proposta). */
   onOpen: () => void;
@@ -844,7 +944,8 @@ function FunnelCard({
         menu={
           <DealStageMenu
             contactName={deal.contactName}
-            currentStage={deal.stage}
+            colunas={colunas}
+            currentStageId={deal.stageId}
             onMove={onMove}
             onRequestLoss={onRequestLoss}
             revealOnHover

@@ -272,3 +272,32 @@ export function ReceiptIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/** Colunas — ajustar o quadro do funil. Duas trilhas com pino, não um funil repetido. */
+export function SlidersIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M2.75 5.25h10.5M2.75 10.75h10.5" />
+      <circle cx="10.1" cy="5.25" r="1.9" />
+      <circle cx="5.9" cy="10.75" r="1.9" />
+    </Icon>
+  );
+}
+
+/** Seta para cima — reordenar coluna na sheet de edição. */
+export function ChevronUpIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m4 10.25 4-4 4 4" />
+    </Icon>
+  );
+}
+
+/** Seta para baixo — reordenar coluna na sheet de edição. */
+export function ChevronDownIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m4 5.75 4 4 4-4" />
+    </Icon>
+  );
+}

@@ -77,12 +77,15 @@ import {
 /* =============================================================================
    Hoje
    -----------------------------------------------------------------------------
-   A tela que abre. Responde quatro perguntas, nessa ordem:
+   A tela que abre. Responde cinco perguntas, nessa ordem (PO, 2026-09: o
+   resumo do mês é a informação mais importante e abre a tela; o que exige
+   ação vem depois, na ordem em que a oportunidade apodrece; contexto fecha):
 
-     1. o que eu preciso fazer agora
-     2. quem mexeu na minha proposta (abriu o link) — é o sinal de compra
-     3. o que está morrendo parado (propostas sem resposta há mais de 7 dias)
-     4. como está o mês (vendas, comissão, conversão — e o botão de exportar)
+     1. como está o mês (vendas, comissão, conversão — e o botão de exportar)
+     2. o que eu preciso fazer hoje (tarefas vencendo hoje)
+     3. quem mexeu na minha proposta (abriu o link) — é o sinal de compra
+     4. o que está morrendo parado (propostas sem resposta há mais de 7 dias)
+     5. quem está em viagem (presença) e o que vem a seguir (contexto)
 
    E, para a conta recém-criada (zero negócios), uma quinta antes de todas:
    por onde começa. O painel "Sua primeira proposta sai daqui" é o único CTA
@@ -432,294 +435,10 @@ export function TodayScreen({ periodoParam }: { periodoParam?: string }) {
         />
       ) : null}
 
-      <section aria-labelledby="hoje-tarefas">
-        <SectionHeading
-          action={
-            <div className="flex items-center gap-1">
-              {tasksStatus === "ready" ? (
-                <span className="text-13 tabular-nums text-muted" data-numeric>
-                  {tasks.length} {tasks.length === 1 ? "pendente" : "pendentes"}
-                </span>
-              ) : null}
-              {/* Conta nova: sem botão — o lembrete não é o primeiro passo e
-                  o painel acima já carrega o único CTA da tela. */}
-              {contaNova ? null : (
-                <Button
-                  variant="quiet"
-                  size="sm"
-                  iconOnly
-                  aria-label="Criar lembrete"
-                  className="-my-1"
-                  onPointerDown={() => setReminderSheetOpen(true)}
-                >
-                  <PlusIcon className="size-3.5" />
-                </Button>
-              )}
-            </div>
-          }
-        >
-          <span id="hoje-tarefas">Tarefas de hoje</span>
-        </SectionHeading>
-
-        {tasksStatus === "loading" ? (
-          <Card className="flex flex-col gap-4 p-4">
-            {[0, 1, 2].map((row) => (
-              <SkeletonRow key={row} />
-            ))}
-          </Card>
-        ) : tasksStatus === "error" ? (
-          <Card className="flex flex-col items-start gap-3 p-4">
-            <FieldError>{tasksError?.mensagem}</FieldError>
-            <Button variant="secondary" size="sm" onClick={retryTasks}>
-              {tasksError?.correcao ?? "Tentar de novo"}
-            </Button>
-          </Card>
-        ) : tasks.length === 0 ? (
-          <EmptyState
-            title="Nada marcado para hoje"
-            description="Toda proposta enviada vira um lembrete de follow-up automático — passaporte perto de vencer e aniversário de cliente também aparecem aqui sozinhos."
-            action={
-              contaNova ? undefined : (
-                <Button
-                  variant="primary"
-                  onPointerDown={() => setReminderSheetOpen(true)}
-                >
-                  <PlusIcon className="size-4" />
-                  Criar lembrete
-                </Button>
-              )
-            }
-          />
-        ) : (
-          <Card className="overflow-hidden">
-            <ul className="divide-y divide-line-subtle">
-              <AnimatePresence initial={false}>
-                {tasks.map((task) => (
-                  <motion.li
-                    key={task.id}
-                    layout
-                    transition={transition}
-                    initial={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="flex flex-col gap-2 px-4 py-3"
-                  >
-                    <div className="flex items-start gap-3">
-                      <Checkbox
-                        className="mt-0.5"
-                        checked={false}
-                        onCheckedChange={(checked) => {
-                          if (checked === true) concludeTask(task);
-                        }}
-                        aria-label={`Concluir: ${task.title}`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="flex items-center gap-1.5 text-15 font-medium text-ink">
-                          <TaskSourceIcon
-                            source={task.source}
-                            className="size-3.5 shrink-0 text-muted"
-                          />
-                          <span className="min-w-0 truncate">{task.title}</span>
-                        </p>
-                        {taskDetail(task) ? (
-                          <p className="mt-0.5 truncate text-13 text-muted">
-                            {taskDetail(task)}
-                          </p>
-                        ) : null}
-                      </div>
-                      <span
-                        data-numeric
-                        className={cn(
-                          "shrink-0 pt-0.5 text-13 tabular-nums",
-                          task.vencida ? "text-danger" : "text-muted",
-                        )}
-                      >
-                        {task.vencida
-                          ? formatRelativeShort(new Date(task.dueAt))
-                          : formatTime(new Date(task.dueAt))}
-                      </span>
-                    </div>
-
-                    {task.suggestedMessage ? (
-                      <div className="ml-8">
-                        <Button
-                          size="sm"
-                          variant="quiet"
-                          onClick={() => copyMessage(task)}
-                        >
-                          <CopyIcon className="size-3.5" />
-                          Copiar mensagem
-                        </Button>
-                      </div>
-                    ) : null}
-                  </motion.li>
-                ))}
-              </AnimatePresence>
-            </ul>
-          </Card>
-        )}
-      </section>
-
-      {/* Lembretes futuros — o lembrete criado para amanhã tem onde aparecer;
-          sem isto o app parecia engolir o que acabou de ser criado (achado do
-          PO). Sem estado vazio: ausência é silêncio, a seção só existe quando
-          há o que mostrar. */}
-      {proximas.length > 0 ? (
-        <section aria-labelledby="hoje-a-seguir">
-          <SectionHeading>
-            <span id="hoje-a-seguir">A seguir</span>
-          </SectionHeading>
-          <Card className="overflow-hidden">
-            <ul className="divide-y divide-line-subtle">
-              {proximas.map((task) => (
-                <li key={task.id} className="flex items-start gap-3 px-4 py-3">
-                  <TaskSourceIcon
-                    source={task.source}
-                    className="mt-1 size-3.5 shrink-0 text-muted"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-15 text-ink">{task.title}</p>
-                    {taskDetail(task) ? (
-                      <p className="mt-0.5 truncate text-13 text-muted">
-                        {taskDetail(task)}
-                      </p>
-                    ) : null}
-                  </div>
-                  <span
-                    data-numeric
-                    className="shrink-0 pt-0.5 text-13 tabular-nums text-muted"
-                  >
-                    {formatDayMonth(new Date(task.dueAt))} · {formatTime(new Date(task.dueAt))}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </Card>
-        </section>
-      ) : null}
-
-      <section aria-labelledby="hoje-abriram">
-        <SectionHeading>
-          <span id="hoje-abriram">Abriram sua proposta</span>
-        </SectionHeading>
-
-        {openedStatus === "loading" ? (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Skeleton className="h-[6.5rem] rounded-lg" />
-            <Skeleton className="h-[6.5rem] rounded-lg" />
-          </div>
-        ) : openedStatus === "error" ? (
-          <Card className="flex flex-col items-start gap-3 p-4">
-            <FieldError>{openedError?.mensagem}</FieldError>
-            <Button variant="secondary" size="sm" onClick={retryOpened}>
-              {openedError?.correcao ?? "Tentar de novo"}
-            </Button>
-          </Card>
-        ) : opened.length === 0 ? (
-          <EmptyState
-            title="Ninguém abriu ainda"
-            description="Assim que o cliente tocar no link, ele aparece aqui — com quantas vezes abriu e quando."
-            preview={<OpenedPreview />}
-            /* Este botão existia sem `onClick` — porta que não abre (regra
-               §5 do negócio: elo sem porta visível é funcionalidade que não
-               existe). O envio mora no editor: a lista é o caminho. Conta
-               nova, sem ação — o painel de primeira venda manda. */
-            action={
-              contaNova ? undefined : (
-                <Button variant="primary" asChild>
-                  <Link href="/propostas">Enviar uma proposta</Link>
-                </Button>
-              )
-            }
-          />
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {opened.map((abertura) => (
-              <Card key={abertura.proposalId} interactive className="p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-15 font-semibold text-ink">
-                      {abertura.contactName}
-                    </p>
-                    <p className="mt-0.5 truncate text-13 text-muted">
-                      {abertura.destination ?? abertura.proposalTitle}
-                    </p>
-                  </div>
-                  <Badge tone="accent" dot>
-                    {abertura.openCount}
-                    {abertura.openCount === 1 ? " abertura" : " aberturas"}
-                  </Badge>
-                </div>
-
-                <div className="mt-3 flex items-center gap-1.5 text-13 text-muted">
-                  <OpenedIcon className="size-3.5" />
-                  {formatRelativeShort(new Date(abertura.firstViewedAt))}
-                </div>
-              </Card>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Em viagem — §3. O pós-venda que sustenta a recompra: a última chamada
-          antes de embarcar, a viagem em curso (presença, sem CTA) e quem já
-          voltou — o único CTA é pedir depoimento. */}
-      <EmViagemSection />
-
-      <section aria-labelledby="hoje-paradas">
-        <SectionHeading
-          action={
-            monthStatus === "ready" && month ? (
-              <span className="flex items-baseline gap-1 text-13 text-muted">
-                <Money
-                  cents={month.paradas.totalCents}
-                  size="13"
-                  tone="muted"
-                  reserveFor={5_000_000}
-                />
-                parados
-              </span>
-            ) : null
-          }
-        >
-          <span id="hoje-paradas">Propostas paradas</span>
-        </SectionHeading>
-
-        {monthStatus === "loading" ? (
-          <Card className="flex flex-col gap-4 p-4">
-            {[0, 1].map((row) => (
-              <SkeletonRow key={row} />
-            ))}
-          </Card>
-        ) : monthStatus === "error" ? (
-          <Card className="flex flex-col items-start gap-3 p-4">
-            <FieldError>{monthError?.mensagem}</FieldError>
-            <Button variant="secondary" size="sm" onClick={retryMonth}>
-              {monthError?.correcao ?? "Tentar de novo"}
-            </Button>
-          </Card>
-        ) : !month || month.paradas.itens.length === 0 ? (
-          <EmptyState
-            compact
-            title="Nenhuma proposta parada"
-            description="Toda proposta enviada há mais de 7 dias sem resposta do cliente aparece aqui, com o botão de cobrar junto."
-          />
-        ) : (
-          <Card tone="warn" className="overflow-hidden">
-            <ul className="divide-y divide-warn/20">
-              {month.paradas.itens.map((item) => (
-                <ParkedProposalRow
-                  key={item.id}
-                  item={item}
-                  // Teto da lista: sem ele, cada linha reservava a própria
-                  // largura e o "Cobrar" escorregava de linha para linha.
-                  reserveFor={Math.max(1, ...month.paradas.itens.map((i) => i.valueCents))}
-                />
-              ))}
-            </ul>
-          </Card>
-        )}
-      </section>
-
+      {/* Resumo do mês — a informação mais importante da tela (PO, 2026-09):
+          "como está o meu mês" é a pergunta que abre o app, antes de qualquer
+          fila de ação. Mesma fonte de antes (`obterResumoDoMes`, uma chamada só
+          que também alimenta "Propostas paradas" lá embaixo). */}
       <section aria-labelledby="hoje-mes">
         <SectionHeading
           action={
@@ -853,6 +572,309 @@ export function TodayScreen({ periodoParam }: { periodoParam?: string }) {
           </div>
         )}
       </section>
+
+      <section aria-labelledby="hoje-tarefas">
+        <SectionHeading
+          action={
+            <div className="flex items-center gap-1">
+              {tasksStatus === "ready" ? (
+                <span className="text-13 tabular-nums text-muted" data-numeric>
+                  {tasks.length} {tasks.length === 1 ? "pendente" : "pendentes"}
+                </span>
+              ) : null}
+              {/* Conta nova: sem botão — o lembrete não é o primeiro passo e
+                  o painel acima já carrega o único CTA da tela. */}
+              {contaNova ? null : (
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  iconOnly
+                  aria-label="Criar lembrete"
+                  className="-my-1"
+                  onPointerDown={() => setReminderSheetOpen(true)}
+                >
+                  <PlusIcon className="size-3.5" />
+                </Button>
+              )}
+            </div>
+          }
+        >
+          <span id="hoje-tarefas">Tarefas de hoje</span>
+        </SectionHeading>
+
+        {tasksStatus === "loading" ? (
+          <Card className="flex flex-col gap-4 p-4">
+            {[0, 1, 2].map((row) => (
+              <SkeletonRow key={row} />
+            ))}
+          </Card>
+        ) : tasksStatus === "error" ? (
+          <Card className="flex flex-col items-start gap-3 p-4">
+            <FieldError>{tasksError?.mensagem}</FieldError>
+            <Button variant="secondary" size="sm" onClick={retryTasks}>
+              {tasksError?.correcao ?? "Tentar de novo"}
+            </Button>
+          </Card>
+        ) : tasks.length === 0 ? (
+          <EmptyState
+            title="Nada marcado para hoje"
+            description="Toda proposta enviada vira um lembrete de follow-up automático — passaporte perto de vencer e aniversário de cliente também aparecem aqui sozinhos."
+            action={
+              contaNova ? undefined : (
+                <Button
+                  variant="primary"
+                  onPointerDown={() => setReminderSheetOpen(true)}
+                >
+                  <PlusIcon className="size-4" />
+                  Criar lembrete
+                </Button>
+              )
+            }
+          />
+        ) : (
+          <Card className="overflow-hidden">
+            <ul className="divide-y divide-line-subtle">
+              <AnimatePresence initial={false}>
+                {tasks.map((task) => (
+                  <motion.li
+                    key={task.id}
+                    layout
+                    transition={transition}
+                    initial={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="flex flex-col gap-2 px-4 py-3"
+                  >
+                    <div className="flex items-start gap-3">
+                      <Checkbox
+                        className="mt-0.5"
+                        checked={false}
+                        onCheckedChange={(checked) => {
+                          if (checked === true) concludeTask(task);
+                        }}
+                        aria-label={`Concluir: ${task.title}`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="flex items-center gap-1.5 text-15 font-medium text-ink">
+                          <TaskSourceIcon
+                            source={task.source}
+                            className="size-3.5 shrink-0 text-muted"
+                          />
+                          <span className="min-w-0 truncate">{task.title}</span>
+                        </p>
+                        {taskDetail(task) ? (
+                          <p className="mt-0.5 truncate text-13 text-muted">
+                            {taskDetail(task)}
+                          </p>
+                        ) : null}
+                      </div>
+                      <span
+                        data-numeric
+                        className={cn(
+                          "shrink-0 pt-0.5 text-13 tabular-nums",
+                          task.vencida ? "text-danger" : "text-muted",
+                        )}
+                      >
+                        {task.vencida
+                          ? formatRelativeShort(new Date(task.dueAt))
+                          : formatTime(new Date(task.dueAt))}
+                      </span>
+                    </div>
+
+                    {task.suggestedMessage ? (
+                      <div className="ml-8">
+                        <Button
+                          size="sm"
+                          variant="quiet"
+                          onClick={() => copyMessage(task)}
+                        >
+                          <CopyIcon className="size-3.5" />
+                          Copiar mensagem
+                        </Button>
+                      </div>
+                    ) : null}
+                  </motion.li>
+                ))}
+              </AnimatePresence>
+            </ul>
+          </Card>
+        )}
+      </section>
+
+      <section aria-labelledby="hoje-abriram">
+        <SectionHeading>
+          <span id="hoje-abriram">Abriram sua proposta</span>
+        </SectionHeading>
+
+        {openedStatus === "loading" ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Skeleton className="h-[6.5rem] rounded-lg" />
+            <Skeleton className="h-[6.5rem] rounded-lg" />
+          </div>
+        ) : openedStatus === "error" ? (
+          <Card className="flex flex-col items-start gap-3 p-4">
+            <FieldError>{openedError?.mensagem}</FieldError>
+            <Button variant="secondary" size="sm" onClick={retryOpened}>
+              {openedError?.correcao ?? "Tentar de novo"}
+            </Button>
+          </Card>
+        ) : opened.length === 0 ? (
+          <EmptyState
+            title="Ninguém abriu ainda"
+            description="Assim que o cliente tocar no link, ele aparece aqui — com quantas vezes abriu e quando."
+            preview={<OpenedPreview />}
+            /* Este botão existia sem `onClick` — porta que não abre (regra
+               §5 do negócio: elo sem porta visível é funcionalidade que não
+               existe). O envio mora no editor: a lista é o caminho. Conta
+               nova, sem ação — o painel de primeira venda manda. */
+            action={
+              contaNova ? undefined : (
+                <Button variant="primary" asChild>
+                  <Link href="/propostas">Enviar uma proposta</Link>
+                </Button>
+              )
+            }
+          />
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {opened.map((abertura) => (
+              /* O card INTEIRO é o link para a proposta exata que foi aberta
+                 (`abertura.proposalId` → editor, mesmo destino da lista de
+                 propostas). Antes era `<Card interactive>` sem `href` nenhum:
+                 feedback visual de clicável, porta nenhuma atrás — o achado do
+                 PO ("o card precisa LEVAR para a proposta que a pessoa
+                 clicou"). `<a>` de verdade, não `role="link"`: abre em nova
+                 aba, middle-click e o anel de foco global de graça. */
+              <Link
+                key={abertura.proposalId}
+                href={`/propostas/${abertura.proposalId}/editar`}
+                aria-label={`Abrir a proposta de ${abertura.contactName}`}
+                className="rounded-lg outline-none"
+              >
+                <Card interactive className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-15 font-semibold text-ink">
+                        {abertura.contactName}
+                      </p>
+                      <p className="mt-0.5 truncate text-13 text-muted">
+                        {abertura.destination ?? abertura.proposalTitle}
+                      </p>
+                    </div>
+                    <Badge tone="accent" dot>
+                      {abertura.openCount}
+                      {abertura.openCount === 1 ? " abertura" : " aberturas"}
+                    </Badge>
+                  </div>
+
+                  <div className="mt-3 flex items-center gap-1.5 text-13 text-muted">
+                    <OpenedIcon className="size-3.5" />
+                    {formatRelativeShort(new Date(abertura.firstViewedAt))}
+                  </div>
+                </Card>
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section aria-labelledby="hoje-paradas">
+        <SectionHeading
+          action={
+            monthStatus === "ready" && month ? (
+              <span className="flex items-baseline gap-1 text-13 text-muted">
+                <Money
+                  cents={month.paradas.totalCents}
+                  size="13"
+                  tone="muted"
+                  reserveFor={5_000_000}
+                />
+                parados
+              </span>
+            ) : null
+          }
+        >
+          <span id="hoje-paradas">Propostas paradas</span>
+        </SectionHeading>
+
+        {monthStatus === "loading" ? (
+          <Card className="flex flex-col gap-4 p-4">
+            {[0, 1].map((row) => (
+              <SkeletonRow key={row} />
+            ))}
+          </Card>
+        ) : monthStatus === "error" ? (
+          <Card className="flex flex-col items-start gap-3 p-4">
+            <FieldError>{monthError?.mensagem}</FieldError>
+            <Button variant="secondary" size="sm" onClick={retryMonth}>
+              {monthError?.correcao ?? "Tentar de novo"}
+            </Button>
+          </Card>
+        ) : !month || month.paradas.itens.length === 0 ? (
+          <EmptyState
+            compact
+            title="Nenhuma proposta parada"
+            description="Toda proposta enviada há mais de 7 dias sem resposta do cliente aparece aqui, com o botão de cobrar junto."
+          />
+        ) : (
+          <Card tone="warn" className="overflow-hidden">
+            <ul className="divide-y divide-warn/20">
+              {month.paradas.itens.map((item) => (
+                <ParkedProposalRow
+                  key={item.id}
+                  item={item}
+                  // Teto da lista: sem ele, cada linha reservava a própria
+                  // largura e o "Cobrar" escorregava de linha para linha.
+                  reserveFor={Math.max(1, ...month.paradas.itens.map((i) => i.valueCents))}
+                />
+              ))}
+            </ul>
+          </Card>
+        )}
+      </section>
+
+      {/* Em viagem — §3. O pós-venda que sustenta a recompra: a última chamada
+          antes de embarcar, a viagem em curso (presença, com a ficha do
+          negócio a um toque) e quem já voltou — o único botão é pedir
+          depoimento. */}
+      <EmViagemSection />
+
+      {/* Lembretes futuros — o lembrete criado para amanhã tem onde aparecer;
+          sem isto o app parecia engolir o que acabou de ser criado (achado do
+          PO). Sem estado vazio: ausência é silêncio, a seção só existe quando
+          há o que mostrar. Contexto, não ação — por isso fecha a tela. */}
+      {proximas.length > 0 ? (
+        <section aria-labelledby="hoje-a-seguir">
+          <SectionHeading>
+            <span id="hoje-a-seguir">A seguir</span>
+          </SectionHeading>
+          <Card className="overflow-hidden">
+            <ul className="divide-y divide-line-subtle">
+              {proximas.map((task) => (
+                <li key={task.id} className="flex items-start gap-3 px-4 py-3">
+                  <TaskSourceIcon
+                    source={task.source}
+                    className="mt-1 size-3.5 shrink-0 text-muted"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-15 text-ink">{task.title}</p>
+                    {taskDetail(task) ? (
+                      <p className="mt-0.5 truncate text-13 text-muted">
+                        {taskDetail(task)}
+                      </p>
+                    ) : null}
+                  </div>
+                  <span
+                    data-numeric
+                    className="shrink-0 pt-0.5 text-13 tabular-nums text-muted"
+                  >
+                    {formatDayMonth(new Date(task.dueAt))} · {formatTime(new Date(task.dueAt))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        </section>
+      ) : null}
 
       <NovoLembreteSheet
         open={reminderSheetOpen}
@@ -1201,12 +1223,14 @@ function MonthCard({
    negócio `ganho` com data de ida em um — e só um — de três estados:
 
      "Viaja em N dias"   última chamada discreta (documentos, check-in);
-                         0 = viaja hoje. Nada é clicável: aviso, não tarefa.
-     "Em viagem até..."  UMA linha, SEM CTA — presença, não ruído.
-     "Retornou há N"     o ÚNICO CTA da seção: pedir depoimento, mensagem
+                         0 = viaja hoje. A LINHA leva à ficha do negócio
+                         (`/funil/[id]`) — aviso com porta, não tarefa.
+     "Em viagem até..."  UMA linha — presença, não ruído; a ficha fica a um
+                         toque, o botão continua sendo só um.
+     "Retornou há N"     o ÚNICO BOTÃO da seção: pedir depoimento, mensagem
                          pronta no WhatsApp do contato (`contactWhatsapp`,
                          viagem do próprio tenant — nunca em superfície
-                         pública).
+                         pública). A linha em si leva à ficha do negócio.
 
    Sem WhatsApp cadastrado, a linha "retornou" fica em silêncio: um link
    `wa.me` com número duvidoso abre conversa com estranho — pior que não
@@ -1326,26 +1350,48 @@ function ViagemRow({
       : null;
 
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-15 font-medium text-ink">
-          {item.contactName}
-          {item.destination ? (
-            <span className="font-normal text-muted"> · {item.destination}</span>
-          ) : null}
+    /* A linha inteira leva à ficha do NEGÓCIO (`/funil/${item.id}`) — mesma
+       navegação do quadro do funil. Era `<li>` sem link nenhum: o PO abriu
+       "Em viagem" e não tinha para onde ir. O botão de depoimento fica FORA do
+       link (irmão, não filho) — ação dentro de ação é alvo que o leitor de
+       tela não resolve. Mesmo desenho da lista de clientes (link flex-1 +
+       ação à parte). */
+    <li className="flex items-center gap-1 pr-2">
+      <Link
+        href={`/funil/${item.id}`}
+        aria-label={`Abrir o negócio de ${item.contactName}`}
+        className={cn(
+          "flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3",
+          "rounded-xs hover:bg-surface-2",
+          "[@media(pointer:coarse)]:min-h-11",
+        )}
+      >
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-15 font-medium text-ink">
+            {item.contactName}
+            {item.destination ? (
+              <span className="font-normal text-muted"> · {item.destination}</span>
+            ) : null}
+          </span>
+          <span
+            className={cn(
+              "flex items-center gap-1.5 text-13",
+              urgente ? "text-warn" : "text-muted",
+            )}
+          >
+            <Icone className="size-3.5 shrink-0" />
+            {rotulo}
+          </span>
         </span>
-        <span
-          className={cn(
-            "flex items-center gap-1.5 text-13",
-            urgente ? "text-warn" : "text-muted",
-          )}
-        >
-          <Icone className="size-3.5 shrink-0" />
-          {rotulo}
-        </span>
-      </span>
 
-      <Money cents={item.valueCents} size="13" tone="muted" align="right" reserveFor={reserveFor} />
+        <Money
+          cents={item.valueCents}
+          size="13"
+          tone="muted"
+          align="right"
+          reserveFor={reserveFor}
+        />
+      </Link>
 
       {linkDepoimento ? (
         <Button size="sm" variant="secondary" asChild>

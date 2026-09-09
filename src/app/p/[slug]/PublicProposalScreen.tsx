@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { registrarVisitaProposta, aceitarOpcaoPublica, type PropostaPublica } from "@/server";
+import { Assinatura } from "@/components/public/Assinatura";
 import { Badge } from "@/components/ui/Badge";
 import { Money } from "@/components/ui/Money";
 import { ArchPlate, BiplanePlate, Rule } from "@/components/plates";
@@ -9,7 +10,6 @@ import { PublicBlockSection } from "@/components/public/PublicBlockSection";
 import { PublicBrandBar } from "@/components/public/PublicBrandBar";
 import { cn } from "@/lib/ui/cn";
 import { formatBRL, formatDayMonth } from "@/lib/ui/format";
-import { APP_NAME } from "@/lib/ui/brand";
 
 /* =============================================================================
    A proposta pública — registro editorial pleno (CLAUDE.md > Regras de
@@ -199,9 +199,10 @@ export function PublicProposalScreen({
         </section>
       ) : null}
 
-      <footer className="flex flex-col lg:max-w-[44rem]">
-        <Rule loose />
-        <p className="text-center text-13 text-subtle">Feito com {APP_NAME}</p>
+      <footer className="lg:max-w-[44rem]">
+        {/* O colofão — o mesmo componente de /r/[slug]: duas superfícies
+            públicas, uma assinatura só. A marca é a congelada no envio. */}
+        <Assinatura marca={brand} instagram={brand.instagram} />
       </footer>
     </main>
   );

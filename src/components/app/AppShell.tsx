@@ -18,6 +18,7 @@ import {
   MoneyIcon,
   PlusIcon,
   ProposalIcon,
+  SlidersIcon,
   TodayIcon,
 } from "./icons";
 
@@ -122,7 +123,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const wide = useWideRoute();
   const title =
     NAV.find((item) => item.href === activeHref)?.label ??
-    (pathname === "/kitchen-sink" ? "Kitchen sink" : APP_NAME);
+    (pathname === "/kitchen-sink"
+      ? "Kitchen sink"
+      : pathname.startsWith("/configuracoes")
+        ? "Sua marca"
+        : APP_NAME);
 
   return (
     <div
@@ -212,6 +217,12 @@ function SideNav({ activeHref }: { activeHref: string | null }) {
       </nav>
 
       <div className="mt-auto flex flex-col gap-3 border-t border-hairline p-3">
+        <Link
+          href="/configuracoes"
+          className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
+        >
+          Sua marca
+        </Link>
         <Link
           href="/cobranca"
           className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
@@ -319,6 +330,16 @@ function TopBar({ title }: { title: string }) {
           <span className="lg:hidden">
             <ThemeToggle />
           </span>
+          {/* No desktop, "Sua marca" mora na lateral. No celular a lateral não
+              existe e a barra inferior já está no limite de cinco alvos — o
+              caminho é aqui, um ícone quieto ao lado do tema. */}
+          <Link
+            href="/configuracoes"
+            aria-label="Sua marca"
+            className="grid size-9 place-items-center rounded-md text-muted hover:bg-surface-3 hover:text-ink lg:hidden"
+          >
+            <SlidersIcon className="size-5" />
+          </Link>
           <Button
             variant="primary"
             size="sm"

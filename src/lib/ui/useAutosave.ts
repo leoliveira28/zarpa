@@ -33,15 +33,26 @@ interface UseAutosaveOptions {
   idleAfterMs?: number;
 }
 
+export type FalhaDeAutosave = {
+  mensagem: string;
+  /** O campo apontado pela recusa (`blocos[2].content.preco`) — quando o servidor diz. */
+  campo: string | null;
+  /** A correção sugerida, pronta para virar o botão do FieldError. */
+  correcao: string | null;
+};
+
 export function useAutosave<T>(
   save: (value: T) => Promise<ServiceResult<unknown>>,
   { debounceMs = 0, idleAfterMs = 2000 }: UseAutosaveOptions = {},
 ) {
   const [state, setState] = React.useState<AutosaveState>("idle");
   const [error, setError] = React.useState<string | null>(null);
+  const [failure, setFailure] = React.useState<FalhaDeAutosave | null>(null);
   const debounceRef = React.useRef<number | undefined>(undefined);
   const idleRef = React.useRef<number | undefined>(undefined);
   const lastRef = React.useRef<T | undefined>(undefined);
+  /** Pendência do `schedule`: o que a saída de cena ainda deve gravar. */
+  const pendenteRef = React.useRef<T | undefined>(undefined);
   const saveRef = React.useRef(save);
   React.useEffect(() => {
     saveRef.current = save;
@@ -49,9 +60,11 @@ export function useAutosave<T>(
 
   const commit = React.useCallback(async (value: T) => {
     window.clearTimeout(debounceRef.current);
+    pendenteRef.current = undefined;
     lastRef.current = value;
     setState("saving");
     setError(null);
+    setFailure(null);
     const result = await saveRef.current(value);
     // um commit mais novo já começou enquanto este estava no ar — a resposta
     // deste é velha, e aplicá-la sobrescreveria o rótulo do commit atual.
@@ -63,6 +76,11 @@ export function useAutosave<T>(
       avisarRecusaDeEscrita(result);
       setState("error");
       setError(result.mensagem);
+      setFailure({
+        mensagem: result.mensagem,
+        campo: result.campo ?? null,
+        correcao: result.correcao ?? null,
+      });
       return result;
     }
     setState("saved");
@@ -74,6 +92,7 @@ export function useAutosave<T>(
   const schedule = React.useCallback(
     (value: T) => {
       lastRef.current = value;
+      pendenteRef.current = value;
       window.clearTimeout(debounceRef.current);
       if (debounceMs <= 0) {
         void commit(value);
@@ -90,9 +109,15 @@ export function useAutosave<T>(
     () => () => {
       window.clearTimeout(debounceRef.current);
       window.clearTimeout(idleRef.current);
+      // O debounce morre com a cena — o que a agente digitou nos últimos
+      // milissegundos não pode morrer com ele. Gravação crua, sem setState
+      // (a cena já saiu): a rede fica a dever para o servidor, que é
+      // idempotente justamente para aguentar este martelo.
+      const pendente = pendenteRef.current;
+      if (pendente !== undefined) void saveRef.current(pendente);
     },
     [],
   );
 
-  return { state, error, commit, schedule };
+  return { state, error, failure, commit, schedule };
 }

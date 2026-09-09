@@ -2,12 +2,7 @@
 
 import * as React from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import {
-  COLUNAS_DO_FUNIL,
-  moverEstagioDoNegocio,
-  type DealStage,
-  type EstagioDeFunil,
-} from "@/server";
+import { moverEstagioDoNegocio } from "@/server";
 import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { cn } from "@/lib/ui/cn";
 import { Button } from "@/components/ui/Button";
@@ -25,6 +20,19 @@ import { Textarea } from "@/components/ui/Input";
    um só lugar que sabe como mover um negócio — mesmo raciocínio de
    `NovoNegocioSheet`/`contatoFixo` e agora `NovaPropostaSheet`/`negocioFixo`.
 
+   S16 — O CARDÁPIO É O DO TENANT. A lista deixa de ser `COLUNAS_DO_FUNIL` (as
+   cinco de fábrica) e passa a vir de fora: as colunas ATIVAS de
+   `listarEstagios()`, na ordem do quadro, com o rótulo real — inclusive o de
+   coluna que a agente criou. O movimento é por `{ stageId }` (a FK de verdade,
+   0016), não pelo enum: para coluna customizada o enum não existe — o que o
+   banco dá de espelho (`negociando`) serviria para qualquer coluna aberta.
+
+   A coluna `isLost` NÃO vira item de movimento — é saída do funil, não lugar
+   onde negócio fica (o quadro nem a mostra). Ela só liga a última entrada do
+   menu, "Marcar como perdida…", que abre o `LossReasonDialog` e move por
+   `{ stageId }` com o motivo. Sem coluna `isLost` carregada, a entrada some —
+   o servidor também recusaria, então mentir no menu seria pior.
+
    `DealStageMenu` é só o CARDÁPIO — decide qual estágio, chama `onMove`/
    `onRequestLoss`, não fala com o servidor: quem chama decide como aplicar o
    patch otimista (a lista do funil e a ficha do negócio guardam o negócio de
@@ -40,17 +48,28 @@ import { Textarea } from "@/components/ui/Input";
 /** Mesmo mínimo que o servidor exige (`moverEstagioDoNegocio`) — a UI recusa antes de gastar uma chamada de rede. */
 export const MIN_LOST_REASON_LENGTH = 3;
 
+/** O que o menu precisa de cada coluna — o recorte de `EstagioDoFunil` que importa aqui. */
+export type ColunaDeEstagio = {
+  id: string;
+  label: string;
+  isWon: boolean;
+  isLost: boolean;
+};
+
 /** Caminho de teclado para a mesma ação do arrasto no Funil — e a única porta para "perdida". */
 export function DealStageMenu({
   contactName,
-  currentStage,
+  colunas,
+  currentStageId,
   onMove,
   onRequestLoss,
   revealOnHover = false,
 }: {
   contactName: string;
-  currentStage: DealStage;
-  onMove: (stage: EstagioDeFunil) => void;
+  /** Colunas ATIVAS do tenant (`listarEstagios()`), na ordem do quadro. A `isLost` não vira item — vira a saída. */
+  colunas: ColunaDeEstagio[];
+  currentStageId: string;
+  onMove: (stageId: string) => void;
   onRequestLoss: () => void;
   /**
    * O card do Funil é denso demais para um kebab sempre visível — ali ele só
@@ -62,6 +81,8 @@ export function DealStageMenu({
    */
   revealOnHover?: boolean;
 }) {
+  const perdidaExiste = colunas.some((coluna) => coluna.isLost);
+
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
@@ -103,32 +124,38 @@ export function DealStageMenu({
           <DropdownMenu.Label className="px-2 py-1.5 text-13 font-semibold tracking-[0.04em] text-muted uppercase">
             Mover para
           </DropdownMenu.Label>
-          {COLUNAS_DO_FUNIL.map(({ estagio, label }) => (
-            <DropdownMenu.Item
-              key={estagio}
-              disabled={estagio === currentStage}
-              onSelect={() => onMove(estagio)}
-              className={cn(
-                "flex min-h-9 cursor-pointer items-center rounded-md px-2 text-15 text-ink outline-none",
-                "data-[highlighted]:bg-accent-soft data-[highlighted]:text-accent-soft-ink",
-                "data-[disabled]:pointer-events-none data-[disabled]:text-subtle",
-                "[@media(pointer:coarse)]:min-h-11",
-              )}
-            >
-              {label}
-            </DropdownMenu.Item>
-          ))}
-          <DropdownMenu.Separator className="mx-1 my-1 h-px bg-hairline" />
-          <DropdownMenu.Item
-            onSelect={onRequestLoss}
-            className={cn(
-              "flex min-h-9 cursor-pointer items-center rounded-md px-2 text-15 text-danger outline-none",
-              "data-[highlighted]:bg-danger-soft data-[highlighted]:text-danger-soft-ink",
-              "[@media(pointer:coarse)]:min-h-11",
-            )}
-          >
-            Marcar como perdida…
-          </DropdownMenu.Item>
+          {colunas
+            .filter((coluna) => !coluna.isLost)
+            .map((coluna) => (
+              <DropdownMenu.Item
+                key={coluna.id}
+                disabled={coluna.id === currentStageId}
+                onSelect={() => onMove(coluna.id)}
+                className={cn(
+                  "flex min-h-9 cursor-pointer items-center rounded-md px-2 text-15 text-ink outline-none",
+                  "data-[highlighted]:bg-accent-soft data-[highlighted]:text-accent-soft-ink",
+                  "data-[disabled]:pointer-events-none data-[disabled]:text-subtle",
+                  "[@media(pointer:coarse)]:min-h-11",
+                )}
+              >
+                {coluna.label}
+              </DropdownMenu.Item>
+            ))}
+          {perdidaExiste ? (
+            <>
+              <DropdownMenu.Separator className="mx-1 my-1 h-px bg-hairline" />
+              <DropdownMenu.Item
+                onSelect={onRequestLoss}
+                className={cn(
+                  "flex min-h-9 cursor-pointer items-center rounded-md px-2 text-15 text-danger outline-none",
+                  "data-[highlighted]:bg-danger-soft data-[highlighted]:text-danger-soft-ink",
+                  "[@media(pointer:coarse)]:min-h-11",
+                )}
+              >
+                Marcar como perdida…
+              </DropdownMenu.Item>
+            </>
+          ) : null}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
@@ -147,14 +174,21 @@ export function DealStageMenu({
  * servidor confirmar — quem chama faz o patch otimista da própria tela
  * (remover da lista do funil, ou atualizar o objeto único da ficha) e o
  * toast de desfazer.
+ *
+ * S16 — o destino da perda é a coluna `isLost` DO TENANT, pelo id: se a
+ * agente renomeou "Perdida" para "Não rolou", a mudança de estado é a mesma e
+ * o motivo continua obrigatório (`alvo.isLost` do lado do servidor).
  */
 export function LossReasonDialog({
   deal,
+  destinoPerdida,
   onOpenChange,
   onLost,
 }: {
   /** `null` fecha o diálogo. */
   deal: { id: string; contactName: string } | null;
+  /** A coluna fim de funil `isLost` do tenant — o movimento é por `{ stageId }`. */
+  destinoPerdida: string;
   onOpenChange: (open: boolean) => void;
   onLost: (dealId: string, motivo: string) => void;
 }) {
@@ -180,7 +214,11 @@ export function LossReasonDialog({
     }
     setSubmitting(true);
     setError(null);
-    const result = await moverEstagioDoNegocio(deal.id, "perdido", motivo);
+    const result = await moverEstagioDoNegocio(
+      deal.id,
+      { stageId: destinoPerdida },
+      motivo,
+    );
     setSubmitting(false);
     if (!result.ok) {
       avisarRecusaDeEscrita(result);

@@ -4,21 +4,20 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  COLUNAS_DO_FUNIL,
   atualizarNegocio,
-  gerarRoteiro,
+  listarEstagios,
   listarPropostas,
-  listarRoteiros,
   moverEstagioDoNegocio,
   obterNegocio,
   type AtividadeDoNegocio,
-  type DealStage,
-  type EstagioDeFunil,
+  type EstagioDoFunil,
   type NegocioDetalhe,
+  type NegocioMovido,
   type PropostaResumo,
   type RoteiroResumo,
   type ServiceResult,
 } from "@/server";
+import { listarRoteiroDoNegocio } from "@/lib/ui/roteiroApi";
 import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { Badge, type BadgeProps } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -61,6 +60,18 @@ import { useAutosave } from "@/lib/ui/useAutosave";
    `src/components/app/DealStageMenu.tsx` nesta mesma entrega, um lugar só que
    sabe validar motivo de perda e falar com `moverEstagioDoNegocio`.
 
+   S16 — ESTÁGIO É COLUNA, E A COLUNA É DO TENANT. O cardápio passa a listar
+   TODAS as colunas ativas de `listarEstagios()` (rótulos reais — inclusive os
+   de colunas que a agente criou) e o movimento é por `{ stageId }`, a FK de
+   verdade (0016). O badge do cabeçalho usa `stageLabel` que já vem no
+   `NegocioDetalhe`; ganho/perdido são `isWon`/`isLost` da coluna, não
+   comparação de enum. A timeline lê os ids NOVOS que `moverEstagioDoNegocio`
+   grava na metadata (`deStageId`/`paraStageId`/`paraLabel`) para reconstruir
+   a frase com o rótulo do momento — e usa `incluirArquivadas` na leitura das
+   colunas porque o "de onde veio" pode ser uma coluna que a agente arquivou
+   depois. Para atividades antigas (pré-0016, metadata só com enum) o fallback
+   é o rótulo de fábrica — enum cru na tela é defeito, foi varrido.
+
    "Conectar à proposta": `obterNegocio` não devolve propostas (não é dado do
    negócio, é dado da proposta) — o card `PropostaCard` abaixo faz a própria
    busca (`listarPropostas`, filtrada por `dealId` no cliente — não existe
@@ -72,20 +83,39 @@ import { useAutosave } from "@/lib/ui/useAutosave";
 
 type Status = "loading" | "ready" | "error";
 
-/** Rótulo de estágio: as cinco colunas do quadro + "Perdida", que não é coluna. */
-const STAGE_LABEL: Record<DealStage, string> = {
-  ...Object.fromEntries(COLUNAS_DO_FUNIL.map((c) => [c.estagio, c.label])),
+/**
+ * Rótulos de fábrica — fallback para atividade cuja metadata não carrega os
+ * ids novos (pré-0016) ou veio de formato inesperado. O rótulo real vem de
+ * `listarEstagios`; para coluna criada pela agente NEM EXISTE enum, então
+ * este mapa nunca é a primeira escolha.
+ */
+const ROTULO_DE_ENUM: Record<string, string> = {
+  novo: "Novo contato",
+  cotando: "Montando",
+  proposta_enviada: "Enviada",
+  negociando: "Negociando",
+  ganho: "Fechada",
   perdido: "Perdida",
-} as Record<DealStage, string>;
-
-const STAGE_TONE: Record<DealStage, BadgeProps["tone"]> = {
-  novo: "neutral",
-  cotando: "neutral",
-  proposta_enviada: "neutral",
-  negociando: "neutral",
-  ganho: "ok",
-  perdido: "danger",
 };
+
+function rotuloDeEnum(value: unknown): string | null {
+  return typeof value === "string" && value in ROTULO_DE_ENUM
+    ? ROTULO_DE_ENUM[value]
+    : null;
+}
+
+/**
+ * O espelho enum↔coluna, só para o `body` da entrada otimista manter a MESMA
+ * frase que o servidor grava (mesmo CASE do trigger `deals_estagio_sync`,
+ * 0016). Quem desenha o rótulo na tela é `activityLabel`, pelos ids.
+ */
+function espelhoDoEstagio(coluna: EstagioDoFunil | undefined): string {
+  if (!coluna) return "negociando";
+  if (coluna.legacyStage) return coluna.legacyStage;
+  if (coluna.isWon) return "ganho";
+  if (coluna.isLost) return "perdido";
+  return "negociando";
+}
 
 /** `body` não existe para todo tipo de `activity` (`proposal_sent` nasce sem — ver `proposals.ts`). */
 const ACTIVITY_FALLBACK: Record<string, string> = {
@@ -99,44 +129,59 @@ const ACTIVITY_FALLBACK: Record<string, string> = {
   contact_created: "Negócio criado.",
 };
 
-function isDealStage(value: unknown): value is DealStage {
-  return typeof value === "string" && value in STAGE_LABEL;
+function optimisticActivityId(): string {
+  return `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /**
  * `stage_changed` chega do servidor com `body` em enum cru — "Movido de
  * proposta_enviada para novo." — porque `moverEstagioDoNegocio` (deals.ts)
- * escreve o `body` com o valor de banco, não com a copy de interface (ele
- * nem importa `COLUNAS_DO_FUNIL`, que é copy da Nina). Reconstruo a frase
- * aqui a partir de `metadata.de`/`metadata.para` (sempre presentes nesse
- * tipo) com `STAGE_LABEL` — mesmo texto que o badge do cabeçalho já usa, sem
- * pedir ao servidor pra mudar o que ele grava. `body` só entra como
- * min-fallback se a metadata vier de um formato inesperado.
+ * escreve o `body` com o valor de banco, não com a copy de interface. Desde a
+ * 0016 ele grava TAMBÉM os endereços novos na metadata (`deStageId`/
+ * `paraStageId`/`paraLabel`), e é por eles que a frase é reconstruída: o
+ * rótulo vem das colunas do tenant (`colunas`, lidas com
+ * `incluirArquivadas` — o "de onde veio" pode ser coluna arquivada depois),
+ * caindo para `paraLabel` e para o rótulo de fábrica só quando o id não está
+ * mais na lista. Enum cru na tela é defeito — foi varrido nesta rodada.
  */
-function activityLabel(activity: AtividadeDoNegocio): string {
+function activityLabel(
+  activity: AtividadeDoNegocio,
+  colunas: Map<string, EstagioDoFunil>,
+): string {
   if (activity.type === "stage_changed") {
-    const de = activity.metadata.de;
-    const para = activity.metadata.para;
-    if (isDealStage(de) && isDealStage(para)) {
-      if (para === "perdido") {
-        const motivo = activity.metadata.motivoPerda;
-        return typeof motivo === "string" && motivo.trim().length > 0
-          ? `Marcada como perdida: ${motivo}`
-          : "Marcada como perdida.";
-      }
-      return `Movido de ${STAGE_LABEL[de]} para ${STAGE_LABEL[para]}.`;
+    const m = activity.metadata;
+    const deId = typeof m.deStageId === "string" ? m.deStageId : null;
+    const paraId = typeof m.paraStageId === "string" ? m.paraStageId : null;
+    const deNome =
+      (deId ? colunas.get(deId)?.label : undefined) ?? rotuloDeEnum(m.de);
+    const paraColuna = paraId ? (colunas.get(paraId) ?? null) : null;
+    const paraLabelMetadata =
+      typeof m.paraLabel === "string" && m.paraLabel.trim().length > 0
+        ? m.paraLabel
+        : null;
+    const paraNome =
+      paraColuna?.label ?? paraLabelMetadata ?? rotuloDeEnum(m.para);
+
+    // A saída: `isLost` da COLUNA é a verdade (0016); `para === "perdido"`
+    // cobre metadata antiga, quando o enum era o único endereço.
+    if (paraColuna?.isLost || m.para === "perdido") {
+      const motivo = m.motivoPerda;
+      return typeof motivo === "string" && motivo.trim().length > 0
+        ? `Marcada como perdida: ${motivo}`
+        : "Marcada como perdida.";
     }
+    if (deNome && paraNome) {
+      return `Movido de ${deNome} para ${paraNome}.`;
+    }
+    // metadata inesperada: a frase genérica, nunca o enum cru do `body`.
+    return "Estágio alterado.";
   }
   const body = activity.body?.trim();
   return body && body.length > 0 ? body : (ACTIVITY_FALLBACK[activity.type] ?? activity.type);
 }
 
-function optimisticActivityId(): string {
-  return `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 /** Mesmo texto que `moverEstagioDoNegocio` grava em `activities.body` (deals.ts) — a entrada otimista não pode divergir do que um F5 traria de volta. */
-function stageActivityBody(from: DealStage, to: DealStage, motivo?: string): string {
+function stageActivityBody(from: string, to: string, motivo?: string): string {
   return to === "perdido" ? `Marcado como perdido: ${motivo}` : `Movido de ${from} para ${to}.`;
 }
 
@@ -155,6 +200,7 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
 
   const [status, setStatus] = React.useState<Status>("loading");
   const [negocio, setNegocio] = React.useState<NegocioDetalhe | null>(null);
+  const [estagios, setEstagios] = React.useState<EstagioDoFunil[]>([]);
   const [errorInfo, setErrorInfo] = React.useState<{ mensagem: string; correcao?: string } | null>(null);
   const [reloadToken, setReloadToken] = React.useState(0);
   const retry = React.useCallback(() => setReloadToken((token) => token + 1), []);
@@ -168,14 +214,33 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
   React.useEffect(() => {
     let active = true;
     setStatus((current) => (current === "ready" ? current : "loading"));
-    void obterNegocio(dealId).then((result) => {
+    // As colunas entram junto: o cardápio do menu precisa delas, e a linha do
+    // tempo só reconstrói frases com rótulo se tiver a lista completa —
+    // `incluirArquivadas` porque o "de onde veio" de um movimento antigo pode
+    // ser uma coluna que a agente arquivou depois.
+    void Promise.all([
+      obterNegocio(dealId),
+      listarEstagios({ incluirArquivadas: true }),
+    ]).then(([negocioResult, colunasResult]) => {
       if (!active) return;
-      if (!result.ok) {
+      if (!negocioResult.ok) {
         setStatus("error");
-        setErrorInfo({ mensagem: result.mensagem, correcao: result.correcao });
+        setErrorInfo({
+          mensagem: negocioResult.mensagem,
+          correcao: negocioResult.correcao,
+        });
         return;
       }
-      setNegocio(result.data);
+      if (!colunasResult.ok) {
+        setStatus("error");
+        setErrorInfo({
+          mensagem: colunasResult.mensagem,
+          correcao: colunasResult.correcao,
+        });
+        return;
+      }
+      setNegocio(negocioResult.data);
+      setEstagios(colunasResult.data);
       setStatus("ready");
     });
     return () => {
@@ -183,11 +248,58 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
     };
   }, [dealId, reloadToken]);
 
-  /** Reabre num estágio — o desfazer de um movimento normal E o de "marcar como perdida" caem aqui. */
+  /** Todas as colunas (ativas + arquivadas), para rótulo da timeline. */
+  const colunaPorId = React.useMemo(
+    () => new Map(estagios.map((estagio) => [estagio.id, estagio])),
+    [estagios],
+  );
+  /** O cardápio do menu: só as ativas, na ordem do quadro. */
+  const estagiosAtivos = React.useMemo(
+    () => estagios.filter((estagio) => estagio.archivedAt == null),
+    [estagios],
+  );
+  /** A saída do funil — "Perdida", ou o nome que a agente deu a ela. */
+  const colunaPerdida = React.useMemo(
+    () => estagiosAtivos.find((estagio) => estagio.isLost) ?? null,
+    [estagiosAtivos],
+  );
+
+  /** Patch de estágio a partir do retorno de `moverEstagioDoNegocio`. */
+  function aplicarMovido(movido: NegocioMovido): Partial<NegocioDetalhe> {
+    return {
+      stage: movido.stage,
+      stageId: movido.stageId,
+      stageLabel: movido.stageLabel,
+      isWon: movido.isWon,
+      isLost: movido.isLost,
+      lostReason: movido.lostReason,
+      closedAt: movido.closedAt,
+      updatedAt: movido.updatedAt,
+    };
+  }
+
+  /** Reabre numa coluna — o desfazer de um movimento normal E o de "marcar como perdida" caem aqui. */
   async function reopenTo(previous: NegocioDetalhe) {
-    setNegocio((current) => (current ? { ...current, stage: previous.stage } : current));
-    const motivo = previous.stage === "perdido" ? (previous.lostReason ?? "reaberto por engano") : undefined;
-    const result = await moverEstagioDoNegocio(previous.id, previous.stage, motivo);
+    setNegocio((current) =>
+      current
+        ? {
+            ...current,
+            stage: previous.stage,
+            stageId: previous.stageId,
+            stageLabel: previous.stageLabel,
+            isWon: previous.isWon,
+            isLost: previous.isLost,
+          }
+        : current,
+    );
+    const motivo = previous.isLost
+      ? (previous.lostReason ?? "reaberto por engano")
+      : undefined;
+    const result = await moverEstagioDoNegocio(
+      previous.id,
+      { stageId: previous.stageId },
+      motivo,
+    );
     if (!result.ok) {
       avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui desfazer", description: result.mensagem, tone: "danger" });
@@ -195,36 +307,39 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
       return;
     }
     setNegocio((current) =>
-      current
-        ? {
-            ...current,
-            stage: result.data.stage,
-            lostReason: result.data.lostReason,
-            closedAt: result.data.closedAt,
-            updatedAt: result.data.updatedAt,
-          }
-        : current,
+      current ? { ...current, ...aplicarMovido(result.data) } : current,
     );
   }
 
-  async function handleMove(stage: EstagioDeFunil) {
-    if (!negocio || stage === negocio.stage) return;
+  async function handleMove(stageId: string) {
+    if (!negocio || stageId === negocio.stageId) return;
     const previous = negocio;
-    const label = COLUNAS_DO_FUNIL.find((c) => c.estagio === stage)?.label ?? stage;
+    const destino = colunaPorId.get(stageId);
+    const label = destino?.label ?? stageId;
 
     // otimista: o toque não espera a rede, e a linha do tempo já mostra a
-    // mudança na hora — o mesmo texto que o servidor grava (ver
-    // `stageActivityBody`), então um F5 antes da resposta chegar não muda o
-    // que a agente já leu.
+    // mudança na hora — com os MESMOS campos de metadata que o servidor grava
+    // (`de`/`para` em enum para o `body`, `deStageId`/`paraStageId`/`paraLabel`
+    // para o rótulo), então um F5 antes da resposta chegar não muda o que a
+    // agente já leu.
     setNegocio({
       ...negocio,
-      stage,
+      stageId,
+      stageLabel: label,
+      isWon: destino?.isWon ?? false,
+      isLost: destino?.isLost ?? false,
       activities: [
         {
           id: optimisticActivityId(),
           type: "stage_changed",
-          body: stageActivityBody(negocio.stage, stage),
-          metadata: { de: negocio.stage, para: stage },
+          body: stageActivityBody(negocio.stage, espelhoDoEstagio(destino)),
+          metadata: {
+            de: negocio.stage,
+            para: espelhoDoEstagio(destino),
+            deStageId: negocio.stageId,
+            paraStageId: stageId,
+            paraLabel: label,
+          },
           actorUserId: null,
           occurredAt: new Date(),
         },
@@ -232,7 +347,7 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
       ],
     });
 
-    const result = await moverEstagioDoNegocio(negocio.id, stage);
+    const result = await moverEstagioDoNegocio(negocio.id, { stageId });
     if (!result.ok) {
       avisarRecusaDeEscrita(result);
       setNegocio(previous);
@@ -246,15 +361,7 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
     }
 
     setNegocio((current) =>
-      current
-        ? {
-            ...current,
-            stage: result.data.stage,
-            lostReason: result.data.lostReason,
-            closedAt: result.data.closedAt,
-            updatedAt: result.data.updatedAt,
-          }
-        : current,
+      current ? { ...current, ...aplicarMovido(result.data) } : current,
     );
     toast.undo(`Movido para ${label}`, () => void reopenTo(previous), { tone: "ok" });
   }
@@ -265,13 +372,24 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
     setNegocio({
       ...negocio,
       stage: "perdido",
+      stageId: colunaPerdida?.id ?? negocio.stageId,
+      stageLabel: colunaPerdida?.label ?? negocio.stageLabel,
+      isWon: false,
+      isLost: true,
       lostReason: motivo,
       activities: [
         {
           id: optimisticActivityId(),
           type: "stage_changed",
           body: stageActivityBody(negocio.stage, "perdido", motivo),
-          metadata: { de: negocio.stage, para: "perdido", motivoPerda: motivo },
+          metadata: {
+            de: negocio.stage,
+            para: "perdido",
+            deStageId: negocio.stageId,
+            paraStageId: colunaPerdida?.id,
+            paraLabel: colunaPerdida?.label,
+            motivoPerda: motivo,
+          },
           actorUserId: null,
           occurredAt: new Date(),
         },
@@ -323,19 +441,22 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <Badge tone={STAGE_TONE[negocio.stage]} dot>
-                {STAGE_LABEL[negocio.stage]}
+              {/* O rótulo é o da coluna real (`stageLabel` vem no detalhe);
+                  ganho/perdido são propriedade da coluna, não do enum. */}
+              <Badge tone={negocio.isWon ? "ok" : negocio.isLost ? "danger" : "neutral"} dot>
+                {negocio.stageLabel}
               </Badge>
               <DealStageMenu
                 contactName={negocio.contactName}
-                currentStage={negocio.stage}
-                onMove={(stage) => void handleMove(stage)}
+                colunas={estagiosAtivos}
+                currentStageId={negocio.stageId}
+                onMove={(stageId) => void handleMove(stageId)}
                 onRequestLoss={() => setLossDialogOpen(true)}
               />
             </div>
           </header>
 
-          {negocio.stage === "perdido" && negocio.lostReason ? (
+          {negocio.isLost && negocio.lostReason ? (
             <Card tone="warn" className="p-4">
               <p className="text-13 text-ink">
                 <span className="font-medium">Motivo da perda:</span> {negocio.lostReason}
@@ -345,16 +466,20 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
 
           <ViagemCard negocio={negocio} dealId={negocio.id} onPatched={patch} />
           <PropostaCard negocio={negocio} />
-          {/* §4 — o roteiro existe só no estágio "ganho": é pós-venda, não
-              argumento de venda. Entre a proposta e a linha do tempo. */}
-          {negocio.stage === "ganho" ? <RoteiroCard negocio={negocio} /> : null}
-          <TimelineCard activities={negocio.activities} />
+          {/* §4 — o roteiro existe só na coluna de fechamento ganho (`isWon`):
+              é pós-venda, não argumento de venda. Entre a proposta e a linha
+              do tempo. */}
+          {negocio.isWon ? <RoteiroCard negocio={negocio} /> : null}
+          <TimelineCard activities={negocio.activities} colunas={colunaPorId} />
 
-          <LossReasonDialog
-            deal={lossDialogOpen ? { id: negocio.id, contactName: negocio.contactName } : null}
-            onOpenChange={setLossDialogOpen}
-            onLost={handleLost}
-          />
+          {colunaPerdida ? (
+            <LossReasonDialog
+              deal={lossDialogOpen ? { id: negocio.id, contactName: negocio.contactName } : null}
+              destinoPerdida={colunaPerdida.id}
+              onOpenChange={setLossDialogOpen}
+              onLost={handleLost}
+            />
+          ) : null}
         </>
       )}
     </div>
@@ -789,24 +914,29 @@ function PropostaCard({ negocio }: { negocio: NegocioDetalhe }) {
 }
 
 /* =============================================================================
-   Roteiro — §4, pós-venda. O card só existe no estágio "ganho": o roteiro é
-   documento de viagem para o CLIENTE, fotografia da proposta aceita — sem
-   custo, sem comissão, sem preço. A geração é idempotente no servidor
-   (`gerarRoteiro` devolve o existente em vez de duplicar), então o botão não
-   precisa de defesa local contra clique duplo além do `disabled`.
+   Roteiro — §4, pós-venda. O card só existe quando o negócio fechou como
+   ganho (`isWon` da coluna): o roteiro é documento de viagem para o CLIENTE —
+   sem custo, sem comissão, sem preço.
 
-   O link público (`/r/<token>`) aparece truncado no corpo e a ação de copiar
-   mora no rodapé: o destino natural do link é o WhatsApp da agente — copiar é
-   a ação principal, abrir (para conferir antes de mandar) vira texto.
+   A tela de configuração agora existe: o editor de roteiro
+   (`/funil/<id>/roteiro`), irmão do editor de proposta. O card é a ENTRADA —
+   sem roteiro, convida a montar (a geração acontece lá, e é idempotente no
+   servidor); com roteiro, a ação principal é EDITAR o conteúdo, porque o
+   link e os dados comerciais não mudam: o cliente recarrega a MESMA URL e vê
+   o conteúdo novo. Copiar (para o WhatsApp) e abrir (a própria URL, clicável)
+   ficam a um toque de texto.
+
+   A leitura usa `listarRoteiroDoNegocio(dealId)` (contrato do rafa; ponte
+   provisória em `src/lib/ui/roteiroApi.ts`) — o filtro de 200 linhas no
+   cliente que existia aqui era o jeito de ontem.
    ========================================================================== */
 
 function RoteiroCard({ negocio }: { negocio: NegocioDetalhe }) {
   const toast = useToast();
+  const router = useRouter();
   const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
   const [roteiro, setRoteiro] = React.useState<RoteiroResumo | null>(null);
   const [loadError, setLoadError] = React.useState<{ mensagem: string; correcao?: string } | null>(null);
-  const [gerarErro, setGerarErro] = React.useState<{ mensagem: string; correcao?: string } | null>(null);
-  const [gerando, setGerando] = React.useState(false);
   const [copiado, setCopiado] = React.useState(false);
   const [reloadToken, setReloadToken] = React.useState(0);
   const reload = React.useCallback(() => setReloadToken((token) => token + 1), []);
@@ -814,14 +944,14 @@ function RoteiroCard({ negocio }: { negocio: NegocioDetalhe }) {
   React.useEffect(() => {
     let active = true;
     setStatus("loading");
-    void listarRoteiros().then((result) => {
+    void listarRoteiroDoNegocio(negocio.id).then((result) => {
       if (!active) return;
       if (!result.ok) {
         setStatus("error");
         setLoadError({ mensagem: result.mensagem, correcao: result.correcao });
         return;
       }
-      setRoteiro(result.data.find((r) => r.dealId === negocio.id) ?? null);
+      setRoteiro(result.data);
       setStatus("ready");
     });
     return () => {
@@ -838,31 +968,12 @@ function RoteiroCard({ negocio }: { negocio: NegocioDetalhe }) {
       setCopiado(true);
       window.setTimeout(() => setCopiado(false), 2000);
     } catch {
-      setGerarErro({
-        mensagem: "Não consegui copiar o link automaticamente.",
-        correcao: "Copie o link exibido acima à mão",
+      toast.show({
+        title: "Não consegui copiar o link",
+        description: "Copie o link exibido no corpo do card.",
+        tone: "danger",
       });
     }
-  }
-
-  async function handleGerar() {
-    setGerando(true);
-    setGerarErro(null);
-    const result = await gerarRoteiro(negocio.id);
-    setGerando(false);
-    if (!result.ok) {
-      avisarRecusaDeEscrita(result);
-      setGerarErro({ mensagem: result.mensagem, correcao: result.correcao });
-      return;
-    }
-    setRoteiro(result.data);
-    const link = `${window.location.origin}/r/${result.data.publicToken}`;
-    toast.show({
-      title: "Roteiro gerado",
-      description: "O link público foi criado com a fotografia da proposta aceita.",
-      tone: "ok",
-      action: { label: "Copiar link", onClick: () => void copiarLink(link) },
-    });
   }
 
   return (
@@ -870,7 +981,7 @@ function RoteiroCard({ negocio }: { negocio: NegocioDetalhe }) {
       <CardHeader>
         <CardTitle>Roteiro</CardTitle>
       </CardHeader>
-      <CardBody flush={status !== "ready" || (!roteiro && !gerarErro)}>
+      <CardBody flush={status !== "ready" || !roteiro}>
         {status === "loading" ? (
           <div className="flex flex-col gap-4 p-4">
             <SkeletonRow />
@@ -892,56 +1003,45 @@ function RoteiroCard({ negocio }: { negocio: NegocioDetalhe }) {
               {datas ? ` · ${datas}` : ""}
             </span>
             {url ? (
-              <span data-numeric className="mt-1 truncate text-13 tabular-nums text-subtle">
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-numeric
+                className="mt-1 max-w-full truncate text-13 tabular-nums text-subtle hover:text-accent hover:underline"
+              >
                 {url}
-              </span>
-            ) : null}
-          </div>
-        ) : gerarErro ? (
-          <div className="flex flex-col items-start gap-2">
-            <FieldError>{gerarErro.mensagem}</FieldError>
-            {gerarErro.correcao ? (
-              <p className="text-13 text-muted">{gerarErro.correcao}</p>
+              </a>
             ) : null}
           </div>
         ) : (
           <EmptyState
             compact
-            title="Nenhum roteiro gerado"
-            description="Gere o roteiro da viagem vendida: ele fotografa a proposta aceita em um link público para o cliente — sem preço, sem custo, sem comissão. A fotografia é definitiva: acrescente ANTES, na proposta, os blocos de texto com contatos de emergência, documentos e informações úteis — em “Adicionar bloco” há modelos prontos para os três."
+            title="Nenhum roteiro montado"
+            description="Monte por blocos o que o cliente abre durante a viagem — dias, paradas, hospedagem, dicas locais, contato de emergência e fotos. O roteiro nasce da proposta aceita e o link público continua o mesmo depois de cada ajuste."
           />
         )}
       </CardBody>
       <CardFooter
         action={
-          roteiro ? (
-            <Button
-              variant="primary"
-              size="sm"
-              onPointerDown={() => url && void copiarLink(url)}
-            >
-              {copiado ? "Copiado" : "Copiar link"}
-            </Button>
-          ) : (
-            <Button
-              variant="primary"
-              size="sm"
-              onPointerDown={() => void handleGerar()}
-              disabled={gerando || status === "error"}
-            >
-              {gerando ? "Gerando..." : "Gerar roteiro"}
-            </Button>
-          )
+          <Button
+            variant="primary"
+            size="sm"
+            onPointerDown={() => router.push(`/funil/${negocio.id}/roteiro`)}
+            disabled={status === "error"}
+          >
+            {roteiro ? "Editar roteiro" : "Montar roteiro"}
+          </Button>
         }
         secondary={
           roteiro && url ? (
-            <CardAction onClick={() => window.open(url, "_blank", "noopener,noreferrer")}>
-              Abrir
+            <CardAction onClick={() => void copiarLink(url)}>
+              {copiado ? "Copiado" : "Copiar link"}
             </CardAction>
           ) : undefined
         }
       >
-        {roteiro ? "Link público — mande por WhatsApp." : undefined}
+        {roteiro ? "Editar não muda o link — mande por WhatsApp." : "O roteiro nasce da proposta aceita."}
       </CardFooter>
     </Card>
   );
@@ -953,7 +1053,14 @@ function RoteiroCard({ negocio }: { negocio: NegocioDetalhe }) {
    azul é reservado pra isso — texto quieto, data tabular.
    ========================================================================== */
 
-function TimelineCard({ activities }: { activities: AtividadeDoNegocio[] }) {
+function TimelineCard({
+  activities,
+  colunas,
+}: {
+  activities: AtividadeDoNegocio[];
+  /** Todas as colunas do tenant (ativas + arquivadas), por id — de onde os rótulos vêm. */
+  colunas: Map<string, EstagioDoFunil>;
+}) {
   return (
     <Card>
       <CardHeader>
@@ -972,7 +1079,7 @@ function TimelineCard({ activities }: { activities: AtividadeDoNegocio[] }) {
               const when = new Date(activity.occurredAt);
               return (
                 <li key={activity.id} className="flex flex-col gap-0.5 px-4 py-3">
-                  <p className="text-15 text-ink">{activityLabel(activity)}</p>
+                  <p className="text-15 text-ink">{activityLabel(activity, colunas)}</p>
                   <p data-numeric className="text-13 tabular-nums text-muted">
                     {formatDayMonth(when)} · {formatTime(when)}
                   </p>
