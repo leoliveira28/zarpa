@@ -57,3 +57,61 @@ export function maskEmail(email: string): string {
   if (at <= 0) return '***';
   return `${email[0]}${'*'.repeat(Math.max(1, at - 1))}${email.slice(at)}`;
 }
+
+export type ConviteDelivery = {
+  email: string;
+  organizationName: string;
+  inviterName: string;
+  /** Id do convite (`invitation.id`) — a tela de aceite resolve o link. */
+  invitationId: string;
+};
+
+/**
+ * E-mail de convite da Equipe (Fase 3). A mesma doutrina do magic link: sem Resend em
+ * dev, vai para o console; em produção, REUSA a mesma chave e recusa se não houver —
+ * convite impresso em log de produção é dado pessoal de terceiro (o convidado) exposto.
+ * Sem link assinado aqui de propósito: o aceite é pela sessão do convidado na rota do
+ * plugin (`authClient.organization.acceptInvitation`), não por link de um toque.
+ */
+export async function deliverInviteEmail({
+  email,
+  organizationName,
+  inviterName,
+  invitationId,
+}: ConviteDelivery): Promise<void> {
+  const apiKey = process.env.RESEND_API_KEY;
+
+  if (!apiKey) {
+    if (isProduction()) {
+      throw new Error(
+        'RESEND_API_KEY não configurado: não há como enviar o convite. ' +
+          'Recusando enviar por outro meio — e-mail de terceiro não vai para log.',
+      );
+    }
+    console.info(
+      `[auth] convite para ${maskEmail(email)} (dev, não enviado por e-mail): ` +
+        `organization=${organizationName}, convidou=${maskEmail(inviterName)}, invitationId=${invitationId}`,
+    );
+    return;
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: process.env.MAIL_FROM ?? 'nao-responda@zarpa.app',
+      to: email,
+      subject: `${inviterName} te convidou para a equipe "${organizationName}"`,
+      text:
+        `${inviterName} te convidou para fazer parte da equipe "${organizationName}".\n\n` +
+        `Entre na sua conta para aceitar o convite (código ${invitationId}).\n`,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Falha ao enviar convite (HTTP ${response.status}).`);
+  }
+}

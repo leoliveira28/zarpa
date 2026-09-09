@@ -2,14 +2,19 @@
 
 import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { activities, contacts, deals, pipelineStages, type Deal } from '@/db/schema';
-import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
+import { activities, contacts, deals, member, pipelineStages, user, type Deal } from '@/db/schema';
+import {
+  filtroDeEscopoProprio,
+  withTenant,
+  type TenantDb,
+} from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
 import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 import { parseDataFlexivel } from './normalize';
 import { resolverPeriodo, type PeriodoInput } from './periodo';
+import { escopoDaSessao } from './escopo';
 import { semearEstagiosPadrao } from './pipelineStagesDefaults';
 
 /**
@@ -315,6 +320,12 @@ export type NegocioDoFunil = {
   stagePosition: number;
   contactId: string;
   contactName: string;
+  /**
+   * Quem vende (Fase 3, §8): o monograma do card e o alternador "Meus / Time" leem
+   * daqui. `null` em negócio sem vendedor definido (dado antigo/importado).
+   */
+  agentId: string | null;
+  agentName: string | null;
   /** `AAAA-MM-DD`, ou `null` quando a data da viagem ainda não foi decidida. */
   departureOn: string | null;
   /** Dias desde a última movimentação: o maior entre `deals.updatedAt` e a `activity` mais recente do negócio. */
@@ -328,59 +339,77 @@ export type NegocioDoFunil = {
  * esperado (MEI, 10-15 vendas/mês) um tenant não chega perto disso tão cedo; se chegar,
  * quem cresceu para além desta função é sinal de que o funil precisa de paginação/arquivo,
  * não de um limite maior aqui.
+ *
+ * Fase 3 (§4): o ESCOPO vem da sessão — dono vê o tenant inteiro, agente vê só o próprio
+ * trabalho (alternador "Meus / Time" da tela). O filtro é de PRODUTO, fora do RLS: para
+ * o `kind: 'own'` é este WHERE que separa, e quem decide é `escopoDaSessao` aqui no
+ * service layer.
  */
 export async function listarNegociosDoFunil(): Promise<ServiceResult<NegocioDoFunil[]>> {
   return comoResultado(async () => {
-    const { tenantId } = await requireAuthContext();
+    const ctx = await requireAuthContext();
+    const escopo = escopoDaSessao(ctx);
 
-    return withTenant(tenantId, async (tx) => {
-      const linhas = await tx
-        .select({
-          id: deals.id,
-          title: deals.title,
-          destination: deals.destination,
-          valueCents: deals.valueCents,
-          stage: deals.stage,
-          stageId: pipelineStages.id,
-          stageLabel: pipelineStages.label,
-          stagePosition: pipelineStages.position,
-          departureOn: deals.departureOn,
-          updatedAt: deals.updatedAt,
-          contactId: deals.contactId,
-          contactName: contacts.name,
-          ultimaAtividadeEm: ultimaAtividadeSql(),
-        })
-        .from(deals)
-        .innerJoin(contacts, eq(contacts.id, deals.contactId))
-        .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
-        // "Perdido" saiu do quadro pela SEMÂNTICA, não pelo literal: quem manda é
-        // `is_lost` da coluna do funil (0016). Mesmo resultado de antes para o funil de
-        // fábrica, e correto também para um funil renomeado pela agente.
-        .where(eq(pipelineStages.isLost, false))
-        .orderBy(desc(deals.createdAt))
-        .limit(500);
+    return withTenant(
+      ctx.tenantId,
+      async (tx) => {
+        const linhas = await tx
+          .select({
+            id: deals.id,
+            title: deals.title,
+            destination: deals.destination,
+            valueCents: deals.valueCents,
+            stage: deals.stage,
+            stageId: pipelineStages.id,
+            stageLabel: pipelineStages.label,
+            stagePosition: pipelineStages.position,
+            departureOn: deals.departureOn,
+            updatedAt: deals.updatedAt,
+            contactId: deals.contactId,
+            contactName: contacts.name,
+            agentId: deals.agentId,
+            agentName: user.name,
+            ultimaAtividadeEm: ultimaAtividadeSql(),
+          })
+          .from(deals)
+          .innerJoin(contacts, eq(contacts.id, deals.contactId))
+          .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
+          // LEFT: negócio sem vendedor definido (dado antigo) continua no quadro.
+          .leftJoin(user, eq(user.id, deals.agentId))
+          // "Perdido" saiu do quadro pela SEMÂNTICA, não pelo literal: quem manda é
+          // `is_lost` da coluna do funil (0016). Mesmo resultado de antes para o funil de
+          // fábrica, e correto também para um funil renomeado pela agente. O segundo
+          // termo é o escopo do papel: `undefined` para dono (tenant inteiro), o filtro
+          // por `agent_id` para agente.
+          .where(and(eq(pipelineStages.isLost, false), filtroDeEscopoProprio(escopo, deals.agentId)))
+          .orderBy(desc(deals.createdAt))
+          .limit(500);
 
-      const agora = Date.now();
-      return linhas.map((linha) => ({
-        id: linha.id,
-        title: linha.title,
-        destination: linha.destination,
-        valueCents: linha.valueCents,
-        // Seguro: a query já excluiu 'perdido' no WHERE — o cast só remove esse único
-        // valor do tipo, não muda o dado.
-        stage: linha.stage as EstagioDeFunil,
-        stageId: linha.stageId,
-        stageLabel: linha.stageLabel,
-        stagePosition: linha.stagePosition,
-        contactId: linha.contactId,
-        contactName: linha.contactName,
-        departureOn: linha.departureOn,
-        diasParado: diasDesde(
-          maisRecente(linha.updatedAt, paraDataOuNula(linha.ultimaAtividadeEm)),
-          agora,
-        ),
-      }));
-    });
+        const agora = Date.now();
+        return linhas.map((linha) => ({
+          id: linha.id,
+          title: linha.title,
+          destination: linha.destination,
+          valueCents: linha.valueCents,
+          // Seguro: a query já excluiu 'perdido' no WHERE — o cast só remove esse único
+          // valor do tipo, não muda o dado.
+          stage: linha.stage as EstagioDeFunil,
+          stageId: linha.stageId,
+          stageLabel: linha.stageLabel,
+          stagePosition: linha.stagePosition,
+          contactId: linha.contactId,
+          contactName: linha.contactName,
+          agentId: linha.agentId,
+          agentName: linha.agentName,
+          departureOn: linha.departureOn,
+          diasParado: diasDesde(
+            maisRecente(linha.updatedAt, paraDataOuNula(linha.ultimaAtividadeEm)),
+            agora,
+          ),
+        }));
+      },
+      { scope: escopo },
+    );
   });
 }
 
@@ -690,6 +719,9 @@ export async function criarNegocio(
           stageId: alvo.id,
           stage: alvo.stage,
           contactId: contato.id,
+          // Fase 3 (§5): o default é QUEM CRIOU. Reatribuir é outra ação — dono via
+          // `atualizarNegocio` —, nunca este INSERT adivinhando.
+          agentId: userId,
           title: dados.title,
           destination: dados.destination?.trim() || null,
           currency: dados.currency?.toUpperCase() ?? 'BRL',
@@ -712,6 +744,13 @@ export async function criarNegocio(
 
       const negocio = criado!;
 
+      // Nome do criador para o board (o board mostra quem carrega o negócio).
+      const [criador] = await tx
+        .select({ name: user.name })
+        .from(user)
+        .where(eq(user.id, userId))
+        .limit(1);
+
       await registrarAuditoria(tx, {
         tenantId,
         actorUserId: userId,
@@ -726,6 +765,9 @@ export async function criarNegocio(
         title: negocio.title,
         destination: negocio.destination,
         valueCents: negocio.valueCents,
+        // Fase 3 (§5): nasce com o criador — devolvido igual ao board lista.
+        agentId: userId,
+        agentName: criador?.name ?? null,
         // Seguro: `alvo` já foi recusado se fosse fim de funil — nunca 'perdido' aqui.
         stage: negocio.stage as EstagioDeFunil,
         stageId: alvo.id,
@@ -877,6 +919,12 @@ const atualizarNegocioInput = z.object({
   departureOn: z.string().trim().max(20).optional().or(z.literal('')),
   returnOn: z.string().trim().max(20).optional().or(z.literal('')),
   expectedCloseOn: z.string().trim().max(20).optional().or(z.literal('')),
+  /**
+   * Fase 3 (§5) — reatribuição: para quem é o negócio. SOMENTE o dono manda (a guarda
+   * está dentro de `atualizarNegocio`); `null` limpa a atribuição. O convidado é
+   * validado contra o `member` do tenant — não existe reatribuir para estranho.
+   */
+  agentId: z.uuid('Agente inválido.').nullable().optional(),
 });
 
 export type NegocioPatch = z.infer<typeof atualizarNegocioInput>;
@@ -896,7 +944,7 @@ export async function atualizarNegocio(
   patch: NegocioPatch,
 ): Promise<ServiceResult<NegocioDetalhe>> {
   return comoResultado(async () => {
-    const { tenantId, userId } = await requireAuthContext();
+    const { tenantId, userId, role: ctxRole } = await requireAuthContext();
     const parsed = atualizarNegocioInput.safeParse(patch);
     if (!parsed.success) {
       const primeiro = parsed.error.issues[0];
@@ -981,6 +1029,34 @@ export async function atualizarNegocio(
         }
         valores.expectedCloseOn = iso;
         mudou.push('expectedCloseOn');
+      }
+      if (dados.agentId !== undefined) {
+        // Fase 3 (§5): reatribuir é decisão de DONO — agente não passa negócio para
+        // colega por conta própria.
+        if (ctxRole !== 'owner') {
+          throw new ServiceError('DADOS_INVALIDOS', 'Só o dono da conta reatribui negócios.', {
+            campo: 'agentId',
+            correcao: 'Pedir ao dono da conta',
+          });
+        }
+        if (dados.agentId !== null) {
+          // O alvo precisa ser pessoa do TIME (member do tenant). O `user` de outro
+          // tenant nem apareceria aqui — a policy `user_isolation` devolve zero linhas.
+          const [alvo] = await tx
+            .select({ id: user.id })
+            .from(user)
+            .innerJoin(member, eq(member.userId, user.id))
+            .where(and(eq(user.id, dados.agentId), eq(member.organizationId, tenantId)))
+            .limit(1);
+          if (!alvo) {
+            throw new ServiceError('DADOS_INVALIDOS', 'Essa pessoa não faz parte da sua equipe.', {
+              campo: 'agentId',
+              correcao: 'Escolher um membro da equipe',
+            });
+          }
+        }
+        valores.agentId = dados.agentId;
+        mudou.push('agentId');
       }
 
       if (mudou.length === 0) {

@@ -1,11 +1,17 @@
 'use server';
 
 import { and, eq, gte, lt } from 'drizzle-orm';
-import { contacts, deals, pipelineStages, sales } from '@/db/schema';
-import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
+import { contacts, deals, member, pipelineStages, sales, tenants, user } from '@/db/schema';
+import {
+  filtroDeEscopoProprio,
+  withTenant,
+  type TenantDb,
+  type TenantScope,
+} from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { comoResultado, type ServiceResult } from './errors';
 import { resolverPeriodo, type Periodo, type PeriodoInput } from './periodo';
+import { escopoDaSessao } from './escopo';
 
 /**
  * §2 de `docs/PROPOSTAS_PRODUTO.md` — Resumo do período, a terceira tab do hub Dinheiro
@@ -54,9 +60,36 @@ export type MotivoDePerda = {
   valorCents: number;
 };
 
+/**
+ * A quebra por vendedor da tab Resumo (Fase 3, §7 do doc). Aparece SOMENTE para
+ * Studio com mais de um membro — decisão do PO (2026-09-09): é a feature exclusiva que
+ * fecha o cruzamento de preço da §2. A FLAG diz à tela POR QUÊ ela não veio, para a
+ * interface esconder com uma frase honesta em vez de adivinhar.
+ */
+export type QuebraPorVendedor =
+  | {
+      disponivel: true;
+      /** Vendas do período agrupadas por `agent_id`, maior receita primeiro. */
+      linhas: {
+        /** `deals.agent_id`/`sales.agent_id`. `null` = venda sem vendedor (dado antigo). */
+        agentId: string | null;
+        /** Nome para o monograma/rótulo. `null` quando `agentId` é nulo. */
+        nome: string | null;
+        vendas: number;
+        receitaBrutaCents: number;
+      }[];
+    }
+  | { disponivel: false; motivo: 'plano' | 'membro_unico' };
+
 export type ResumoDoPeriodo = {
   /** O período efetivamente consultado (pontas inclusivas, `AAAA-MM-DD`). */
   periodo: { de: string; ate: string; rotulo: string };
+  /**
+   * O ESCOPO que produziu estes números (Fase 3, §4): 'tenant' = a agência inteira
+   * (dono), 'own' = só o próprio trabalho (agente, e TODO membro de Pro). A tela mostra
+   * o rótulo — número sem dizer de quem é, em time, é número que briga.
+   */
+  escopo: 'tenant' | 'own';
   vendas: {
     /** Linhas de `sales` criadas no período — ver a decisão 1 em `dashboard.ts`. */
     total: number;
@@ -81,6 +114,8 @@ export type ResumoDoPeriodo = {
   porOrigem: OrigemDeContato[];
   /** Motivos de perda dos negócios `perdido` do período, maior valor primeiro. */
   motivosDePerda: MotivoDePerda[];
+  /** A quebra por vendedor — Studio com 2+ membros; em todo o resto, `disponivel: false`. */
+  porVendedor: QuebraPorVendedor;
 };
 
 // ---------------------------------------------------------------------------
@@ -101,8 +136,18 @@ export type ResumoDoPeriodo = {
  *   silencioso de string. No volume esperado (MEI, 10–15 vendas/mês) é seguro; revisitar
  *   se um tenant crescer ordens de grandeza.
  */
-async function calcularResumoDoPeriodo(tx: TenantDb, periodo: Periodo): Promise<ResumoDoPeriodo> {
-  const janela = and(gte(sales.createdAt, periodo.inicio), lt(sales.createdAt, periodo.fimExclusivo));
+async function calcularResumoDoPeriodo(
+  tx: TenantDb,
+  periodo: Periodo,
+  escopo: TenantScope,
+): Promise<ResumoDoPeriodo> {
+  const janela = and(
+    gte(sales.createdAt, periodo.inicio),
+    lt(sales.createdAt, periodo.fimExclusivo),
+    // Fase 3 (§4): escopo `own` enxerga só o próprio trabalho — o recorte é o MESMO
+    // para todos os números da tab (vendas, comissão, origem). `undefined` para o dono.
+    filtroDeEscopoProprio(escopo, sales.agentId),
+  );
 
   // --- 1) Vendas + comissão + origem do contato, numa query só (mesmas linhas) ---
   const linhasVendas = await tx
@@ -112,10 +157,15 @@ async function calcularResumoDoPeriodo(tx: TenantDb, periodo: Periodo): Promise<
       comissaoPrevistaCents: sales.comissaoPrevistaCents,
       comissaoStatus: sales.comissaoStatus,
       origem: contacts.source,
+      // Fase 3 (§7): a quebra por vendedor soma por aqui.
+      agentId: sales.agentId,
+      agentName: user.name,
     })
     .from(sales)
     .innerJoin(deals, eq(deals.id, sales.dealId))
     .innerJoin(contacts, eq(contacts.id, deals.contactId))
+    // LEFT: venda herdada de deal sem vendedor (dado antigo) continua no resumo.
+    .leftJoin(user, eq(user.id, sales.agentId))
     .where(janela);
 
   let receitaBrutaCents = 0;
@@ -187,8 +237,55 @@ async function calcularResumoDoPeriodo(tx: TenantDb, periodo: Periodo): Promise<
 
   const total = linhasVendas.length;
 
+  // --- 3) A quebra por vendedor (Fase 3, §7): EXCLUSIVA do Studio (decisão do PO de
+  // 2026-09-09, §2 do doc) e só com 2+ membros — "ranking de vendedores" com um
+  // vendedor é ruído. Os números da quebra seguem o ESCOPO: dono de Studio vê o time
+  // inteiro; membro de Studio vê a própria linha. Em Pro a flag volta 'plano' — o que
+  // o membro de Pro já vê (escopo own) é exatamente o próprio resultado, sem quebra.
+  const [tenant] = await tx
+    .select({ plan: tenants.plan })
+    .from(tenants)
+    .limit(1);
+  const plano = tenant?.plan ?? 'solo';
+
+  let porVendedor: QuebraPorVendedor;
+  if (plano !== 'studio') {
+    porVendedor = { disponivel: false, motivo: 'plano' };
+  } else {
+    const membros = await tx.select({ id: member.id }).from(member);
+    if (membros.length <= 1) {
+      porVendedor = { disponivel: false, motivo: 'membro_unico' };
+    } else {
+      const porAgente = new Map<string | null, { nome: string | null; vendas: number; receitaBrutaCents: number }>();
+      for (const linha of linhasVendas) {
+        const atual = porAgente.get(linha.agentId) ?? {
+          nome: linha.agentName,
+          vendas: 0,
+          receitaBrutaCents: 0,
+        };
+        atual.vendas += 1;
+        atual.receitaBrutaCents += linha.valorBrutoCents;
+        porAgente.set(linha.agentId, atual);
+      }
+      porVendedor = {
+        disponivel: true,
+        linhas: [...porAgente.entries()]
+          .map(([agentId, valor]) => ({
+            agentId,
+            nome: valor.nome,
+            vendas: valor.vendas,
+            receitaBrutaCents: valor.receitaBrutaCents,
+          }))
+          // Maior receita primeiro, como em `porOrigem` — é a ordem em que a
+          // tabela numérica responde "quem carrega o time".
+          .sort((a, b) => b.receitaBrutaCents - a.receitaBrutaCents || b.vendas - a.vendas),
+      };
+    }
+  }
+
   return {
     periodo: { de: periodo.de, ate: periodo.ate, rotulo: periodo.rotulo },
+    escopo: escopo.kind === 'own' ? 'own' : 'tenant',
     vendas: {
       total,
       receitaBrutaCents,
@@ -203,6 +300,7 @@ async function calcularResumoDoPeriodo(tx: TenantDb, periodo: Periodo): Promise<
     },
     porOrigem,
     motivosDePerda,
+    porVendedor,
   };
 }
 
@@ -215,8 +313,15 @@ export async function resumoDoPeriodo(
   periodoInput?: PeriodoInput,
 ): Promise<ServiceResult<ResumoDoPeriodo>> {
   return comoResultado(async () => {
-    const { tenantId } = await requireAuthContext();
+    const ctx = await requireAuthContext();
     const periodo = resolverPeriodo(new Date(), periodoInput);
-    return withTenant(tenantId, (tx) => calcularResumoDoPeriodo(tx, periodo));
+    // Fase 3 (§4): escopo decidido AQUI, no service layer — dono vê o tenant, membro
+    // vê o próprio resultado (e em Pro isso é o produto inteiro da tab).
+    const escopo = escopoDaSessao(ctx);
+    return withTenant(
+      ctx.tenantId,
+      (tx) => calcularResumoDoPeriodo(tx, periodo, escopo),
+      { scope: escopo },
+    );
   });
 }

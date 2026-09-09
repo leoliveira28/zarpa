@@ -56,6 +56,21 @@ export type CriarAssinaturaInput = {
   billingType: BillingType;
   /** Dia do mês da cobrança (1-28). Opcional — Asaas escolhe se omitido. */
   dueDate?: number;
+  /**
+   * Data EXATA da próxima cobrança (`AAAA-MM-DD`), aceita pelo POST de subscription.
+   * É o que preserva o ciclo na troca de assentos (Fase 3, §6): cancelar+recriar SEM
+   * este campo recriaria a assinatura cobrando hoje — cobrança dupla no mesmo ciclo.
+   */
+  nextDueDate?: string;
+};
+
+/** O mínimo que a troca de assentos precisa ler da assinatura existente. */
+export type AssinaturaAsaas = {
+  id: string;
+  value: number;
+  status: string;
+  /** `AAAA-MM-DD` — a data que o cancelar+recriar tem que preservar. */
+  nextDueDate: string | null;
 };
 
 export type CriarAssinaturaResult = {
@@ -152,10 +167,23 @@ export async function criarAssinaturaAsaas(
       value: input.value,
       cycle: 'MONTHLY',
       dueDate: input.dueDate,
+      nextDueDate: input.nextDueDate,
     }),
   });
 
   return { asaasSubscriptionId: body.id };
+}
+
+/** Lê a assinatura no Asaas — a fonte do `nextDueDate` preservado na troca de assentos. */
+export async function obterAssinaturaAsaas(
+  asaasSubscriptionId: string,
+): Promise<AssinaturaAsaas> {
+  if (!asaasConfigurado()) throw erroAsaasNaoConfigurado();
+
+  return asaasFetch<AssinaturaAsaas>(
+    `/subscriptions/${encodeURIComponent(asaasSubscriptionId)}`,
+    { method: 'GET' },
+  );
 }
 
 export async function cancelarAssinaturaAsaas(

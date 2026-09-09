@@ -4,6 +4,7 @@ import {
   check,
   date,
   index,
+  integer,
   pgTable,
   text,
   timestamp,
@@ -13,6 +14,7 @@ import {
 import { uuidv7 } from '../uuid';
 import { tenants } from './tenants';
 import { deals } from './pipeline';
+import { user } from './auth';
 import { proposals, proposalOptions } from './proposals';
 
 /**
@@ -43,6 +45,12 @@ export const sales = pgTable(
     dealId: uuid('deal_id')
       .notNull()
       .references(() => deals.id, { onDelete: 'restrict' }),
+    /**
+     * Quem vendeu — HERDADO do deal na conversão (Fase 3, `drizzle/0019_multiusuario.sql`).
+     * Nullable como `deals.agent_id` (dado antigo/importado); a atribuição é fotografada
+     * na conversão e o relatório por vendedor soma por aqui.
+     */
+    agentId: text('agent_id').references(() => user.id, { onDelete: 'restrict' }),
     /** RESTRICT pelo mesmo motivo — a venda é o registro contábil, sobrevive à proposta. */
     proposalId: uuid('proposal_id')
       .notNull()
@@ -68,6 +76,12 @@ export const sales = pgTable(
     /** Taxa de serviço cobrada do cliente, além do preço do produto (honorário do agente). */
     taxaServicoCents: bigint('taxa_servico_cents', { mode: 'number' }).notNull().default(0),
     /**
+     * Fatia da comissão que fica com o agente (Fase 3, §5). Padrão 100 — o agente fica
+     * com toda a comissão prevista; a "casa" já é remunerada pela assinatura do Zarpa.
+     * Split diferente é decisão MANUAL do dono por venda: não existe régua automática.
+     */
+    commissionSplitPct: integer('commission_split_pct').notNull().default(100),
+    /**
      * Conferência da comissão prometida pela operadora: nasce `prevista`, e o agente
      * confirma manualmente quando o extrato do fornecedor cai (`recebida`) ou marca
      * `atrasada` quando passou da data combinada e não caiu.
@@ -84,6 +98,9 @@ export const sales = pgTable(
     index('sales_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
     index('sales_deal_id_idx').on(t.dealId),
     index('sales_proposal_option_id_idx').on(t.proposalOptionId),
+    // FK (RESTRICT) e a quebra por vendedor do Resumo do período.
+    index('sales_agent_id_idx').on(t.agentId),
+    index('sales_tenant_agent_idx').on(t.tenantId, t.agentId),
     // Uma proposta aceita vira NO MÁXIMO uma venda — o banco garante idempotência da
     // conversão, não a sorte de `converterPropostaEmVenda` nunca ser chamada duas vezes.
     uniqueIndex('sales_proposal_id_key').on(t.proposalId),
@@ -96,6 +113,7 @@ export const sales = pgTable(
       'sales_valores_check',
       sql`${t.valorBrutoCents} >= 0 and ${t.custoCents} >= 0 and ${t.comissaoPrevistaCents} >= 0 and ${t.taxaServicoCents} >= 0`,
     ),
+    check('sales_commission_split_check', sql`${t.commissionSplitPct} between 0 and 100`),
   ],
 );
 

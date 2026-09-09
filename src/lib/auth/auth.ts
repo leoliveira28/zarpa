@@ -1,10 +1,14 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { magicLink } from 'better-auth/plugins/magic-link';
+import { organization as organizationPlugin } from 'better-auth/plugins/organization';
 import { account, session, user, verification } from '@/db/schema';
+import { invitation, member, organization } from '@/db/schema';
 import { requiredEnv } from '@/db/env';
+import { assertUuid } from '@/db/uuid';
+import { assentosPagosDoTenant } from '@/lib/tenant/assentos';
 import { authDb } from './db';
-import { deliverMagicLink } from './delivery';
+import { deliverInviteEmail, deliverMagicLink } from './delivery';
 import { pendingTenantId } from './signupContext';
 
 /**
@@ -42,7 +46,7 @@ export const auth = betterAuth({
     // As chaves do objeto de schema do Drizzle são camelCase (emailVerified, userId…),
     // enquanto as colunas no banco são snake_case. Este flag diz respeito às chaves.
     camelCase: true,
-    schema: { user, session, account, verification },
+    schema: { user, session, account, verification, organization, member, invitation },
   }),
 
   emailAndPassword: {
@@ -132,6 +136,45 @@ export const auth = betterAuth({
       disableSignUp: true,
       sendMagicLink: async ({ email, url }) => {
         await deliverMagicLink({ email, url });
+      },
+    }),
+
+    /**
+     * Fase 3 — Equipe (§3 de `docs/MULTIUSUARIO_AGENCIAS.md`). O plugin dos papéis
+     * nativos (owner/admin/member — "agente" é rótulo de UI, nunca valor no banco) e
+     * do fluxo de convite. As tabelas (`organization`/`member`/`invitation`) nascem na
+     * migration `0019_multiusuario.sql` com RLS, como todas as outras.
+     */
+    organizationPlugin({
+      // A organization NUNCA nasce por endpoint do plugin: o único lugar onde um tenant
+      // nasce é `criarTenant` (`src/server/tenants.ts`), que grava tenant + gêmeo
+      // organization + member owner na MESMA transação. Dois caminhos de nascimento de
+      // tenant é exatamente a classe de bug que o signup atual eliminou.
+      allowUserToCreateOrganization: false,
+      creatorRole: 'owner',
+
+      /**
+       * O gate de billing de graça: o limite de membros É a contagem de assentos pagos
+       * (`subscriptions.seats_paid`). O convidado N+1 é recusado PELA LIB, na criação
+       * e no aceite do convite — não existe lógica de "assento cheio" em nenhum outro
+       * lugar do produto. Falha de leitura propaga (assentos.ts): nunca abrir limite
+       * por dado que faltou ler.
+       */
+      membershipLimit: async (_user, organization_) => {
+        assertUuid(organization_.id, 'organization.id');
+        return assentosPagosDoTenant(organization_.id);
+      },
+
+      // Sem createAccessControl: três papéis chegam para 2–4 pessoas (§9 — customizar
+      // papel é complexidade de ERP que não serve à mira). Papel do convite é o nativo;
+      // o e-mail é reutilizado do plugin, não há segundo canal de convite.
+      sendInvitationEmail: async ({ email, organization: org, invitation, inviter }) => {
+        await deliverInviteEmail({
+          email,
+          organizationName: org.name,
+          inviterName: inviter.user.name,
+          invitationId: invitation.id,
+        });
       },
     }),
   ],

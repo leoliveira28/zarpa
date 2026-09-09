@@ -1,8 +1,8 @@
 'use server';
 
-import { eq } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 import { z } from 'zod';
-import { tenants, user } from '@/db/schema';
+import { invitation, member, organization, subscriptions, tenants, user } from '@/db/schema';
 import { authDb } from '@/lib/auth/db';
 import { auth } from '@/lib/auth/auth';
 import { withPendingTenant } from '@/lib/auth/signupContext';
@@ -153,56 +153,85 @@ export async function criarConta(input: CriarContaInput): Promise<ServiceResult<
       });
     }
 
-    // Slug derivado do nome da agência — a agente não escolhe endereço no cadastro
-    // (uma decisão a menos numa tela que já pede nome, e-mail e senha). Colisão é
-    // esperada e resolvida por sufixo; `criarTenant` devolve CONFLITO quando o slug
-    // está tomado (e o índice único `tenants_slug_key` cobre a corrida).
-    const base = slugificar(nomeAgencia);
-    if (base.length < 3) {
-      throw new ServiceError(
-        'DADOS_INVALIDOS',
-        'Não consegui criar o endereço da conta a partir do nome da agência — use um nome com pelo menos 3 letras ou números.',
-        { campo: 'nomeAgencia', correcao: 'Ajustar o nome da agência' },
-      );
-    }
+    // Fase 3 — convite pendente (§10 do doc: o convidado aceita e entra NO MESMO
+    // tenant, "nunca cria tenant novo"). Se há convite válido para este e-mail, o
+    // cadastro NÃO cria tenant: a conta nasce DENTRO da organization que a convidou, e
+    // o member (com o papel do convite) é gravado logo depois do usuário existir.
+    const convite = await convitePendentePara(email);
 
-    let tenantId: string | null = null;
-    let slugUsado = base;
-    for (let tentativa = 1; tentativa <= TENTATIVAS_DE_SLUG; tentativa += 1) {
-      const candidato = tentativa === 1 ? base : `${base}-${tentativa}`;
-      try {
-        const criado = await criarTenant({
-          name: nomeAgencia,
-          slug: candidato,
-          plan: 'solo',
-          contactEmail: email,
-          // S13b: o aceite já foi validado acima (obrigatório, true). O momento
-          // do registro é aqui, dentro do nascimento do tenant — e a versão é
-          // resolvida lá dentro pela constante, não aqui.
-          consentimento: { aceitoEm: new Date() },
+    let tenantId: string;
+    let slugUsado: string;
+
+    if (convite) {
+      tenantId = convite.organizationId;
+      // Nome/endereço para a resposta vêm do tenant que convidou — a pessoa não
+      // digitou nome de agência porque não está fundando nada, está entrando num time.
+      const org = await withTenant(tenantId, async (tx) => {
+        const [linha] = await tx
+          .select({ name: organization.name, slug: organization.slug })
+          .from(organization)
+          .where(eq(organization.id, tenantId))
+          .limit(1);
+        return linha ?? null;
+      });
+      if (!org) {
+        throw new ServiceError('NAO_ENCONTRADO', 'O convite aponta para uma conta que não existe mais.', {
+          correcao: 'Pedir um novo convite',
         });
-        tenantId = criado.tenantId;
-        slugUsado = candidato;
-        break;
-      } catch (error: unknown) {
-        const aindaTemSlug = error instanceof ServiceError && error.code === 'CONFLITO';
-        if (!aindaTemSlug || tentativa === TENTATIVAS_DE_SLUG) {
-          if (aindaTemSlug) {
-            throw new ServiceError(
-              'CONFLITO',
-              'Não encontrei um endereço livre para essa agência — tente um nome um pouco diferente.',
-              { campo: 'nomeAgencia', correcao: 'Ajustar o nome da agência' },
-            );
+      }
+      slugUsado = org.slug;
+    } else {
+      // Slug derivado do nome da agência — a agente não escolhe endereço no cadastro
+      // (uma decisão a menos numa tela que já pede nome, e-mail e senha). Colisão é
+      // esperada e resolvida por sufixo; `criarTenant` devolve CONFLITO quando o slug
+      // está tomado (e o índice único `tenants_slug_key` cobre a corrida).
+      const base = slugificar(nomeAgencia);
+      if (base.length < 3) {
+        throw new ServiceError(
+          'DADOS_INVALIDOS',
+          'Não consegui criar o endereço da conta a partir do nome da agência — use um nome com pelo menos 3 letras ou números.',
+          { campo: 'nomeAgencia', correcao: 'Ajustar o nome da agência' },
+        );
+      }
+
+      tenantId = '';
+      slugUsado = base;
+      for (let tentativa = 1; tentativa <= TENTATIVAS_DE_SLUG; tentativa += 1) {
+        const candidato = tentativa === 1 ? base : `${base}-${tentativa}`;
+        try {
+          const criado = await criarTenant({
+            name: nomeAgencia,
+            slug: candidato,
+            plan: 'solo',
+            contactEmail: email,
+            // S13b: o aceite já foi validado acima (obrigatório, true). O momento
+            // do registro é aqui, dentro do nascimento do tenant — e a versão é
+            // resolvida lá dentro pela constante, não aqui.
+            consentimento: { aceitoEm: new Date() },
+          });
+          tenantId = criado.tenantId;
+          slugUsado = candidato;
+          break;
+        } catch (error: unknown) {
+          const aindaTemSlug = error instanceof ServiceError && error.code === 'CONFLITO';
+          if (!aindaTemSlug || tentativa === TENTATIVAS_DE_SLUG) {
+            if (aindaTemSlug) {
+              throw new ServiceError(
+                'CONFLITO',
+                'Não encontrei um endereço livre para essa agência — tente um nome um pouco diferente.',
+                { campo: 'nomeAgencia', correcao: 'Ajustar o nome da agência' },
+              );
+            }
+            throw error;
           }
-          throw error;
         }
       }
-    }
-    if (!tenantId) {
-      // Inalcançável (o laço acima sempre ou preenche ou lança) — guarda de tipagem.
-      throw new ServiceError('CONFLITO', 'Não consegui criar sua conta agora.', {
-        correcao: 'Tentar de novo',
-      });
+      if (!tenantId) {
+        // Inalcançável (o laço acima sempre ou preenche ou lança) — guarda de tipagem.
+        throw new ServiceError('CONFLITO', 'Não consegui criar sua conta agora.', {
+          correcao: 'Tentar de novo',
+        });
+      }
     }
 
     // Usuário Better Auth. `withPendingTenant` é o único canal pelo qual o tenantId
@@ -217,20 +246,45 @@ export async function criarConta(input: CriarContaInput): Promise<ServiceResult<
           },
         }),
       );
+
+      const userId = criado?.user?.id ?? null;
+      if (!userId) {
+        throw new Error('signUpEmail não devolveu usuário.');
+      }
+
+      // O `member` do Better Auth exige o usuário JÁ existente (FK real), então só
+      // agora — fora da transação do tenant, dentro da própria do member.
+      if (convite) {
+        await aceitarConviteNoSignup({ tenantId, userId, convite });
+      } else {
+        await criarMemberOwner({ tenantId, userId });
+      }
+
       return {
         tenantId,
-        userId: criado?.user?.id ?? null,
+        userId,
         slug: slugUsado,
-        nomeAgencia,
+        nomeAgencia: convite ? await nomeDaOrganization(tenantId) : nomeAgencia,
         email,
       };
     } catch (error: unknown) {
-      // Compensação: o tenant não pode ficar órfão sem usuário. CASCADE apaga
-      // assinatura e audit_log junto — o banco volta exatamente ao estado anterior.
-      await desfazerTenant(tenantId);
+      const msg = error instanceof Error ? error.message : '';
+      const erroDeNegocio = error instanceof ServiceError;
+      if (erroDeNegocio && error.code === 'LIMITE_DO_PLANO') throw error;
 
-      const mensagem = error instanceof Error ? error.message : '';
-      if (/already exists|já existe/i.test(mensagem)) {
+      // Compensação: nenhum dos dois lados pode ficar órfão.
+      //  - caminho normal: o tenant acabou de nascer sem usuário → apaga o tenant
+      //    (CASCADE leva assinatura e audit juntos);
+      //  - caminho de convite: o tenant é DOS OUTROS — intocável. Apaga o usuário que
+      //    acabou de nascer (CASCADE leva account/session), e o convite volta a estar
+      //    pendente para uma nova tentativa.
+      if (convite) {
+        await desfazerUsuario(email);
+      } else {
+        await desfazerTenant(tenantId);
+      }
+
+      if (/already exists|já existe/i.test(msg)) {
         throw new ServiceError('CONFLITO', 'Já existe uma conta com esse e-mail.', {
           campo: 'email',
           correcao: 'Entrar com esse e-mail em /entrar',
@@ -243,6 +297,112 @@ export async function criarConta(input: CriarContaInput): Promise<ServiceResult<
       });
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Convite (Fase 3) — helpers internos do signup
+// ---------------------------------------------------------------------------
+
+/** Um convite pendente e não vencido para o e-mail, o mais recente primeiro. */
+async function convitePendentePara(
+  email: string,
+): Promise<{ id: string; organizationId: string; role: 'owner' | 'admin' | 'member' } | null> {
+  const [convite] = await authDb
+    .select({
+      id: invitation.id,
+      organizationId: invitation.organizationId,
+      role: invitation.role,
+    })
+    .from(invitation)
+    .where(
+      and(
+        eq(invitation.email, email),
+        eq(invitation.status, 'pending'),
+        gt(invitation.expiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+  return convite ?? null;
+}
+
+/**
+ * Grava o `member` do convidado e marca o convite como aceito — na MESMA transação,
+ * com a checagem de assentos que o plugin faria no aceite (a lib confere de novo no
+ * endpoint dela; aqui o aceite acontece dentro do signup, sem endpoint HTTP, então a
+ * conferência é nossa). Estoura `LIMITE_DO_PLANO` se o assento não existe — recusar é
+ * melhor que sentar um membro sem assento pago.
+ */
+async function aceitarConviteNoSignup(args: {
+  tenantId: string;
+  userId: string;
+  convite: { id: string; organizationId: string; role: 'owner' | 'admin' | 'member' };
+}): Promise<void> {
+  await withTenant(args.tenantId, async (tx) => {
+    // Assentos e contagem na MESMA transação (sem segunda conexão aberta dentro do
+    // callback): `subscriptions` é legível aqui — a policy de tenant já está ativa.
+    const [linhaAssinatura] = await tx
+      .select({ seatsPaid: subscriptions.seatsPaid })
+      .from(subscriptions)
+      .where(eq(subscriptions.tenantId, args.tenantId))
+      .limit(1);
+    const assentos = linhaAssinatura?.seatsPaid ?? 1;
+
+    const membros = await tx.select({ id: member.id }).from(member);
+    if (membros.length >= assentos) {
+      throw new ServiceError(
+        'LIMITE_DO_PLANO',
+        'A equipe já usa todos os assentos pagos deste plano.',
+        { correcao: 'Falar com o dono da conta para liberar um assento' },
+      );
+    }
+
+    await tx.insert(member).values({
+      id: `mem_${args.userId}`,
+      organizationId: args.tenantId,
+      userId: args.userId,
+      role: args.convite.role,
+    });
+    await tx
+      .update(invitation)
+      .set({ status: 'accepted' })
+      .where(eq(invitation.id, args.convite.id));
+  });
+}
+
+/** O `member` owner do dono de conta nova (mesma forma do backfill da 0019). */
+async function criarMemberOwner(args: { tenantId: string; userId: string }): Promise<void> {
+  await withTenant(args.tenantId, async (tx) => {
+    await tx.insert(member).values({
+      id: `mem_${args.userId}`,
+      organizationId: args.tenantId,
+      userId: args.userId,
+      role: 'owner',
+    });
+  });
+}
+
+/** Nome da organization (caminho de convite — a pessoa não fundou agência nenhuma). */
+async function nomeDaOrganization(tenantId: string): Promise<string> {
+  return withTenant(tenantId, async (tx) => {
+    const [linha] = await tx
+      .select({ name: organization.name })
+      .from(organization)
+      .where(eq(organization.id, tenantId))
+      .limit(1);
+    return linha?.name ?? 'Sua equipe';
+  });
+}
+
+/**
+ * Compensação do caminho de convite: apaga o usuário recém-nascido quando a metade de
+ * baixo falhou. CASCADE leva account/session/member. O convite continua pendente.
+ */
+async function desfazerUsuario(email: string): Promise<void> {
+  try {
+    await authDb.delete(user).where(eq(user.email, email));
+  } catch (error: unknown) {
+    console.error('[signup] falha ao desfazer usuário após erro de cadastro:', error);
+  }
 }
 
 /** Compensação do signup: apaga o tenant que acabou de nascer sem usuário. */

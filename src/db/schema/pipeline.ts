@@ -39,6 +39,14 @@ export const deals = pgTable(
     contactId: uuid('contact_id')
       .notNull()
       .references(() => contacts.id, { onDelete: 'restrict' }),
+    /**
+     * Quem vende (Fase 3, `drizzle/0019_multiusuario.sql`). Nullable: estado legítimo
+     * em dado antigo/importado. Default de NEGÓCIO é "quem criou" — preenchido pela
+     * camada de serviço (`criarNegocio`), não pelo banco. Reatribuir é ação de dono.
+     * Visibilidade `own` vs. `tenant` é REGRA DE PRODUTO, fora do RLS por decisão do
+     * §4 do doc — o filtro mora nas queries, nunca em policy.
+     */
+    agentId: text('agent_id').references(() => user.id, { onDelete: 'restrict' }),
     title: text('title').notNull(),
     destination: text('destination'),
     stage: text('stage', {
@@ -88,6 +96,9 @@ export const deals = pgTable(
     index('deals_stage_id_idx').on(t.stageId),
     index('deals_tenant_stage_id_idx').on(t.tenantId, t.stageId),
     index('deals_contact_id_idx').on(t.contactId),
+    // FK (RESTRICT varre por aqui) e a listagem por vendedor (quebra do §7, escopo own).
+    index('deals_agent_id_idx').on(t.agentId),
+    index('deals_tenant_agent_idx').on(t.tenantId, t.agentId),
     check(
       'deals_stage_check',
       sql`${t.stage} in ('novo', 'cotando', 'proposta_enviada', 'negociando', 'ganho', 'perdido')`,

@@ -1,6 +1,5 @@
 /**
- * Schema v1 do Zarpa — 21 tabelas (17 do S1 + `import_batches` no S3 + `library_items`
- * no S5/S6 + `sales`/`receivables` no S9).
+ * Schema do Zarpa — as tabelas do domínio + as do Better Auth (`auth.ts`, `organization.ts`).
  *
  * Todas as tabelas com `tenant_id` (e mais `tenants`, isolada por `id`) têm RLS
  * ENABLE + FORCE e policy `USING`/`WITH CHECK` contra `app.tenant_id`. As policies vivem
@@ -17,6 +16,8 @@
 
 export * from './tenants';
 export * from './auth';
+export * from './organization';
+export * from './agents';
 export * from './people';
 export * from './pipeline';
 export * from './proposals';

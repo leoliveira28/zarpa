@@ -2,7 +2,7 @@
 
 import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { proposalOptions, proposals, receivables, sales } from '@/db/schema';
+import { deals, proposalOptions, proposals, receivables, sales } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
@@ -200,8 +200,11 @@ export async function converterPropostaEmVenda(
           dealId: proposals.dealId,
           status: proposals.status,
           acceptedOptionId: proposals.acceptedOptionId,
+          // Fase 3 (§5): a atribuição É do deal — a venda herda na conversão.
+          dealAgentId: deals.agentId,
         })
         .from(proposals)
+        .innerJoin(deals, eq(deals.id, proposals.dealId))
         .where(eq(proposals.id, propostaId))
         .limit(1);
 
@@ -251,6 +254,7 @@ export async function converterPropostaEmVenda(
           proposalId: propostaId,
           proposalOptionId: opcao.id,
           fornecedor: dados.fornecedor?.trim() || null,
+          agentId: proposta.dealAgentId,
           valorBrutoCents: opcao.priceCents,
           custoCents: opcao.costCents,
           comissaoPrevistaCents: opcao.commissionCents,

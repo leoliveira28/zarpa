@@ -2,7 +2,7 @@
 
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { plans, subscriptions, tenants } from '@/db/schema';
+import { organization, plans, subscriptions, tenants } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { authDb } from '@/lib/auth/db';
 import { uuidv7 } from '@/db/uuid';
@@ -12,6 +12,7 @@ import { slugificar } from './normalize';
 import { registrarAuditoria } from './audit';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
 import { exigirContaAtiva } from './subscriptionGate';
+import { assentosInclusosNoPlano } from '@/lib/tenant/assentos';
 import { semearEstagiosPadrao } from './pipelineStagesDefaults';
 
 const PLAN_PRICE_CENTS = { solo: 4_900, pro: 9_900, studio: 19_900 } as const;
@@ -252,6 +253,22 @@ export async function criarTenant(dados: {
         amountCents,
         billingCycle: 'monthly',
         trialEndsAt,
+        // Fase 3 (§6): assentos inclusos no preço-base — 1 em Solo/Pro, 3 no Studio.
+        seatsPaid: assentosInclusosNoPlano(plan),
+      });
+
+      // Fase 3 (§3): o GÊMEO — a organization do Better Auth É o tenant (o id é o
+      // mesmo, não existem dois conceitos). Nasce AQUI e não por endpoint do plugin
+      // (`allowUserToCreateOrganization: false` em auth.ts): um único caminho de
+      // nascimento de tenant, na mesma transação. O `member` owner NÃO nasce aqui:
+      // `member.user_id` tem FK real para `user`, e o usuário ainda não existe nesta
+      // transação (o Better Auth o grava pelo pool dele DEPOIS) — quem cria o member
+      // owner é `criarConta` (`src/server/signup.ts`), que já tem o userId em mão;
+      // tenants que nasceram antes da 0019 ganharam o owner no backfill da migration.
+      await tx.insert(organization).values({
+        id: tenantId,
+        name: dados.name.trim(),
+        slug,
       });
 
       // S15: o funil de fábrica nasce junto com o tenant, na MESMA transação. A 0015

@@ -216,6 +216,7 @@ export {
   listarPlanos,
   trocarPlano,
   cancelarAssinatura,
+  alterarAssentos,
   listarFaturas,
   processarWebhookAsaas,
   type PlanoResumo,
@@ -224,6 +225,7 @@ export {
   type StatusFatura,
   type FaturaResumo,
   type TrocarPlanoInput,
+  type AlterarAssentosInput,
 } from './billing';
 export { verificarWebhookAsaas } from '@/lib/asaas/client';
 export {
@@ -277,7 +279,17 @@ export {
   type ResumoDoPeriodo,
   type OrigemDeContato,
   type MotivoDePerda,
+  type QuebraPorVendedor,
 } from './money';
+// Fase 3 — multiusuário. `escopoDaSessao.ts` NÃO entra no barril de propósito (arquivo
+// puro, sem `'use server'`; a decisão de escopo é do service layer, não da tela).
+export {
+  listarEquipe,
+  type EquipeResumo,
+  type MembroDaEquipe,
+  type ConviteDaEquipe,
+  type PapelDoMembro,
+} from './equipe';
 // Só TIPOS de `./periodo`: reexportar a função puxaria zod para o grafo de Client
 // Components que importa o barril (mesmo cuidado do `subscriptionGate` acima).
 export type { PeriodoInput, Periodo } from './periodo';
@@ -303,3 +315,25 @@ export {
   type ArquivarEstagioInput,
   type ReabrirEstagioInput,
 } from './pipelineStages';
+// Rodada Monde — fases 1 e 2 (templates, dinheiro por viagem, ranking).
+// `recibos.ts`/`exportacoes.ts` NÃO entram no barril de propósito: são helpers de
+// ROTA (não actions) e os tipos deles viajam com as rotas `/api/recibos/…` e
+// `/api/export/…` — reexportá-los sugeriria que são chamadas de UI.
+export {
+  listarTemplates,
+  obterConteudoDoTemplate,
+  criarTemplateDeProposta,
+  removerTemplate,
+  definirTemplatePadrao,
+  criarPropostaDeTemplate,
+  type TemplateResumo,
+  type BlocoDeTemplate,
+} from './proposalTemplates';
+export {
+  resultadoDaViagem,
+  type ResultadoDaViagem,
+} from './resultado';
+export {
+  rankingDeClientes,
+  type LinhaDoRanking,
+} from './ranking';

@@ -127,6 +127,20 @@
       "when": 1758844800000,
       "tag": "0017_assinatura_do_agente",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1758931200000,
+      "tag": "0018_modelos_de_proposta",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1759017600000,
+      "tag": "0019_multiusuario",
+      "breakpoints": true
     }
   ]
 }

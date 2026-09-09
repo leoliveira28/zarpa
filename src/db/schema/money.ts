@@ -4,6 +4,7 @@ import {
   check,
   date,
   index,
+  integer,
   pgTable,
   text,
   timestamp,
@@ -59,6 +60,15 @@ export const subscriptions = pgTable(
     billingCycle: text('billing_cycle', { enum: ['monthly', 'yearly'] })
       .notNull()
       .default('monthly'),
+    /**
+     * Assentos PAGOS do tenant (Fase 3, `drizzle/0019_multiusuario.sql`). Nunca zero —
+     * o owner ocupa o assento de origem: 1 em Solo/Pro, 3 no Studio (inclusos no
+     * R$ 199). Alimenta o `membershipLimit` dinâmico do plugin `organization` (o
+     * convite N+1 é recusado pela própria lib quando o assento não foi pago — o gate
+     * de billing de graça) e o recálculo de valor no cancelar+recriar do Asaas
+     * (`alterarAssentos`, `src/server/billing.ts`).
+     */
+    seatsPaid: integer('seats_paid').notNull().default(1),
     amountCents: bigint('amount_cents', { mode: 'number' }).notNull(),
     currentPeriodStart: date('current_period_start'),
     currentPeriodEnd: date('current_period_end'),
@@ -79,6 +89,7 @@ export const subscriptions = pgTable(
       .on(t.tenantId)
       .where(sql`${t.status} in ('trialing', 'active', 'past_due')`),
     check('subscriptions_plan_check', sql`${t.plan} in ('solo', 'pro', 'studio')`),
+    check('subscriptions_seats_check', sql`${t.seatsPaid} >= 1`),
     check(
       'subscriptions_status_check',
       sql`${t.status} in ('trialing', 'active', 'past_due', 'canceled', 'expired')`,

@@ -57,6 +57,12 @@ export const session = pgTable(
     userId: text('user_id')
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
+    /**
+     * Gravada pelo plugin `organization` do Better Auth (Fase 3): a organization ativa
+     * na sessão. Nullable de sempre — tenant único não escolhe nada. O id É o id de
+     * `tenants` (ver `./organization.ts`); sem FK de propósito, é o plugin quem escreve.
+     */
+    activeOrganizationId: text('active_organization_id'),
     token: text('token').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     ipAddress: text('ip_address'),
