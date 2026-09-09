@@ -113,6 +113,20 @@
       "when": 1758672000000,
       "tag": "0015_estagios_do_funil",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1758758400000,
+      "tag": "0016_negocio_aponta_para_estagio",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1758844800000,
+      "tag": "0017_assinatura_do_agente",
+      "breakpoints": true
     }
   ]
 }

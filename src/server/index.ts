@@ -19,6 +19,8 @@ export {
   restaurarContato,
   excluirContato,
   obterDocumentoDoContato,
+  obterHistoricoDoContato,
+  type HistoricoDoContato,
   type ContatoInput,
   type ContatoPatch,
   type ContatoResumo,
@@ -161,6 +163,7 @@ export {
   listarNegociosParados,
   obterResumoDoPipeline,
   type DealStage,
+  type DestinoDeEstagio,
   type EstagioDeFunil,
   type NegocioDoFunil,
   type NegocioMovido,
@@ -243,9 +246,16 @@ export {
 export {
   gerarRoteiro,
   listarRoteiros,
+  // Editor de roteiro: leitura apontada + escrita de SÓ conteúdo (`blocks_snapshot`).
+  // O link (`publicToken`) e os dados comerciais nunca mudam por aqui.
+  listarRoteiroDoNegocio,
+  obterConteudoDoRoteiro,
+  obterPropostaAceitaDoNegocio,
+  atualizarConteudoDoRoteiro,
   type RoteiroResumo,
   type BlocoDoRoteiro,
   type GerarRoteiroInput,
+  type PropostaAceitaDoNegocio,
 } from './itineraries';
 export {
   obterRoteiroPublico,
@@ -271,9 +281,11 @@ export {
 // Só TIPOS de `./periodo`: reexportar a função puxaria zod para o grafo de Client
 // Components que importa o barril (mesmo cuidado do `subscriptionGate` acima).
 export type { PeriodoInput, Periodo } from './periodo';
-// S15 — alicerce do funil configurável. As actions estão prontas, mas NADA no produto
-// está ligado nelas ainda: `/funil` e todas as leituras continuam no enum `deals.stage`
-// e em `COLUNAS_DO_FUNIL`. Ver `src/server/pipelineStages.ts` e a 0015.
+// S15/S16 — funil configurável. Desde a 0016 `deals.stage_id` é FK para `pipeline_stages`:
+// `criarNegocio({ stageId })` e `moverEstagioDoNegocio(id, { stageId })` aceitam a coluna
+// pelo id, e `listarNegociosDoFunil` devolve `stageId`/`stageLabel`/`stagePosition`. O que
+// falta é a UI: `/funil` ainda monta as colunas por `COLUNAS_DO_FUNIL` (`dealStages.ts`).
+// Ver `src/server/pipelineStages.ts`, a 0015 e a 0016.
 // `pipelineStagesDefaults.ts` NÃO é reexportado aqui (mesma razão do `subscriptionGate`:
 // módulo sem `'use server'` que importa o schema/driver arrasta o driver para o grafo de
 // Client Components e quebra o build).
@@ -283,9 +295,11 @@ export {
   renomearEstagio,
   reordenarEstagios,
   arquivarEstagio,
+  reabrirEstagio,
   type EstagioDoFunil,
   type CriarEstagioInput,
   type RenomearEstagioInput,
   type ReordenarEstagiosInput,
   type ArquivarEstagioInput,
+  type ReabrirEstagioInput,
 } from './pipelineStages';

@@ -43,6 +43,15 @@ export type PropostaPublicaBrand = {
    * do campo (não só o valor) foi escolhido de propósito. */
   whatsappLink: string | null;
   instagram: string | null;
+  /**
+   * 0017 — a assinatura: "[name] · por [agentDisplayName]" + "via {APP_NAME}"
+   * (`src/lib/assinatura.ts` monta; a página só exibe). OPCIONAL de propósito: a função
+   * pública só emite a chave QUANDO o `brand_snapshot` traz assinatura — proposta
+   * enviada antes de o agente configurar o nome não ganha a chave, e o payload dela não
+   * muda um byte (fotografia; ver o cabeçalho da `drizzle/0017_assinatura_do_agente.sql`).
+   * Ausente, `null` e `''` são a mesma coisa para quem exibe.
+   */
+  agentDisplayName?: string | null;
 };
 
 export type PropostaPublicaMeta = {

@@ -1,7 +1,7 @@
 'use server';
 
 import { and, eq, gte, lt } from 'drizzle-orm';
-import { contacts, deals, sales } from '@/db/schema';
+import { contacts, deals, pipelineStages, sales } from '@/db/schema';
 import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { comoResultado, type ServiceResult } from './errors';
@@ -155,9 +155,12 @@ async function calcularResumoDoPeriodo(tx: TenantDb, periodo: Periodo): Promise<
       valueCents: deals.valueCents,
     })
     .from(deals)
+    // S16: "perdido" é a COLUNA marcada `is_lost` do funil do tenant (0016), não o literal
+    // — continua batendo com o enum, e continua batendo se a agente renomear a coluna.
+    .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
     .where(
       and(
-        eq(deals.stage, 'perdido'),
+        eq(pipelineStages.isLost, true),
         gte(deals.closedAt, periodo.inicio),
         lt(deals.closedAt, periodo.fimExclusivo),
       ),

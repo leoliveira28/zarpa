@@ -1,8 +1,8 @@
 'use server';
 
-import { and, desc, eq, ne, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { activities, contacts, deals, type Deal } from '@/db/schema';
+import { activities, contacts, deals, pipelineStages, type Deal } from '@/db/schema';
 import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
@@ -10,6 +10,7 @@ import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 import { parseDataFlexivel } from './normalize';
 import { resolverPeriodo, type PeriodoInput } from './periodo';
+import { semearEstagiosPadrao } from './pipelineStagesDefaults';
 
 /**
  * O funil — o serviço que faltava atrás de `FunnelScreen.tsx` e do topo de `TodayScreen.tsx`
@@ -80,6 +81,160 @@ const ESTAGIOS = [
 // pode exportar função assíncrona; uma constante aqui quebra o build do Next.
 
 // ---------------------------------------------------------------------------
+// S16: a coluna do funil como FK (`deals.stage_id` → `pipeline_stages`)
+// ---------------------------------------------------------------------------
+//
+// A partir da 0016 o negócio aponta para uma LINHA de `pipeline_stages` — inclusive para
+// uma coluna que a agente criou, que não tem equivalente no enum. `deals.stage` continua
+// existindo como PROJEÇÃO da FK, mantida pelo trigger `deals_estagio_sync` no banco: quem
+// grava id ganha o enum derivado, quem grava enum ganha o id resolvido. O contrato inteiro
+// está no cabeçalho de `drizzle/0016_negocio_aponta_para_estagio.sql`.
+//
+// O QUE ISSO SIGNIFICA PARA QUEM LÊ ESTE ARQUIVO: `is_won`/`is_lost` de `pipeline_stages`
+// são a fonte de verdade de "fechou como ganho/perdido". As queries daqui passaram a
+// filtrar por eles (join), não mais por `stage in ('ganho','perdido')` — e as comparações
+// literais que sobraram em outros arquivos continuam certas porque o trigger DERIVA o enum
+// desses dois booleanos, nunca o contrário.
+
+/** Para onde mover/criar: o enum de sempre, ou a coluna do funil pelo id. */
+export type DestinoDeEstagio = DealStage | { stageId: string };
+
+type EstagioAlvo = {
+  id: string;
+  label: string;
+  position: number;
+  isWon: boolean;
+  isLost: boolean;
+  /** O valor de `deals.stage` que este estágio produz — o mesmo espelho do trigger. */
+  stage: DealStage;
+};
+
+const estagioAlvoColunas = {
+  id: pipelineStages.id,
+  legacyStage: pipelineStages.legacyStage,
+  label: pipelineStages.label,
+  position: pipelineStages.position,
+  isWon: pipelineStages.isWon,
+  isLost: pipelineStages.isLost,
+  archivedAt: pipelineStages.archivedAt,
+} as const;
+
+type LinhaDeEstagio = {
+  id: string;
+  legacyStage: DealStage | null;
+  label: string;
+  position: number;
+  isWon: boolean;
+  isLost: boolean;
+  archivedAt?: Date | null;
+};
+
+/**
+ * O espelho enum↔estágio, do lado da aplicação. Tem que ser BIT A BIT o mesmo `CASE` do
+ * trigger `deals_sincronizar_estagio` (0016) — se um dia divergirem, o valor que vale é o
+ * do banco (ele roda por último, no BEFORE), e a diferença apareceria como "o retorno da
+ * action não bate com o que ficou gravado".
+ */
+function espelhoDoEnum(estagio: LinhaDeEstagio): DealStage {
+  if (estagio.legacyStage) return estagio.legacyStage;
+  if (estagio.isWon) return 'ganho';
+  if (estagio.isLost) return 'perdido';
+  return 'negociando';
+}
+
+function comoAlvo(estagio: LinhaDeEstagio): EstagioAlvo {
+  return {
+    id: estagio.id,
+    label: estagio.label,
+    position: estagio.position,
+    isWon: estagio.isWon,
+    isLost: estagio.isLost,
+    stage: espelhoDoEnum(estagio),
+  };
+}
+
+/**
+ * Resolve o destino (enum antigo OU `stageId`) na linha de `pipeline_stages` do tenant.
+ *
+ * Pelo ENUM: procura o estágio com aquele `legacy_stage`. Se o tenant ainda não tem funil
+ * (nasceu fora de `criarTenant` — seed, teste), semeia o de fábrica e procura de novo; é o
+ * mesmo comportamento do trigger, feito aqui para poder devolver o rótulo junto.
+ *
+ * Pelo ID: exige que a coluna exista NESTE tenant (a policy de `pipeline_stages` já faz o
+ * id de outro tenant sumir) e que não esteja arquivada — coluna arquivada saiu do quadro,
+ * mandar negócio para lá é criar um negócio invisível.
+ */
+async function resolverEstagio(
+  tx: TenantDb,
+  tenantId: string,
+  destino: DestinoDeEstagio,
+): Promise<EstagioAlvo> {
+  if (typeof destino === 'string') {
+    const parsed = z.enum(ESTAGIOS).safeParse(destino);
+    if (!parsed.success) {
+      throw new ServiceError('DADOS_INVALIDOS', 'Esse estágio não existe.', {
+        campo: 'novoEstagio',
+        correcao: 'Escolher um estágio válido',
+      });
+    }
+
+    const buscar = async (): Promise<LinhaDeEstagio | undefined> => {
+      const [linha] = await tx
+        .select(estagioAlvoColunas)
+        .from(pipelineStages)
+        .where(
+          and(
+            eq(pipelineStages.tenantId, tenantId),
+            eq(pipelineStages.legacyStage, parsed.data),
+          ),
+        )
+        .limit(1);
+      return linha;
+    };
+
+    let linha = await buscar();
+    if (!linha) {
+      await semearEstagiosPadrao(tx, tenantId);
+      linha = await buscar();
+    }
+    if (!linha) {
+      throw new ServiceError('NAO_ENCONTRADO', 'Essa coluna não existe mais.', {
+        correcao: 'Recarregar o funil',
+      });
+    }
+    return comoAlvo(linha);
+  }
+
+  const stageId = z.uuid().safeParse(destino?.stageId);
+  if (!stageId.success) {
+    throw new ServiceError('DADOS_INVALIDOS', 'Essa coluna não existe.', {
+      campo: 'stageId',
+      correcao: 'Escolher uma coluna do funil',
+    });
+  }
+
+  const [linha] = await tx
+    .select(estagioAlvoColunas)
+    .from(pipelineStages)
+    .where(and(eq(pipelineStages.tenantId, tenantId), eq(pipelineStages.id, stageId.data)))
+    .limit(1);
+
+  if (!linha) {
+    throw new ServiceError('NAO_ENCONTRADO', 'Essa coluna não existe mais.', {
+      campo: 'stageId',
+      correcao: 'Recarregar o funil',
+    });
+  }
+  if (linha.archivedAt) {
+    throw new ServiceError('CONFLITO', 'Essa coluna está arquivada.', {
+      campo: 'stageId',
+      correcao: 'Escolher uma coluna ativa do funil',
+    });
+  }
+  return comoAlvo(linha);
+}
+
+// ---------------------------------------------------------------------------
 // Helpers de data — nada de PII aqui, só aritmética de `Date`.
 // ---------------------------------------------------------------------------
 
@@ -148,7 +303,16 @@ export type NegocioDoFunil = {
   title: string;
   destination: string | null;
   valueCents: number;
+  /**
+   * O enum de sempre — projeção de `stageId`, mantida pelo banco. Continua aqui porque
+   * `/funil` ainda monta as colunas por `COLUNAS_DO_FUNIL`. Negócio numa coluna criada
+   * pela agente sai como `negociando` (ver a 0016): use `stageId` para posicionar o card.
+   */
   stage: EstagioDeFunil;
+  /** A coluna de verdade (`pipeline_stages.id`) — é por aqui que o quadro configurável monta. */
+  stageId: string;
+  stageLabel: string;
+  stagePosition: number;
   contactId: string;
   contactName: string;
   /** `AAAA-MM-DD`, ou `null` quando a data da viagem ainda não foi decidida. */
@@ -177,6 +341,9 @@ export async function listarNegociosDoFunil(): Promise<ServiceResult<NegocioDoFu
           destination: deals.destination,
           valueCents: deals.valueCents,
           stage: deals.stage,
+          stageId: pipelineStages.id,
+          stageLabel: pipelineStages.label,
+          stagePosition: pipelineStages.position,
           departureOn: deals.departureOn,
           updatedAt: deals.updatedAt,
           contactId: deals.contactId,
@@ -185,7 +352,11 @@ export async function listarNegociosDoFunil(): Promise<ServiceResult<NegocioDoFu
         })
         .from(deals)
         .innerJoin(contacts, eq(contacts.id, deals.contactId))
-        .where(ne(deals.stage, 'perdido'))
+        .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
+        // "Perdido" saiu do quadro pela SEMÂNTICA, não pelo literal: quem manda é
+        // `is_lost` da coluna do funil (0016). Mesmo resultado de antes para o funil de
+        // fábrica, e correto também para um funil renomeado pela agente.
+        .where(eq(pipelineStages.isLost, false))
         .orderBy(desc(deals.createdAt))
         .limit(500);
 
@@ -198,6 +369,9 @@ export async function listarNegociosDoFunil(): Promise<ServiceResult<NegocioDoFu
         // Seguro: a query já excluiu 'perdido' no WHERE — o cast só remove esse único
         // valor do tipo, não muda o dado.
         stage: linha.stage as EstagioDeFunil,
+        stageId: linha.stageId,
+        stageLabel: linha.stageLabel,
+        stagePosition: linha.stagePosition,
         contactId: linha.contactId,
         contactName: linha.contactName,
         departureOn: linha.departureOn,
@@ -214,11 +388,15 @@ export async function listarNegociosDoFunil(): Promise<ServiceResult<NegocioDoFu
 // 2) Mover de estágio — o que o arrasto do kanban chama
 // ---------------------------------------------------------------------------
 
-const estagioInput = z.enum(ESTAGIOS);
-
 export type NegocioMovido = {
   id: string;
   stage: DealStage;
+  /** A coluna do funil onde o negócio ficou — `pipeline_stages.id`. */
+  stageId: string;
+  stageLabel: string;
+  /** Fechou como ganho / como perdido, direto de `pipeline_stages`. */
+  isWon: boolean;
+  isLost: boolean;
   lostReason: string | null;
   closedAt: Date | null;
   updatedAt: Date;
@@ -229,11 +407,16 @@ async function buscarNegocioMovido(tx: TenantDb, dealId: string): Promise<Negoci
     .select({
       id: deals.id,
       stage: deals.stage,
+      stageId: pipelineStages.id,
+      stageLabel: pipelineStages.label,
+      isWon: pipelineStages.isWon,
+      isLost: pipelineStages.isLost,
       lostReason: deals.lostReason,
       closedAt: deals.closedAt,
       updatedAt: deals.updatedAt,
     })
     .from(deals)
+    .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
     .where(eq(deals.id, dealId))
     .limit(1);
   // Não deveria faltar: quem chama já confirmou a existência da linha antes disto.
@@ -265,38 +448,61 @@ async function buscarNegocioMovido(tx: TenantDb, dealId: string): Promise<Negoci
  * negócio fechado não pode deixar `closed_at` de uma venda que "fechou" no mês passado
  * mentindo para `obterResumoDoPipeline`. `lostReason` segue a mesma regra: só existe
  * enquanto o negócio está `perdido`.
+ *
+ * **S16 — aceita os DOIS destinos, e nada quebrou.** `novoEstagio` continua aceitando o
+ * enum (`'ganho'`, `'perdido'`…) exatamente como antes, e passa a aceitar também
+ * `{ stageId }` — a coluna do funil pelo id, inclusive uma criada pela agente. Escolhi a
+ * união no MESMO parâmetro em vez de uma action nova (`moverNegocioParaColuna`) porque as
+ * duas fariam a mesma coisa e a duplicata é onde uma regra (motivo de perda, `closedAt`,
+ * idempotência) acaba implementada de dois jeitos meio diferentes. Toda chamada existente
+ * compila e se comporta igual.
+ *
+ * "É perda?" deixou de ser `estagio === 'perdido'` e passou a ser `alvo.isLost` — a
+ * propriedade da COLUNA. É isso que faz o motivo de perda continuar obrigatório mesmo se a
+ * agente renomear "Perdida" para "Não rolou".
  */
 export async function moverEstagioDoNegocio(
   dealId: string,
-  novoEstagio: DealStage,
+  novoEstagio: DestinoDeEstagio,
   motivoPerda?: string,
 ): Promise<ServiceResult<NegocioMovido>> {
   return comoResultado(async () => {
     const { tenantId, userId } = await requireAuthContext();
-
-    const estagioParsed = estagioInput.safeParse(novoEstagio);
-    if (!estagioParsed.success) {
-      throw new ServiceError('DADOS_INVALIDOS', 'Esse estágio não existe.', {
-        campo: 'novoEstagio',
-        correcao: 'Escolher um estágio válido',
-      });
-    }
-    const estagio = estagioParsed.data;
-
     const motivo = motivoPerda?.trim() ?? '';
-    if (estagio === 'perdido' && motivo.length < 3) {
-      throw new ServiceError(
-        'DADOS_INVALIDOS',
-        'Diga por que essa venda foi perdida antes de arquivar.',
-        { campo: 'motivoPerda', correcao: 'Escrever o motivo da perda' },
-      );
+
+    const exigirMotivo = (): void => {
+      if (motivo.length < 3) {
+        throw new ServiceError(
+          'DADOS_INVALIDOS',
+          'Diga por que essa venda foi perdida antes de arquivar.',
+          { campo: 'motivoPerda', correcao: 'Escrever o motivo da perda' },
+        );
+      }
+    };
+
+    // Destino pelo enum: valida ANTES de abrir transação, como sempre fez — assim uma
+    // chamada mal formada não custa conexão nem passa pelo gate de dunning (a ordem dos
+    // erros que a tela já conhece não muda). Pelo `stageId` não dá: só o banco sabe se
+    // aquela coluna é a de perda deste tenant.
+    if (typeof novoEstagio === 'string') {
+      if (!z.enum(ESTAGIOS).safeParse(novoEstagio).success) {
+        throw new ServiceError('DADOS_INVALIDOS', 'Esse estágio não existe.', {
+          campo: 'novoEstagio',
+          correcao: 'Escolher um estágio válido',
+        });
+      }
+      if (novoEstagio === 'perdido') exigirMotivo();
     }
 
     return withTenant(tenantId, async (tx) => {
       // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
       await exigirContaAtiva(tx, tenantId);
+
+      const alvo = await resolverEstagio(tx, tenantId, novoEstagio);
+      if (alvo.isLost) exigirMotivo();
+
       const [atual] = await tx
-        .select({ id: deals.id, stage: deals.stage })
+        .select({ id: deals.id, stage: deals.stage, stageId: deals.stageId })
         .from(deals)
         .where(eq(deals.id, dealId))
         .limit(1);
@@ -307,22 +513,29 @@ export async function moverEstagioDoNegocio(
         });
       }
 
-      if (atual.stage === estagio) {
+      if (atual.stageId === alvo.id) {
         return buscarNegocioMovido(tx, dealId);
       }
 
       const agora = new Date();
+      const fechou = alvo.isWon || alvo.isLost;
       const valores: Record<string, unknown> = {
-        stage: estagio,
+        // Os dois de propósito: o trigger derivaria `stage` sozinho, mas gravar o valor
+        // que a aplicação calculou deixa a divergência (se um dia houver) aparecer no
+        // `returning`, em vez de ficar escondida.
+        stageId: alvo.id,
+        stage: alvo.stage,
         updatedAt: agora,
-        closedAt: estagio === 'ganho' || estagio === 'perdido' ? agora : null,
-        lostReason: estagio === 'perdido' ? motivo : null,
+        closedAt: fechou ? agora : null,
+        lostReason: alvo.isLost ? motivo : null,
       };
 
       const linhas = await tx
         .update(deals)
         .set(valores)
-        .where(and(eq(deals.id, dealId), ne(deals.stage, estagio)))
+        // A guarda de concorrência agora é por `stage_id` (a coluna de verdade): duas
+        // chamadas simultâneas para a MESMA coluna e a segunda afeta zero linhas.
+        .where(and(eq(deals.id, dealId), ne(deals.stageId, alvo.id)))
         .returning({ id: deals.id });
 
       if (linhas.length > 0) {
@@ -331,14 +544,21 @@ export async function moverEstagioDoNegocio(
           dealId,
           actorUserId: userId,
           type: 'stage_changed',
-          body:
-            estagio === 'perdido'
-              ? `Marcado como perdido: ${motivo}`
-              : `Movido de ${atual.stage} para ${estagio}.`,
+          // `body`/`metadata.de`/`metadata.para` seguem em valor de ENUM, de propósito:
+          // `NegocioScreen.tsx` reconstrói a frase da timeline a partir dessa metadata
+          // (`STAGE_LABEL[de]`) e monta a versão otimista no mesmo formato. Mudar para
+          // rótulo aqui quebraria a linha do tempo da tela sem avisar. Os ids vão junto,
+          // como campo NOVO, para a Nina poder passar a usar rótulo quando quiser.
+          body: alvo.isLost
+            ? `Marcado como perdido: ${motivo}`
+            : `Movido de ${atual.stage} para ${alvo.stage}.`,
           metadata: {
             de: atual.stage,
-            para: estagio,
-            ...(estagio === 'perdido' ? { motivoPerda: motivo } : {}),
+            para: alvo.stage,
+            deStageId: atual.stageId,
+            paraStageId: alvo.id,
+            paraLabel: alvo.label,
+            ...(alvo.isLost ? { motivoPerda: motivo } : {}),
           },
           occurredAt: agora,
         });
@@ -349,7 +569,12 @@ export async function moverEstagioDoNegocio(
           action: 'deal.stage_changed',
           entity: 'deal',
           entityId: dealId,
-          metadata: { de: atual.stage, para: estagio },
+          metadata: {
+            de: atual.stage,
+            para: alvo.stage,
+            deStageId: atual.stageId,
+            paraStageId: alvo.id,
+          },
         });
       }
 
@@ -390,11 +615,23 @@ const criarNegocioInput = z.object({
   departureOn: dataOpcionalInput,
   returnOn: dataOpcionalInput,
   expectedCloseOn: dataOpcionalInput,
+  /**
+   * S16 — em qual coluna do funil o negócio nasce (`pipeline_stages.id`). OMITIDO =
+   * "Novo contato" (o `legacyStage: 'novo'`), que é o comportamento de sempre.
+   */
+  stageId: z.uuid('Escolha uma coluna do funil').optional(),
 });
 
 export type CriarNegocioInput = z.infer<typeof criarNegocioInput>;
 
-/** Criação básica: nasce sempre `stage: 'novo'` (default do schema), moeda BRL se omitida. */
+/**
+ * Criação básica: sem `stageId`, nasce na coluna `novo` ("Novo contato") e moeda BRL se
+ * omitida. Com `stageId`, nasce na coluna escolhida — desde que ela esteja ATIVA e não
+ * seja fim de funil: negócio não nasce ganho nem perdido (ganho exige a venda que ainda
+ * não existe; perdido exige motivo de perda, que `criarNegocio` não pede). Quem quiser um
+ * negócio já fechado cria e move, passando por `moverEstagioDoNegocio`, que é onde as
+ * regras de fechamento moram.
+ */
 export async function criarNegocio(
   input: CriarNegocioInput,
 ): Promise<ServiceResult<NegocioDoFunil>> {
@@ -433,10 +670,25 @@ export async function criarNegocio(
         });
       }
 
+      const alvo = await resolverEstagio(
+        tx,
+        tenantId,
+        dados.stageId ? { stageId: dados.stageId } : 'novo',
+      );
+
+      if (alvo.isWon || alvo.isLost) {
+        throw new ServiceError('CONFLITO', 'Um negócio não nasce fechado.', {
+          campo: 'stageId',
+          correcao: 'Criar numa coluna aberta e mover depois',
+        });
+      }
+
       const [criado] = await tx
         .insert(deals)
         .values({
           tenantId,
+          stageId: alvo.id,
+          stage: alvo.stage,
           contactId: contato.id,
           title: dados.title,
           destination: dados.destination?.trim() || null,
@@ -466,7 +718,7 @@ export async function criarNegocio(
         action: 'deal.created',
         entity: 'deal',
         entityId: negocio.id,
-        metadata: { contactId: contato.id },
+        metadata: { contactId: contato.id, stageId: alvo.id },
       });
 
       return {
@@ -474,8 +726,11 @@ export async function criarNegocio(
         title: negocio.title,
         destination: negocio.destination,
         valueCents: negocio.valueCents,
-        // Acabou de nascer com o default do schema ('novo') — nunca 'perdido' aqui.
+        // Seguro: `alvo` já foi recusado se fosse fim de funil — nunca 'perdido' aqui.
         stage: negocio.stage as EstagioDeFunil,
+        stageId: alvo.id,
+        stageLabel: alvo.label,
+        stagePosition: alvo.position,
         contactId: negocio.contactId,
         contactName: contato.name,
         departureOn: negocio.departureOn,
@@ -503,7 +758,12 @@ export type NegocioDetalhe = {
   id: string;
   title: string;
   destination: string | null;
+  /** Projeção do estágio (ver `NegocioDoFunil.stage`). A coluna de verdade é `stageId`. */
   stage: DealStage;
+  stageId: string;
+  stageLabel: string;
+  isWon: boolean;
+  isLost: boolean;
   currency: string;
   valueCents: number;
   costCents: number;
@@ -535,6 +795,10 @@ async function buscarNegocioDetalhe(tx: TenantDb, dealId: string): Promise<Negoc
       title: deals.title,
       destination: deals.destination,
       stage: deals.stage,
+      stageId: pipelineStages.id,
+      stageLabel: pipelineStages.label,
+      isWon: pipelineStages.isWon,
+      isLost: pipelineStages.isLost,
       currency: deals.currency,
       valueCents: deals.valueCents,
       costCents: deals.costCents,
@@ -553,6 +817,7 @@ async function buscarNegocioDetalhe(tx: TenantDb, dealId: string): Promise<Negoc
     })
     .from(deals)
     .innerJoin(contacts, eq(contacts.id, deals.contactId))
+    .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
     .where(eq(deals.id, dealId))
     .limit(1);
 
@@ -801,7 +1066,9 @@ export async function listarNegociosParados(): Promise<ServiceResult<ResumoDePar
         })
         .from(deals)
         .innerJoin(contacts, eq(contacts.id, deals.contactId))
-        .where(notInArray(deals.stage, ['ganho', 'perdido']));
+        .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
+        // "Aberto" = coluna que não fecha nem como ganho nem como perdido (0016).
+        .where(and(eq(pipelineStages.isWon, false), eq(pipelineStages.isLost, false)));
 
       const agora = Date.now();
       const itens = linhas
@@ -861,12 +1128,14 @@ export async function obterResumoDoPipeline(
       const abertos = await tx
         .select({ valueCents: deals.valueCents })
         .from(deals)
-        .where(notInArray(deals.stage, ['ganho', 'perdido']));
+        .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
+        .where(and(eq(pipelineStages.isWon, false), eq(pipelineStages.isLost, false)));
 
       const fechados = await tx
         .select({ valueCents: deals.valueCents, closedAt: deals.closedAt })
         .from(deals)
-        .where(eq(deals.stage, 'ganho'));
+        .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
+        .where(eq(pipelineStages.isWon, true));
 
       const pipelineAbertoCents = abertos.reduce((soma, item) => soma + item.valueCents, 0);
       const fechadoNoMesCents = fechados

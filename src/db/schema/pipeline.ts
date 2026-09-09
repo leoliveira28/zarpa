@@ -46,6 +46,24 @@ export const deals = pgTable(
     })
       .notNull()
       .default('novo'),
+    /**
+     * A coluna do funil onde o negócio está (`drizzle/0016_negocio_aponta_para_estagio.sql`).
+     *
+     * `NOT NULL` no banco, mas OPCIONAL no insert — e o `.default(sql`null`)` abaixo existe
+     * só para dizer isso ao TypeScript. Quem preenche não é a aplicação e não é um DEFAULT
+     * de coluna (não daria: o valor depende do tenant): é o trigger `deals_estagio_sync`,
+     * que resolve `stage_id` a partir de `stage` quando o insert não traz o id. Sem esse
+     * `.default`, o `$inferInsert` do Drizzle passaria a EXIGIR `stageId` em todo
+     * `insert(deals)` do repositório — inclusive nos testes e no seed, que gravam só o enum
+     * e que não são meus para editar.
+     *
+     * `stage` (o enum) é a PROJEÇÃO desta coluna, mantida pelo mesmo trigger. Ver o
+     * cabeçalho da 0016 para o contrato completo dos dois sentidos.
+     */
+    stageId: uuid('stage_id')
+      .notNull()
+      .references(() => pipelineStages.id)
+      .default(sql`null`),
     currency: text('currency').notNull().default('BRL'),
 
     valueCents: bigint('value_cents', { mode: 'number' }).notNull().default(0),
@@ -67,6 +85,8 @@ export const deals = pgTable(
   (t) => [
     index('deals_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
     index('deals_tenant_stage_idx').on(t.tenantId, t.stage),
+    index('deals_stage_id_idx').on(t.stageId),
+    index('deals_tenant_stage_id_idx').on(t.tenantId, t.stageId),
     index('deals_contact_id_idx').on(t.contactId),
     check(
       'deals_stage_check',

@@ -1,7 +1,7 @@
 'use server';
 
 import { and, desc, eq, isNotNull } from 'drizzle-orm';
-import { contacts, deals } from '@/db/schema';
+import { contacts, deals, pipelineStages } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { comoResultado, type ServiceResult } from './errors';
@@ -127,7 +127,9 @@ export async function listarEmViagem(): Promise<ServiceResult<EmViagemGrupos>> {
         })
         .from(deals)
         .innerJoin(contacts, eq(contacts.id, deals.contactId))
-        .where(and(eq(deals.stage, 'ganho'), isNotNull(deals.departureOn)))
+        // S16: "ganho" = a coluna `is_won` do funil deste tenant (0016).
+        .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
+        .where(and(eq(pipelineStages.isWon, true), isNotNull(deals.departureOn)))
         .orderBy(desc(deals.departureOn))
         .limit(200);
 

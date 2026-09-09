@@ -332,11 +332,29 @@ export async function listarPropostas(
     const limite = Math.min(Math.max(filtro?.limite ?? 50, 1), 200);
     const busca = filtro?.busca?.trim();
 
+    // `dealId` costuma vir de rota (`/funil/[id]`), mas uuid malformado no Postgres é erro
+    // cru de driver (22P02), que viraria o envelope genérico "Não consegui completar essa
+    // ação agora" + ruído no log. Valida ANTES de abrir transação — chamada mal formada não
+    // custa conexão nem passa pelo banco (mesma ordem de `moverEstagioDoNegocio` em
+    // `deals.ts`). Um uuid VÁLIDO de outro tenant continua devolvendo zero linhas: o corte
+    // é do RLS, não daqui.
+    let dealId: string | undefined;
+    if (filtro?.dealId) {
+      const parsed = z.uuid('Negócio inválido').safeParse(filtro.dealId);
+      if (!parsed.success) {
+        throw new ServiceError('DADOS_INVALIDOS', 'Negócio inválido.', {
+          campo: 'dealId',
+          correcao: 'Abrir a ficha de um negócio que existe',
+        });
+      }
+      dealId = parsed.data;
+    }
+
     return withTenant(tenantId, async (tx) => {
       const condicoes = [];
       if (!filtro?.incluirArquivadas) condicoes.push(isNull(proposals.archivedAt));
       if (filtro?.ids && filtro.ids.length > 0) condicoes.push(inArray(proposals.id, filtro.ids));
-      if (filtro?.dealId) condicoes.push(eq(proposals.dealId, filtro.dealId));
+      if (dealId) condicoes.push(eq(proposals.dealId, dealId));
       if (busca && busca.length > 0) {
         condicoes.push(
           or(
@@ -698,6 +716,11 @@ export async function enviarProposta(propostaId: string): Promise<ServiceResult<
           brandSecondaryColor: tenants.brandSecondaryColor,
           whatsapp: tenants.whatsapp,
           instagram: tenants.instagram,
+          // 0017: a assinatura congela JUNTO — a proposta entregue não muda de cara (nem
+          // de assinatura) se o agente trocar o nome amanhã. Sem assinatura configurada,
+          // a chave nem chega ao payload público (emissão condicional na
+          // `proposta_publica`, ver a 0017).
+          agentDisplayName: tenants.agentDisplayName,
         })
         .from(tenants)
         .where(eq(tenants.id, tenantId))
@@ -710,6 +733,7 @@ export async function enviarProposta(propostaId: string): Promise<ServiceResult<
         secondaryColor: marca?.brandSecondaryColor ?? null,
         whatsapp: marca?.whatsapp ?? null,
         instagram: marca?.instagram ?? null,
+        agentDisplayName: marca?.agentDisplayName ?? null,
       };
 
       const valores: Record<string, unknown> = { updatedAt: new Date(), brandSnapshot };

@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { pipelineStages } from '@/db/schema';
 import type { TenantDb } from '@/lib/tenant/withTenant';
 import type { DealStage } from './deals';
@@ -14,10 +14,12 @@ import type { DealStage } from './deals';
  *
  * A lista espelha `COLUNAS_DO_FUNIL` (`./dealStages.ts`) mais `perdido`, que é valor real
  * de `deals.stage` e precisa existir como estágio (é o `is_lost`) mesmo não sendo coluna
- * visível do quadro hoje. Os mesmos rótulos e a mesma ordem foram semeados para os tenants
- * existentes em `drizzle/0015_estagios_do_funil.sql` — se um dia divergirem, o backfill da
- * migration é a fonte histórica e ESTA lista é a fonte para tenant novo. Manter as duas
- * iguais é responsabilidade de quem mexer.
+ * visível do quadro hoje.
+ *
+ * S16 — ESTA CONSTANTE É DOCUMENTAÇÃO E TIPO, NÃO É MAIS QUEM SEMEIA. Quem semeia é
+ * `public.semear_estagios_padrao` no banco (a 0016), porque o trigger também precisa
+ * semear. Ela fica aqui para o servidor poder falar dos padrões em TypeScript; se mudar um
+ * rótulo, mude na função SQL — é ela que roda.
  */
 export const ESTAGIOS_PADRAO: {
   legacyStage: DealStage;
@@ -39,22 +41,45 @@ export const ESTAGIOS_PADRAO: {
  * tenant (`criarTenant`), no mesmo `withTenant` — nunca com `tenantId` vindo de argumento
  * de rota.
  *
- * Idempotente: `pipeline_stages_tenant_legacy_key` (único parcial por
- * `(tenant_id, legacy_stage)`) faz a segunda passada virar no-op. Tenant que já tem
- * estágio (semeado pela 0015) não ganha linha duplicada.
+ * S16 — É UM WRAPPER, DE PROPÓSITO. A semente de verdade é a função
+ * `public.semear_estagios_padrao` (`drizzle/0016_negocio_aponta_para_estagio.sql`), porque
+ * o trigger `deals_estagio_sync` precisa semear de dentro do banco, onde não existe
+ * TypeScript. Duas implementações da mesma lista divergiriam no primeiro dia em que
+ * alguém mudasse um rótulo — e a divergência apareceria como "o funil do tenant X está
+ * diferente do do tenant Y", que ninguém liga ao commit que a causou.
+ *
+ * Idempotente e mais esperta que um `ON CONFLICT` cru: ela semeia por VALOR FALTANTE, e
+ * desvia de rótulo já usado e de fim de funil já ocupado (ver o cabeçalho da função na
+ * migration). Passar duas vezes é no-op.
+ *
+ * `tenantId` vai como parâmetro (`$1`), nunca interpolado — e o RLS de `pipeline_stages`
+ * continua valendo dentro da função, que é SECURITY INVOKER: semear tenant que não é o do
+ * `app.tenant_id` da transação é impossível daqui.
  */
 export async function semearEstagiosPadrao(tx: TenantDb, tenantId: string): Promise<void> {
-  await tx
-    .insert(pipelineStages)
-    .values(ESTAGIOS_PADRAO.map((estagio) => ({ tenantId, ...estagio })))
-    .onConflictDoNothing();
+  await tx.execute(sql`select public.semear_estagios_padrao(${tenantId}::uuid)`);
 }
 
-/** Quantos estágios (ativos ou não) este tenant tem. Usado pelo teto de colunas. */
+/**
+ * Quantas linhas de estágio este tenant tem, ARQUIVADAS OU NÃO. Consumidor: a cura de
+ * semente de `listarEstagios` (`=== 0` = nunca semeado). NÃO é a contagem do teto — para
+ * isso existe `contarEstagiosAtivos` abaixo: o teto é do QUADRO, e contar arquivada nele
+ * tornava a correção do estouro ("Arquivar uma coluna antes de criar outra") falsa — a
+ * agente arquivava, a vaga não abria, e o teto virava paredão sem porta.
+ */
 export async function contarEstagios(tx: TenantDb, tenantId: string): Promise<number> {
   const [linha] = await tx
     .select({ total: sql<number>`count(*)::int` })
     .from(pipelineStages)
     .where(eq(pipelineStages.tenantId, tenantId));
+  return linha?.total ?? 0;
+}
+
+/** A contagem que o teto usa: só as que estão no quadro (`archived_at is null`). */
+export async function contarEstagiosAtivos(tx: TenantDb, tenantId: string): Promise<number> {
+  const [linha] = await tx
+    .select({ total: sql<number>`count(*)::int` })
+    .from(pipelineStages)
+    .where(and(eq(pipelineStages.tenantId, tenantId), isNull(pipelineStages.archivedAt)));
   return linha?.total ?? 0;
 }

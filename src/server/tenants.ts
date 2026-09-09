@@ -33,6 +33,14 @@ const marcaInput = z.object({
   whatsapp: z.string().trim().max(32).optional().or(z.literal('')),
   instagram: z.string().trim().max(80).optional().or(z.literal('')),
   contactEmail: z.email().max(200).optional().or(z.literal('')),
+  /**
+   * 0017 — a assinatura: "[brandName] · por [agentDisplayName]" + "via {APP_NAME}"
+   * (`src/lib/assinatura.ts`). Dado de exibição, público por desenho; ausente, `null` e
+   * `''` significam a MESMA coisa — assinatura só com brandName (`undefined` no patch
+   * continua "não toque nesta coluna", como em todo autosave da casa). A gravação
+   * normaliza `''` para NULL; quem exibe não precisa distinguir.
+   */
+  agentDisplayName: z.string().trim().max(80).optional().or(z.literal('')),
 });
 
 export type MarcaInput = z.infer<typeof marcaInput>;
@@ -49,6 +57,14 @@ export type TenantAtual = {
   brandSecondaryColor: string | null;
   whatsapp: string | null;
   instagram: string | null;
+  /** 0017: a assinatura do agente — o que a tela "Sua marca" edita e as pontas exibem. */
+  agentDisplayName: string | null;
+  /**
+   * O e-mail comercial já era aceito pelo `MarcaInput` desde sempre, mas não vinha na
+   * leitura — a tela que edita precisa LER o valor gravado (campo de autosave que
+   * nasce mostrando vazio com valor no banco é mentira para quem edita).
+   */
+  contactEmail: string | null;
 };
 
 /** Os dados do próprio tenant. `document` fica de fora: é CPF/CNPJ do agente. */
@@ -70,6 +86,8 @@ export async function obterTenantAtual(): Promise<ServiceResult<TenantAtual>> {
           brandSecondaryColor: tenants.brandSecondaryColor,
           whatsapp: tenants.whatsapp,
           instagram: tenants.instagram,
+          agentDisplayName: tenants.agentDisplayName,
+          contactEmail: tenants.contactEmail,
         })
         .from(tenants)
         .limit(1);
@@ -81,6 +99,13 @@ export async function obterTenantAtual(): Promise<ServiceResult<TenantAtual>> {
   });
 }
 
+/**
+ * Grava a marca do próprio tenant — a tela "Sua marca". Patch de autosave: todo campo é
+ * opcional, ausente = não toque; `''` = limpar (vira NULL). 0017 acrescentou
+ * `agentDisplayName`, a segunda metade da assinatura de marca (`src/lib/assinatura.ts`).
+ * A LEITURA dos valores gravados é `obterTenantAtual` — e é dela que a assinatura se
+ * alimenta nas telas.
+ */
 export async function atualizarMarca(input: MarcaInput): Promise<ServiceResult<null>> {
   return comoResultado(async () => {
     const { tenantId } = await requireAuthContext();
@@ -99,7 +124,17 @@ export async function atualizarMarca(input: MarcaInput): Promise<ServiceResult<n
       await exigirContaAtiva(tx, tenantId);
       await tx
         .update(tenants)
-        .set({ ...parsed.data, updatedAt: new Date() })
+        .set({
+          ...parsed.data,
+          // `''` = LIMPAR (a assinatura fica só com brand_name): vira NULL, nunca string
+          // em branco no banco. `undefined` (campo ausente no patch) = não toque nesta
+          // coluna — o drizzle ignora a chave, igual às demais do autosave.
+          agentDisplayName:
+            parsed.data.agentDisplayName === undefined
+              ? undefined
+              : parsed.data.agentDisplayName || null,
+          updatedAt: new Date(),
+        })
         .where(eq(tenants.id, tenantId));
     });
 

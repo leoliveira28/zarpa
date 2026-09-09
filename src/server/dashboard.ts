@@ -158,6 +158,15 @@ export type PropostaParada = {
   dealId: string;
   contactId: string;
   contactName: string;
+  /**
+   * WhatsApp do contato, CRU — exatamente como a agente digitou (`(11) 98888-7777`,
+   * `11988887777`, `+55 11 98888-7777`) ou `null` se ela nunca preencheu. Mesma disciplina
+   * de `listarEmViagem` (`viagens.ts`): o servidor NÃO normaliza e NÃO valida. Quem monta
+   * o link usa `waMeLink` no cliente; sanitizar aqui criaria uma segunda regra de formato
+   * competindo com aquela, e a agente veria um número "consertado" que não é o que ela
+   * digitou.
+   */
+  contactWhatsapp: string | null;
   destination: string | null;
   /** Valor do NEGÓCIO associado (`deals.valueCents`) — proposta não tem valor próprio, é a opção que tem preço. */
   valueCents: number;
@@ -288,6 +297,7 @@ async function calcularResumoDoMes(
       destination: deals.destination,
       contactId: contacts.id,
       contactName: contacts.name,
+      contactWhatsapp: contacts.whatsapp,
     })
     .from(proposals)
     .innerJoin(deals, eq(deals.id, proposals.dealId))
@@ -309,6 +319,7 @@ async function calcularResumoDoMes(
       dealId: linha.dealId,
       contactId: linha.contactId,
       contactName: linha.contactName,
+      contactWhatsapp: linha.contactWhatsapp,
       destination: linha.destination,
       valueCents: linha.valueCents,
       diasParado: diasDesde(maisRecente(linha.sentAt!, linha.lastViewedAt), agoraMs),

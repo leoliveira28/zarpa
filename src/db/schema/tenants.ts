@@ -41,6 +41,17 @@ export const tenants = pgTable(
      */
     instagram: text('instagram'),
 
+    /**
+     * Nome do AGENTE para exibição — a segunda metade da assinatura de marca
+     * ("[brand_name] · por [agent_display_name]", mais a linha "via {APP_NAME}"). É
+     * dado de EXIBIÇÃO, não sensível: sai público na proposta (`/p/`), no roteiro
+     * (`/r/`) e no texto de WhatsApp, e por isso é coluna em claro (nada de cifra).
+     * Nulo ou '' = assinatura só com `brand_name`. Nasce em
+     * `0017_assinatura_do_agente`; quem escreve é `atualizarMarca` (`tenants.ts`),
+     * quem congela no snapshot é `enviarProposta` (`proposals.ts`).
+     */
+    agentDisplayName: text('agent_display_name'),
+
     /** CPF/CNPJ do próprio agente (MEI). Cifrado como qualquer outro documento. */
     document: encryptedText('document_encrypted'),
 

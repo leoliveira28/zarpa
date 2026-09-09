@@ -2,7 +2,7 @@
 
 import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { contacts, deals } from '@/db/schema';
+import { contacts, deals, itineraries, pipelineStages, proposals } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { maskDocument } from '@/lib/crypto';
@@ -590,6 +590,253 @@ export async function obterDocumentoDoContato(
       });
 
       return linha;
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Histórico 360° do contato — a ficha que responde, de cima para baixo:
+// quem é o cliente, onde ele está agora (proposta aberta? em viagem?), quanto
+// ele já comprou e o histórico (negócios, propostas, roteiros).
+//
+// Leitura — não passa pelo gate de assinatura, mesmo desenho de `obterContato`.
+// Tudo sai de tabelas que JÁ EXISTEM: `deals` + `pipeline_stages` (o estágio e
+// o ganho/perda, 0016), `proposals` (via `deal_id`) e `itineraries` (via
+// `deal_id`). Zero tabela nova, zero migration. Nenhuma PII: CPF e nascimento
+// continuam saindo só por `obterDocumentoDoContato`, com auditoria.
+// ---------------------------------------------------------------------------
+
+/** Um negócio do contato, no vocabulário da ficha. */
+export type NegocioDoContato = {
+  id: string;
+  title: string;
+  destination: string | null;
+  /** Rótulo ATUAL da coluna do funil — o agente pode ter renomeado (0015). */
+  stageLabel: string;
+  /** Vêm da COLUNA do funil (`pipeline_stages`), não do enum (S16, 0016). */
+  isWon: boolean;
+  isLost: boolean;
+  valueCents: number;
+  commissionCents: number;
+  /** `AAAA-MM-DD` ou null — mesmo formato de `deals.departure_on`. */
+  departureOn: string | null;
+  returnOn: string | null;
+  /** Só faz sentido quando `isLost`. */
+  lostReason: string | null;
+  closedAt: Date | null;
+  createdAt: Date;
+};
+
+export type PropostaDoContato = {
+  id: string;
+  dealId: string;
+  dealTitle: string;
+  title: string;
+  status: 'draft' | 'sent' | 'viewed' | 'accepted' | 'declined' | 'expired';
+  viewCount: number;
+  sentAt: Date | null;
+  lastViewedAt: Date | null;
+  acceptedAt: Date | null;
+  declinedAt: Date | null;
+  /** `AAAA-MM-DD` ou null. */
+  validUntil: string | null;
+  archivedAt: Date | null;
+};
+
+export type RoteiroDoContato = {
+  id: string;
+  dealId: string;
+  /** Token do link público `/r/<token>` — o link que o cliente recebeu. */
+  publicToken: string;
+  title: string;
+  departureOn: string | null;
+  returnOn: string | null;
+  createdAt: Date;
+};
+
+/** A viagem (negócio ganho com data de ida) nos dois estados de "agora". */
+export type ViagemDoContato = {
+  dealId: string;
+  title: string;
+  destination: string | null;
+  departureOn: string;
+  returnOn: string | null;
+  valueCents: number;
+};
+
+export type HistoricoDoContato = {
+  /** Mais recente primeiro. Teto de 100 — volume de MEI cobre anos. */
+  negocios: NegocioDoContato[];
+  /** Mais recente primeiro (por criação). */
+  propostas: PropostaDoContato[];
+  /** Mais recente primeiro (por criação). */
+  roteiros: RoteiroDoContato[];
+  /** Soma dos negócios fechados como ganho — o "quanto ele já comprou". */
+  totalCompradoCents: number;
+  /** Comissão dos negócios ganhos — o que o cliente já rendeu ao agente. */
+  comissaoGanhaCents: number;
+  totalViagens: number;
+  /** Negócio ganho com `departureOn <= hoje` e volta não terminada. */
+  viagemEmCurso: ViagemDoContato | null;
+  /** Negócio ganho com `departureOn > hoje`, a mais próxima. */
+  proximaViagem: ViagemDoContato | null;
+  /** Proposta `sent`/`viewed` não arquivada, a mais recente — o link que está com ele. */
+  propostaAberta: PropostaDoContato | null;
+};
+
+/**
+ * O histórico completo do contato numa chamada só — a ficha 360° faz três
+ * queries paralelas dentro da MESMA transação (mesmo snapshot de leitura) e o
+ * agregado (totais, viagem em curso, proposta aberta) é calculado em memória:
+ * são no máximo 3 × 100 linhas — somar em SQL economizaria nada enquanto
+ * triplicaria o código.
+ *
+ * Fuso: "hoje" é a data UTC — MESMA convenção de `viagens.ts`/`dashboard.ts`
+ * (`departure_on`/`return_on` são `date` sem fuso; diferença máxima de 3h,
+ * aceita e documentada lá).
+ */
+export async function obterHistoricoDoContato(
+  contatoId: string,
+): Promise<ServiceResult<HistoricoDoContato>> {
+  return comoResultado(async () => {
+    const { tenantId } = await requireAuthContext();
+    const hoje = new Date().toISOString().slice(0, 10);
+
+    return withTenant(tenantId, async (tx) => {
+      const linhasNegocios = await tx
+        .select({
+          id: deals.id,
+          title: deals.title,
+          destination: deals.destination,
+          stageLabel: pipelineStages.label,
+          isWon: pipelineStages.isWon,
+          isLost: pipelineStages.isLost,
+          valueCents: deals.valueCents,
+          commissionCents: deals.commissionCents,
+          departureOn: deals.departureOn,
+          returnOn: deals.returnOn,
+          lostReason: deals.lostReason,
+          closedAt: deals.closedAt,
+          createdAt: deals.createdAt,
+        })
+        .from(deals)
+        .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
+        .where(eq(deals.contactId, contatoId))
+        .orderBy(desc(deals.createdAt))
+        .limit(100);
+
+      const linhasPropostas = await tx
+        .select({
+          id: proposals.id,
+          dealId: proposals.dealId,
+          dealTitle: deals.title,
+          title: proposals.title,
+          status: proposals.status,
+          viewCount: proposals.viewCount,
+          sentAt: proposals.sentAt,
+          lastViewedAt: proposals.lastViewedAt,
+          acceptedAt: proposals.acceptedAt,
+          declinedAt: proposals.declinedAt,
+          validUntil: proposals.validUntil,
+          archivedAt: proposals.archivedAt,
+        })
+        .from(proposals)
+        .innerJoin(deals, eq(deals.id, proposals.dealId))
+        .where(eq(deals.contactId, contatoId))
+        .orderBy(desc(proposals.createdAt))
+        .limit(100);
+
+      const linhasRoteiros = await tx
+        .select({
+          id: itineraries.id,
+          dealId: itineraries.dealId,
+          publicToken: itineraries.publicToken,
+          title: itineraries.title,
+          departureOn: itineraries.departureOn,
+          returnOn: itineraries.returnOn,
+          createdAt: itineraries.createdAt,
+        })
+        .from(itineraries)
+        .innerJoin(deals, eq(deals.id, itineraries.dealId))
+        .where(eq(deals.contactId, contatoId))
+        .orderBy(desc(itineraries.createdAt))
+        .limit(100);
+
+      const negocios: NegocioDoContato[] = linhasNegocios.map((linha) => ({
+        ...linha,
+        departureOn: linha.departureOn ?? null,
+        returnOn: linha.returnOn ?? null,
+        lostReason: linha.lostReason ?? null,
+        closedAt: linha.closedAt ?? null,
+      }));
+      const propostas: PropostaDoContato[] = linhasPropostas.map((linha) => ({
+        ...linha,
+        sentAt: linha.sentAt ?? null,
+        lastViewedAt: linha.lastViewedAt ?? null,
+        acceptedAt: linha.acceptedAt ?? null,
+        declinedAt: linha.declinedAt ?? null,
+        validUntil: linha.validUntil ?? null,
+        archivedAt: linha.archivedAt ?? null,
+      }));
+      const roteiros: RoteiroDoContato[] = linhasRoteiros;
+
+      let totalCompradoCents = 0;
+      let comissaoGanhaCents = 0;
+      let totalViagens = 0;
+      const viagens: ViagemDoContato[] = [];
+
+      for (const negocio of negocios) {
+        if (!negocio.isWon) continue;
+        totalCompradoCents += negocio.valueCents;
+        comissaoGanhaCents += negocio.commissionCents;
+        if (negocio.departureOn) {
+          totalViagens += 1;
+          viagens.push({
+            dealId: negocio.id,
+            title: negocio.title,
+            destination: negocio.destination,
+            departureOn: negocio.departureOn,
+            returnOn: negocio.returnOn,
+            valueCents: negocio.valueCents,
+          });
+        }
+      }
+
+      const viagemEmCurso =
+        viagens.find(
+          (v) =>
+            v.departureOn <= hoje && (v.returnOn === null || hoje <= v.returnOn),
+        ) ?? null;
+      const proximaViagem =
+        viagens
+          .filter((v) => v.departureOn > hoje)
+          .sort((a, b) => a.departureOn.localeCompare(b.departureOn))[0] ?? null;
+
+      // "Aberta" = enviada (ou já aberta) e ainda sem desfecho, não arquivada.
+      // A mais recente por `sentAt` — é o link que está na mão do cliente AGORA.
+      const propostaAberta =
+        propostas
+          .filter(
+            (p) =>
+              !p.archivedAt &&
+              (p.status === 'sent' || p.status === 'viewed') &&
+              p.sentAt !== null,
+          )
+          .sort(
+            (a, b) => (b.sentAt?.valueOf() ?? 0) - (a.sentAt?.valueOf() ?? 0),
+          )[0] ?? null;
+
+      return {
+        negocios,
+        propostas,
+        roteiros,
+        totalCompradoCents,
+        comissaoGanhaCents,
+        totalViagens,
+        viagemEmCurso,
+        proximaViagem,
+        propostaAberta,
+      };
     });
   });
 }
