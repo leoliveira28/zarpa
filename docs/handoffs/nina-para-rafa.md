@@ -1,6 +1,118 @@
 # Nina → Rafa
 
-> Rodada de 2026-09-09 (tarde): Fases 1 e 2 do Monde do lado da interface —
+> Rodada de 2026-09-09 (noite): TELAS DA FASE 3 — `/equipe` completa (membros,
+> convites, assentos), monograma (§8), rótulo de escopo no Resumo (§13.4),
+> quebra por vendedor (§13.5) e reatribuição de negócio na ficha (§13.6).
+> Dois furos de contrato, ambos contornados com honestidade e NÃO consertados
+> por mim (fronteira): os itens 1 e 2 abaixo.
+
+## 1. FURO — `organizationClient()` não existe no client (o mais importante)
+
+`src/lib/auth/client.ts` monta o `createAuthClient` com só `magicLinkClient()`
+no array de plugins. SEM o `organizationClient()`, `authClient.organization`
+funciona em RUNTIME (o client da better-auth é proxy dinâmico — o POST
+`/organization/create-invitation` sai e volta), mas não EXISTE em tipo, então
+`tsc` recusa o acesso natural.
+
+**Meu contorno:** `src/lib/ui/equipeApi.ts` declara uma interface local
+`AuthOrganization` (as quatro mutações: `createInvitation`, `cancelInvitation`,
+`updateMemberRole`, `removeMember`) e chega lá por cast tipado. Os tradutores
+de erro do formato better-auth (`{ error: { message, status } }` → par
+mensagem + correção da casa) moram no mesmo arquivo e são independentes disso.
+
+**Seu conserto:** colar `organizationClient()` (better-auth/client) no array de
+plugins de `src/lib/auth/client.ts` e me avisar. Aí a interface se aposenta e
+o arquivo passa a chamar `authClient.organization.*` direto — os tradutores
+ficam. De olho: com o plugin client, o shape de erro pode ganhar campos
+(`code`); meus tradutores já olham `message`/`status`, teste a recusa de
+limite ("Organization membership limit reached") que é a que mais importa.
+
+## 2. FURO — `NegocioDetalhe` não carrega `agentId`/`agentName`
+
+A ficha do negócio não sabe de quem é. O select de reatribuição (dono only,
+§13.6) precisa do valor ATUAL para mostrar "onde está" antes de mudar.
+
+**Meu contorno** (precedente: a `PropostaCard` já filtra `listarPropostas` por
+`dealId` no cliente): ler `listarNegociosDoFunil()` e achar pelo id — o quadro
+tem os dois campos. Consequência honesta que o desenho assume: negócio
+PERDIDO não volta no quadro (`isLost = false` na query), então ali o valor
+atual é DESCONHECIDO — o campo mostra placeholder "Escolher vendedor" com o
+hint "De quem era não aparece em negócio perdido — escolher aqui reatribui.",
+em vez de fingir que sabe.
+
+**Seu conserto:** espelhar `agentId`/`agentName` (o mesmo LEFT JOIN `user` que
+o quadro já faz) em `obterNegocio`/`NegocioDetalhe`. Aí a segunda leitura
+sai do `VendedorField` e o hint condicional se aposenta.
+
+## 3. Consumido e de pé (nada a fazer)
+
+- `listarEquipe`/`EquipeResumo`: papel NATIVO no rótulo ("Dono(a)"/"Agente" é
+  tradução de tela, o banco fala owner/member); "você" pelo
+  `solicitanteUserId`; `assentos.usados` = membros + convites pendentes (o
+  estado amarelo `usados > pagos` tem tela própria e honesta).
+- `alterarAssentos` com as recusas exatas do §13.3 — Solo e "equipe tem N
+  pessoas" chegam com mensagem + correção e a tela só repassa (os controles já
+  nascem limitados pelo estado de `listarEquipe`; o erro do servidor segue
+  sendo a verdade).
+- `atualizarNegocio` com `agentId` — o guard de dono do servidor é real: o
+  cliente ESCONDE o campo para não-dono, e a recusa `DADOS_INVALIDOS`/campo
+  `agentId` ("Só o dono da conta reatribui negócios.") aparece com "Tentar de
+  novo" junto, na régua da casa.
+- `resumoDoPeriodo`: `escopo` vira rótulo na linha do período ("set 2026 ·
+  Time" / "· Meus" — §13.4: dono sem alternador, membro sem toggle) e
+  `porVendedor` alimenta a seção nova, depois de Resultado das viagens.
+- `organizationId` do convite = `TenantAtual.id` (0019 — id da organization É
+  o id do tenant), via `obterTenantAtual` no mesmo `Promise.all` da carga.
+
+## 4. Decisões minhas (podem te poupar dúvida)
+
+1. **Assentos não é autosave de propósito** — stepper + botão "Aplicar": cada
+   mudança troca a assinatura no Asaas (cancelar + recriar), o que não se faz
+   a cada toque de "+". O rodapé diz o que vai acontecer ANTES ("Vai passar a
+   R$ 39,90/mês por assento além dos inclusos."), e "mandar o mesmo número"
+   nem habilita.
+2. **Undo de remover membro = RECONVIDAR.** Membership removida não se cola de
+   volta; convite sim. O toast avisa "O desfazer reconvida pelo e-mail." — e
+   se o reconvite recusar (assento lotado enquanto isso), toast de erro, sem
+   mentir que voltou.
+3. **Atribuição no card do funil só quando o quadro tem 2+ `agentId`
+   distintos** — membro (escopo `own`) não vê etiqueta redundante em cada
+   card, e dono de conta de um vendedor também não. `agentId: null` vira
+   "sem vendedor" em texto quieto, sem monograma.
+4. **`porVendedor.motivo`**: `'membro_unico'` esconde a seção INTEIRA (Pro de
+   uma pessoa narrando "você é o único" todo mês seria upsell sem graça);
+   `'plano'` vira UMA linha quieta ("A quebra por vendedor é do Studio.") —
+   sem banner de upsell numa tela de leitura.
+
+## 5. Lint — declarei antes que você ouve de outro
+
+A dívida `react-hooks/set-state-in-effect` que você herdou: consertei DUAS
+instâncias em arquivos que esta rodada mexeu de qualquer forma
+(`RelatoriosScreen.tsx`, `FunnelScreen.tsx` — a linha `setStatus` síncrona no
+efeito; recarga mantém o conteúdo em tela até o dado chegar, mesmo critério da
+minha rodada de tarde). `NegocioScreen.tsx` segue com as 5 instâncias
+pré-existentes + 3 warnings de unused pré-existentes — NÃO toquei, são de
+outra rodada. Zero instância nova minha.
+
+## 6. Pendências (nenhuma bloqueia tela no ar)
+
+1. **Convite a quem já tem conta** (§13.7, pendência do PO): hoje a recusa
+   "already a member/invited" vira `ja_participa` ("Esta pessoa já tem convite
+   em aberto ou já faz parte da equipe."). Quando o PO decidir o
+   "aceitar convite logado", o lugar é o `ConviteSheet` + um hint no
+   recusado — me chame.
+2. `NegocioDetalhe.agentId` — item 2 acima, o único com custo de verdade.
+
+---
+
+## Rodada de 2026-09-09 (tarde) — arquivada abaixo, ainda vale o que diz
+
+> Fases 1 e 2 do Monde do lado da interface —
+> modelos de proposta, recibo, resultado por viagem + agregado, ranking de
+> clientes e os dois CSV. O seu §12 chegou NO MEIO da rodada: construí metade
+> contra a ponte sondando o barril e aposentei a sonda com import estático
+> assim que os oito nomes saíram. O que consumi, o que decidi sozinha e o que
+> fica de pedida está aqui embaixo.
 > modelos de proposta, recibo, resultado por viagem + agregado, ranking de
 > clientes e os dois CSV. O seu §12 chegou NO MEIO da rodada: construí metade
 > contra a ponte sondando o barril e aposentei a sonda com import estático

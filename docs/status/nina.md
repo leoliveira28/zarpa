@@ -1,5 +1,118 @@
 # Nina — status
 
+## 2026-09-09 (noite, 2ª) — TELAS DA FASE 3: `/equipe`, monograma, escopo, quebra por vendedor, reatribuição
+
+A fundação do Rafa (§13 do handoff dele) consumida de ponta a ponta. A tela da
+frente é `/equipe`: gente, papel e assento no registro silencioso do miolo —
+zero ilustração, porque a Equipe abre quinze vezes por dia quando existe (e
+nunca quando não existe). Estrutura 1 : 4 : 1 por card; fio como cornija; a
+ÚNICA cor de destaque da tela está onde se clica ("Convidar", "Aplicar").
+
+### 1. Monograma (`src/components/ui/Monogram.tsx`) — §8 à risca
+
+Identidade de agente NUNCA leva cor: o monograma é o `<Rule />` fechado em
+círculo — contorno `border-current`, nunca preenchido, nunca uma cor por
+pessoa (avatar colorido por agente é exatamente o SaaS de template que o
+produto proíbe). Três tamanhos (sm 24 / md 36 / lg 48), iniciais de
+`initials()` (2 letras, nome longo incluído), `aria-hidden` de propósito: o
+nome completo mora SEMPRE ao lado — ler "ML Marina Lima" para leitor de tela é
+ler duas vezes. O usuário atual se distingue por PESO no nome (semibold +
+"· você"), nunca por fundo. Em `KitchenSink` com seção própria: tamanhos,
+herança de `text-muted`/`text-subtle` (gradação de tinta, não matiz) e a linha
+de lista montada nos dois temas.
+
+### 2. `/equipe` (`page.tsx` + `EquipeScreen.tsx`)
+
+Membros (monograma + nome + e-mail + papel + "desde {data}"), convites
+pendentes ("Convidado por {nome} em {data} · vence {quando}"), assentos com o
+número grande tabular ("{usados} de {pagos} assentos em uso"). Papel nativo do
+banco, rótulo de tela: owner → "Dono(a)", member → "Agente", admin → "Admin".
+Em si mesmo: ZERO ação (demitir-se não é tarefa de tela); dono identifica o
+time pelo `solicitanteUserId` que o servidor manda. Entrada no shell: lateral
+no desktop, ícone quieto no topo no celular (a barra inferior já está no
+limite de cinco alvos) — `TeamIcon` desenhada em `icons.tsx` (duas pessoas, a
+de trás em arco; não é o ClientsIcon, que é UMA pessoa com o cliente).
+
+Decisões que tomei sozinha:
+
+- **Assentos com stepper + "Aplicar", não autosave.** Cada mudança troca a
+  assinatura no Asaas (cancelar + recriar no servidor) — não se salva no blur
+  como campo de ficha. O rodapé anuncia o efeito ANTES do toque e "mesmo
+  número" nem habilita o botão. Solo: sem stepper, uma linha honesta ("O Solo
+  é para quem trabalha sozinho") + "Migrar para o Pro".
+- **`usados > pagos` tem estado amarelo próprio** (corrida rara do gate
+  N+1): esconder seria maquiar a conta que vai chegar — o card warn diz o
+  número real e oferece o conserto ("Ajustar para N").
+- **Destrutivos com desfazer de 8s, na régua.** Cancelar convite e remover
+  membro removem OTIMISTAMENTE e oferecem desfazer — que RECONVIDA (membership
+  removida não se cola de volta; convite sim, e o toast avisa disso). Mudar
+  papel também tem desfazer (restaura o papel anterior). Recusa do servidor
+  sempre vence o otimismo: reload + toast de erro com a mensagem de lá.
+- **Sheet de convite é formulário, não linha nova**: e-mail com validação
+  local antes da rede, papel com hint ("vende e cuida do próprio cliente" /
+  "também convida"), recusa INLINE com o conserto junto — limite de assentos
+  fecha o sheet e rola até os assentos; rede caiu, "Tentar de novo" reenvia.
+  Solo avisa antes, mas o botão não trava: a recusa do plugin é a verdade.
+- **Escrita da equipe NÃO é ServiceResult** — `src/lib/ui/equipeApi.ts`
+  traduz o `{ error: { message, status } }` better-auth para o par
+  mensagem + correção da casa (limite de assentos, já participa, sem
+  permissão, sessão, rede). O furo do `organizationClient()` ausente está no
+  handoff com o contorno.
+
+### 3. Resumo do período (`RelatoriosScreen.tsx`) — §13.4 + §13.5
+
+- A linha do período agora diz DE QUEM SÃO os números, lido do
+  `resumo.escopo` que o SERVIDOR mandou: "set 2026 · Time" (dono) /
+  "· Meus" (membro). Sem alternador para ninguém — o board já vem escopado;
+  toggle no cliente seria re-filtrar verdade alheia.
+- Seção "Vendas por vendedor" entre Resultado das viagens e Receita por
+  origem: tabela com monograma sm + nome; `agentId: null` é linha de verdade
+  ("Sem vendedor" — venda não classificada é categoria, não ruído); dinheiro
+  com `reserveFor` pelo maior valor da tabela. Indisponível por plano: UMA
+  linha quieta ("A quebra por vendedor é do Studio.") — upsell não grita numa
+  tela de leitura. `membro_unico`: a seção some inteira.
+
+### 4. Funil e ficha — §13.6
+
+- Card do funil ganha a quarta linha (monograma sm + primeiro nome) SÓ quando
+  o quadro tem 2+ `agentId` distintos — membro não vê etiqueta redundante, e
+  conta de um vendedor também não. `null` → "sem vendedor" quieto. O sobrevoo
+  do arrasto reproduz a MESMA linha (um desenho só, dois lugares).
+- Ficha do negócio: campo "Vendedor" no card Viagem, dono-only (não-dono nem
+  vê), select com "Sem vendedor" + os membros, commit no change, "Salvo"
+  discreto, desfazer via toast. Esqueleto na MESMA altura do campo: o card não
+  pula quando a equipe chega. Valor atual lido do quadro (furo do
+  `NegocioDetalhe` no handoff); negócio perdido mostra o hint honesto de que
+  reatribuir sem saber de quem era.
+
+### 5. Números
+
+- `npx tsc --noEmit`: **0 erros**, verificado após CADA tela (nunca acumulei).
+- `npm run build`: limpo; `/equipe` presente como rota dinâmica.
+- `npm test` (suite inteira): **32 arquivos / 605 testes passando**, guards de
+  design incluídos (paridade de tema, só transform/opacity, reduced-motion).
+- Lint nos meus arquivos novos (`Monogram`, `equipeApi`, `EquipeScreen`,
+  `page`): **0 problemas**. Nos tocados: zerei 2 instâncias pré-existentes de
+  `set-state-in-effect` (Relatorios, Funnel); `NegocioScreen` mantém as 5
+  instâncias + 3 warnings pré-existentes (não são desta rodada).
+- 390px: linhas de membro/convite em uma linha de nome + e-mail truncados com
+  papel à direita; ações do dono (select sm 128px + "Remover") descem para uma
+  segunda linha alinhada ao texto (`pl-12`) — alvo de toque nunca abaixo de
+  36px; sheet de convite full-width.
+
+### 6. Arquivos
+
+`src/components/ui/Monogram.tsx` (novo),
+`src/lib/ui/equipeApi.ts` (novo),
+`src/app/(app)/equipe/` (novo: `page.tsx` + `EquipeScreen.tsx`),
+`src/components/app/AppShell.tsx` (entradas /equipe),
+`src/components/app/icons.tsx` (`TeamIcon`),
+`src/app/(app)/relatorios/RelatoriosScreen.tsx` (escopo + porVendedor),
+`src/app/(app)/funil/FunnelScreen.tsx` (atribuição no card),
+`src/app/(app)/funil/[id]/NegocioScreen.tsx` (`VendedorField`),
+`src/app/(app)/kitchen-sink/KitchenSink.tsx` (seção Monogram),
+`docs/handoffs/nina-para-rafa.md` (rodada nova: 2 furos de contrato).
+
 ## 2026-09-09 (noite) — Prévia do modelo na "Nova proposta" (`obterConteudoDoTemplate` ganhou chamador)
 
 O pendente que eu mesma registrei: a função existia no servidor sem nenhum
