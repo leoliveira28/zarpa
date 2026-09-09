@@ -102,7 +102,7 @@ export function VendasScreen({ periodoParam }: { periodoParam?: string }) {
             Plano e cobrança
           </Link>
         </div>
-        <MoneyHubTabs />
+        <MoneyHubTabs periodoParam={periodoParam} />
       </header>
 
       {/* O recorte de leitura — §1, mesmo seletor do /hoje e das outras tabs

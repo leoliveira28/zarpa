@@ -25,6 +25,29 @@ export function waMeLink(
 }
 
 /**
+ * Mensagem pronta do "Cobrar" das propostas paradas (/hoje). Não cobra: retoma.
+ * Quem some depois de receber a proposta quase nunca decidiu não — perdeu o
+ * fio. A mensagem devolve o fio e oferece a saída fácil ("me diz o que ajusto"),
+ * sem cobrança e sem prazo inventado.
+ *
+ * `PropostaParada` (dashboard.ts) ainda NÃO traz o WhatsApp do contato — por
+ * isso o CTA copia o texto em vez de abrir `wa.me`. Pedido aberto em
+ * `docs/handoffs/nina-para-rafa.md`; no dia em que o campo existir, é trocar a
+ * cópia por `waMeLink(contactWhatsapp, mensagemCobranca(...))`.
+ */
+export function mensagemCobranca(
+  contactName: string,
+  destination: string | null,
+): string {
+  const destino = destination ? ` da viagem para ${destination}` : " da proposta";
+  return [
+    `Olá, ${contactName}! Passando para saber o que achou${destino}.`,
+    "Se alguma coisa não ficou do jeito que você imaginou — data, hotel, valor —, me diz que eu ajusto.",
+    "Fico à disposição!",
+  ].join(" ");
+}
+
+/**
  * Mensagem pronta do ÚNICO CTA da seção "Em viagem" (/hoje): pedir depoimento
  * de quem já voltou. Tom de agente, sem gênero forçado, curta o bastante para
  * ser respondida num bilhete — a mesma doutrina do `suggestedMessage` de

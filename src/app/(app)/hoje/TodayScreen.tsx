@@ -36,7 +36,7 @@ import {
   formatTime,
 } from "@/lib/ui/format";
 import { formatarRotuloPeriodo, parseParamPeriodo } from "@/lib/ui/periodo";
-import { mensagemDepoimento, waMeLink } from "@/lib/ui/whatsapp";
+import { mensagemCobranca, mensagemDepoimento, waMeLink } from "@/lib/ui/whatsapp";
 import { useSession } from "@/lib/auth/client";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -65,7 +65,6 @@ import {
 import {
   CakeIcon,
   ChatIcon,
-  ChevronRightIcon,
   ClockIcon,
   CopyIcon,
   DownloadIcon,
@@ -708,7 +707,13 @@ export function TodayScreen({ periodoParam }: { periodoParam?: string }) {
           <Card tone="warn" className="overflow-hidden">
             <ul className="divide-y divide-warn/20">
               {month.paradas.itens.map((item) => (
-                <ParkedProposalRow key={item.id} item={item} />
+                <ParkedProposalRow
+                  key={item.id}
+                  item={item}
+                  // Teto da lista: sem ele, cada linha reservava a própria
+                  // largura e o "Cobrar" escorregava de linha para linha.
+                  reserveFor={Math.max(1, ...month.paradas.itens.map((i) => i.valueCents))}
+                />
               ))}
             </ul>
           </Card>
@@ -1088,8 +1093,30 @@ function OpenedPreview() {
  * o follow-up no WhatsApp — mesmo placeholder do S4, agora sobre a proposta
  * certa.
  */
-function ParkedProposalRow({ item }: { item: PropostaParada }) {
+function ParkedProposalRow({ item, reserveFor }: { item: PropostaParada; reserveFor: number }) {
   const toast = useToast();
+  const [copiado, setCopiado] = React.useState(false);
+
+  async function copiarCobranca() {
+    const texto = mensagemCobranca(item.contactName, item.destination);
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiado(true);
+      window.setTimeout(() => setCopiado(false), 2000);
+      toast.show({
+        title: "Mensagem copiada",
+        description: `Cole no WhatsApp de ${item.contactName}.`,
+        tone: "ok",
+      });
+    } catch {
+      toast.show({
+        title: "Não consegui copiar",
+        description: "Selecione e copie o texto manualmente.",
+        tone: "danger",
+      });
+    }
+  }
+
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
       <span className="flex min-w-0 flex-1 flex-col">
@@ -1108,21 +1135,20 @@ function ParkedProposalRow({ item }: { item: PropostaParada }) {
         </span>
       </span>
 
-      <Money cents={item.valueCents} size="15" align="right" />
+      <Money cents={item.valueCents} size="15" align="right" reserveFor={reserveFor} />
 
-      <Button
-        size="sm"
-        variant="secondary"
-        onPointerDown={() =>
-          toast.show({
-            title: "Mensagem preparada",
-            description: `Follow-up de ${item.contactName} pronto para enviar no WhatsApp.`,
-            tone: "ok",
-          })
-        }
-      >
-        Cobrar
-        <ChevronRightIcon className="size-3.5" />
+      {/*
+       * O "Cobrar" era um placeholder do S4 que só mostrava um toast dizendo
+       * que a mensagem estava "pronta para enviar" — e não havia mensagem
+       * nenhuma. Botão que finge ter agido é pior que botão ausente: a agente
+       * confia, não envia, e perde a venda achando que enviou. Agora ele copia
+       * de verdade o texto do follow-up (mesmo caminho do "Copiar mensagem"
+       * das tarefas de hoje, logo acima nesta tela) e o rótulo diz o que ele
+       * faz. Vira link `wa.me` no dia em que `PropostaParada` trouxer o
+       * WhatsApp do contato (pedido em docs/handoffs/nina-para-rafa.md).
+       */}
+      <Button size="sm" variant="secondary" onPointerDown={() => void copiarCobranca()}>
+        {copiado ? "Copiada" : "Copiar cobrança"}
       </Button>
     </li>
   );

@@ -224,12 +224,21 @@ function SideNav({ activeHref }: { activeHref: string | null }) {
         >
           Integrações
         </Link>
-        <Link
-          href="/kitchen-sink"
-          className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
-        >
-          Kitchen sink
-        </Link>
+        {/*
+         * Bancada de design, não tela de produto. `src/middleware.ts` já
+         * redireciona a ROTA para /hoje em produção; sem esta guarda o link
+         * sobreviveria ao bloqueio e viraria porta que não abre — o pior tipo
+         * de elemento de interface. Mesma condição do middleware, avaliada em
+         * build time pelo Next (a string some do bundle de produção).
+         */}
+        {process.env.NODE_ENV === "production" ? null : (
+          <Link
+            href="/kitchen-sink"
+            className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
+          >
+            Kitchen sink
+          </Link>
+        )}
         <div className="flex items-center justify-between gap-2 px-1">
           <span className="text-13 text-muted">Tema</span>
           <ThemeToggle />

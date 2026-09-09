@@ -133,7 +133,7 @@ export function FinanceiroScreen({ periodoParam }: { periodoParam?: string }) {
             Plano e cobrança
           </Link>
         </div>
-        <MoneyHubTabs />
+        <MoneyHubTabs periodoParam={periodoParam} />
       </header>
 
       {/* O recorte de leitura — §1, mesmo seletor do /hoje e das outras tabs
@@ -201,6 +201,11 @@ function RecebiveisSection({
 
   const overdue = open.filter((p) => diasParaVencimento(p.venceEm) < 0).length;
   const totalOpen = open.reduce((sum, p) => sum + p.valorCents, 0);
+  // Teto de largura POR LISTA (a mesma régua dos MonthCards e das tabelas de
+  // /relatorios): a coluna de dinheiro tem que ser uma coluna, não N valores
+  // soltos que empurram a ação de cada linha para um lugar diferente.
+  const maxAberto = Math.max(1, ...open.map((p) => p.valorCents));
+  const maxAcertado = Math.max(1, ...settled.map((p) => p.valorCents));
 
   async function handleMarkPaid(parcela: ParcelaComVenda) {
     const result = await marcarParcelaPaga(parcela.id);
@@ -242,7 +247,11 @@ function RecebiveisSection({
           {open.map((parcela, index) => (
             <React.Fragment key={parcela.id}>
               {index > 0 ? <Rule inner /> : null}
-              <RecebivelRow parcela={parcela} onMarkPaid={() => void handleMarkPaid(parcela)} />
+              <RecebivelRow
+                parcela={parcela}
+                reserveFor={maxAberto}
+                onMarkPaid={() => void handleMarkPaid(parcela)}
+              />
             </React.Fragment>
           ))}
         </Card>
@@ -270,7 +279,7 @@ function RecebiveisSection({
           {settled.map((parcela, index) => (
             <React.Fragment key={parcela.id}>
               {index > 0 ? <Rule inner /> : null}
-              <RecebivelRow parcela={parcela} />
+              <RecebivelRow parcela={parcela} reserveFor={maxAcertado} />
             </React.Fragment>
           ))}
         </Card>
@@ -281,9 +290,15 @@ function RecebiveisSection({
 
 function RecebivelRow({
   parcela,
+  reserveFor,
   onMarkPaid,
 }: {
   parcela: ParcelaComVenda;
+  /** Maior valor da LISTA — a coluna de dinheiro alinha entre linhas, e o
+   * "Marcar paga" para de escorregar de uma linha para a outra. `reserveFor`
+   * com o próprio valor (como estava) só reserva o que já se ocupa: não
+   * reserva nada. */
+  reserveFor: number;
   onMarkPaid?: () => void;
 }) {
   const dias = diasParaVencimento(parcela.venceEm);
@@ -308,7 +323,7 @@ function RecebivelRow({
         </span>
       </div>
 
-      <Money cents={parcela.valorCents} size="15" reserveFor={parcela.valorCents} />
+      <Money cents={parcela.valorCents} size="15" reserveFor={reserveFor} />
 
       {onMarkPaid ? <CardAction onClick={onMarkPaid}>Marcar paga</CardAction> : null}
     </div>
@@ -332,6 +347,13 @@ function ComissaoSection({
     status: option,
     vendas: vendas.filter((v) => v.comissaoStatus === option),
   }));
+
+  // Dois tetos diferentes, porque são duas colunas diferentes: os três tiles
+  // mostram SOMAS (e trocar o status de uma venda move valor de um tile para
+  // o outro — sem teto comum, os três números mudam de largura juntos), a
+  // lista mostra valores individuais.
+  const maxTile = Math.max(1, ...totals.map((t) => t.vendas.reduce((sum, v) => sum + v.comissaoPrevistaCents, 0)));
+  const maxComissao = Math.max(1, ...vendas.map((v) => v.comissaoPrevistaCents));
 
   const ordered = [...vendas].sort((a, b) => {
     // atrasada primeiro, depois prevista, depois recebida — a mesma ordem em
@@ -368,7 +390,7 @@ function ComissaoSection({
                     cents={group.reduce((sum, v) => sum + v.comissaoPrevistaCents, 0)}
                     size="20"
                     align="left"
-                    reserveFor={Math.max(1, ...vendas.map((v) => v.comissaoPrevistaCents))}
+                    reserveFor={maxTile}
                   />
                   <span className="text-13 tabular-nums text-muted">
                     {group.length} {group.length === 1 ? "venda" : "vendas"}
@@ -382,7 +404,7 @@ function ComissaoSection({
             {ordered.map((venda, index) => (
               <React.Fragment key={venda.id}>
                 {index > 0 ? <Rule inner /> : null}
-                <ComissaoRow venda={venda} onPatched={onPatched} />
+                <ComissaoRow venda={venda} reserveFor={maxComissao} onPatched={onPatched} />
               </React.Fragment>
             ))}
           </Card>
@@ -394,9 +416,12 @@ function ComissaoSection({
 
 function ComissaoRow({
   venda,
+  reserveFor,
   onPatched,
 }: {
   venda: VendaResumo;
+  /** Maior comissão da lista — mesma razão do `RecebivelRow`. */
+  reserveFor: number;
   onPatched: (id: string, update: Partial<VendaResumo>) => void;
 }) {
   const toast = useToast();
@@ -428,7 +453,7 @@ function ComissaoRow({
         </span>
       </div>
 
-      <Money cents={venda.comissaoPrevistaCents} size="15" reserveFor={venda.comissaoPrevistaCents} />
+      <Money cents={venda.comissaoPrevistaCents} size="15" reserveFor={reserveFor} />
 
       <Select
         value={venda.comissaoStatus}

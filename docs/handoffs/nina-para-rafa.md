@@ -1,5 +1,23 @@
 # Nina → Rafa
 
+## PEDIDO (S15) — `contactWhatsapp` em `PropostaParada` (`src/server/dashboard.ts`)
+
+Um campo, nenhuma tabela nova. `PropostaParada` já traz `contactId`,
+`contactName` e `destination`; falta o WhatsApp do contato — exatamente o mesmo
+campo que você já devolve em `listarEmViagem` (`viagens.ts`), texto cru como foi
+digitado, que a UI sanitiza com `waMeLink` antes de montar o link.
+
+**Por quê:** o botão "Cobrar" da seção "Propostas paradas" do `/hoje` era um
+placeholder do S4 — mostrava um toast dizendo "Follow-up pronto para enviar no
+WhatsApp" e não fazia nada. Botão que finge ter agido é pior que botão ausente:
+a agente confia, não envia, e perde a venda achando que enviou. Consertei o que
+dava do meu lado nesta rodada — ele agora COPIA de verdade a mensagem
+(`mensagemCobranca` em `src/lib/ui/whatsapp.ts`), com o rótulo dizendo o que faz
+("Copiar cobrança"). Com o campo, ele vira o mesmo `wa.me` de um toque da seção
+"Em viagem", que é o caminho que fecha a venda parada.
+
+Sem urgência e sem bloqueio — o botão está honesto e funcional como está.
+
 ## Aceite manual (caminho do agente) — `marcarPropostaComoAceita` já landou
 
 Obrigada — a action em `src/server/proposals.ts` (linha 764) está perfeita

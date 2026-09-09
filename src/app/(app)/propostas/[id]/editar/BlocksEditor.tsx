@@ -32,6 +32,7 @@ import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { PlusIcon, SearchIcon, UploadIcon } from "@/components/app/icons";
+import { Rule } from "@/components/plates";
 import { CONTENT_FIELDS, KIND_LABEL } from "@/lib/ui/blockContent";
 import { cn } from "@/lib/ui/cn";
 import { usePrefersReducedMotion } from "@/lib/ui/motion";
@@ -52,6 +53,58 @@ import { useAutosave } from "@/lib/ui/useAutosave";
    de escopos diferentes na mesma lista arrastável bagunçaria a posição de
    quem não devia ter mudado.
    ========================================================================== */
+
+/* -----------------------------------------------------------------------------
+   Modelos de bloco de texto — o pós-venda que ninguém lembra de escrever
+   -----------------------------------------------------------------------------
+   O bloco "texto" já podia carregar contatos, documentos e dicas: ele sobrevive
+   ao `gerarRoteiro` e sai inteiro no roteiro público (`src/server/itineraries.ts`
+   não filtra `text`). O que faltava era DESCOBERTA — "Texto" é um rótulo que não
+   sugere nada, e o campo em branco às 23h não vira "contato do guia local".
+
+   Então: três largadas, não uma estrutura nova. Continua sendo um bloco `text`
+   comum — mesmo schema, mesmo contrato com o backend (`criarBloco` já aceita
+   `title`/`body`), mesma edição livre depois. O esqueleto tem rótulo e dois
+   pontos, e o valor fica em branco de propósito: é uma lista de perguntas para
+   a agente responder, não texto pronto para o cliente ler.
+   -------------------------------------------------------------------------- */
+
+type ModeloDeTexto = { id: string; title: string; body: string };
+
+const MODELOS_DE_TEXTO: ModeloDeTexto[] = [
+  {
+    id: "contatos",
+    title: "Contatos de emergência",
+    body: [
+      "Hotel: ",
+      "Guia local: ",
+      "Agência (eu): ",
+      "Emergência no destino: ",
+    ].join("\n"),
+  },
+  {
+    id: "documentos",
+    title: "Documentos necessários",
+    body: [
+      "Passaporte válido até: ",
+      "Visto: ",
+      "Vacinas exigidas: ",
+      "Voucher: impresso ou digital",
+      "Seguro viagem — apólice: ",
+    ].join("\n"),
+  },
+  {
+    id: "uteis",
+    title: "Informações úteis",
+    body: [
+      "Moeda e câmbio: ",
+      "Clima na data: ",
+      "Tomada e voltagem: ",
+      "Fuso horário: ",
+      "O que levar: ",
+    ].join("\n"),
+  },
+];
 
 const NEW_BLOCK_KINDS: BlocoKind[] = [
   "hotel",
@@ -557,17 +610,28 @@ function AddBlockSheet({
   const toast = useToast();
   const [tab, setTab] = React.useState<"novo" | "biblioteca">("novo");
   const [creating, setCreating] = React.useState<BlocoKind | null>(null);
+  const [creatingModelo, setCreatingModelo] = React.useState<string | null>(null);
 
-  async function handleCreateKind(kind: BlocoKind) {
-    setCreating(kind);
-    const result = await criarBloco(proposta.id, { kind, optionId: scope });
-    setCreating(null);
+  async function criar(input: { kind: BlocoKind; title?: string; body?: string }) {
+    const result = await criarBloco(proposta.id, { ...input, optionId: scope });
     if (!result.ok) {
       avisarRecusaDeEscrita(result);
       toast.show({ title: "Não consegui adicionar o bloco", description: result.mensagem, tone: "danger" });
       return;
     }
     onCreated(result.data);
+  }
+
+  async function handleCreateKind(kind: BlocoKind) {
+    setCreating(kind);
+    await criar({ kind });
+    setCreating(null);
+  }
+
+  async function handleCreateModelo(modelo: ModeloDeTexto) {
+    setCreatingModelo(modelo.id);
+    await criar({ kind: "text", title: modelo.title, body: modelo.body });
+    setCreatingModelo(null);
   }
 
   return (
@@ -583,20 +647,51 @@ function AddBlockSheet({
         </div>
 
         {tab === "novo" ? (
-          <div className="grid grid-cols-2 gap-2 py-2 sm:grid-cols-3">
-            {NEW_BLOCK_KINDS.map((kind) => (
-              <button
-                key={kind}
-                type="button"
-                disabled={creating !== null}
-                onPointerDown={() => void handleCreateKind(kind)}
-                className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-md border border-line px-2 py-3 text-center hover:border-line-strong hover:bg-surface-2 disabled:opacity-50"
-              >
-                <span className="text-15 font-medium text-ink">{KIND_LABEL[kind]}</span>
-                {creating === kind ? <span className="text-13 text-muted">Criando…</span> : null}
-              </button>
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-2 gap-2 py-2 sm:grid-cols-3">
+              {NEW_BLOCK_KINDS.map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  disabled={creating !== null || creatingModelo !== null}
+                  onPointerDown={() => void handleCreateKind(kind)}
+                  className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-md border border-line px-2 py-3 text-center hover:border-line-strong hover:bg-surface-2 disabled:opacity-50"
+                >
+                  <span className="text-15 font-medium text-ink">{KIND_LABEL[kind]}</span>
+                  {creating === kind ? <span className="text-13 text-muted">Criando…</span> : null}
+                </button>
+              ))}
+            </div>
+
+            {/*
+             * Segundo registro, abaixo da cornija: a grade acima é a ESCOLHA do
+             * tipo; isto aqui é um atalho de largada para o tipo "texto". Por
+             * isso vem depois do fio, em tipo menor, e nunca no accent — não
+             * disputa com a grade, complementa. Um fio separa registros; não
+             * abri uma segunda caixa.
+             */}
+            <Rule loose />
+            <div className="flex flex-col gap-2 pb-2">
+              <p className="text-13 text-muted">
+                Ou comece por um modelo — o que o cliente precisa ter em mãos na viagem. Vira um
+                bloco de texto comum, seu para editar, e segue para o roteiro.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {MODELOS_DE_TEXTO.map((modelo) => (
+                  <Button
+                    key={modelo.id}
+                    variant="secondary"
+                    size="sm"
+                    disabled={creating !== null}
+                    loading={creatingModelo === modelo.id}
+                    onPointerDown={() => void handleCreateModelo(modelo)}
+                  >
+                    {modelo.title}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </>
         ) : (
           <LibraryPicker
             proposta={proposta}

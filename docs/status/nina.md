@@ -1,5 +1,201 @@
 # Nina — status
 
+## S15 — pronta para produção: o link morto, a varredura e o pós-venda descoberto
+
+Rodada de acabamento, não de feature. Quatro frentes: esconder o Kitchen sink em
+produção, varrer as telas atrás de beco morto e mock vazado, dar DESCOBERTA ao
+bloco de texto do pós-venda, e confirmar os quatro fluxos do S14 sem regressão.
+`tsc --noEmit` limpo, `next build` limpo (26 rotas, middleware registrado),
+guardas de direção **6/6**. Lint: 7 erros / 4 avisos — **exatamente os mesmos
+números do HEAD limpo** (conferi com `git stash`), todos `set-state-in-effect`
+e imports não usados pré-existentes. Nada meu.
+
+### §1 — "Kitchen sink" some do SideNav em produção
+
+`AppShell.tsx`, rodapé da barra lateral: o link agora está atrás de
+`process.env.NODE_ENV === "production" ? null : (...)` — a MESMA condição do
+`src/middleware.ts` do PO, avaliada em build time pelo Next (a string nem entra
+no bundle de produção). Em dev/preview continua onde estava, entre Integrações e
+Tema. Confirmado por curl no dev server: o link está presente no HTML de `/hoje`.
+
+### §2 — Varredura de produção: o que achei
+
+Varri `src/app/(app)/**` e `src/components/**` com script (todo `<Button>`,
+`<button>` e `<CardAction>` sem `onClick`/`onPointerDown`/`href`/`asChild`/
+`type="submit"`; todo `href` contra a árvore real de rotas; todo `<Money>` sem
+`reserveFor`; `TODO/FIXME/mock/em breve`; toda ocorrência dos personagens de
+exemplo).
+
+**CONSERTADO**
+
+1. **O "Cobrar" das propostas paradas era teatro** (`/hoje`,
+   `ParkedProposalRow`). Placeholder do S4: mostrava um toast dizendo
+   *"Follow-up de X pronto para enviar no WhatsApp"* e **não fazia nada** — não
+   copiava, não abria, não preparava mensagem nenhuma. É pior que o botão sem
+   `onClick` do S13b: aquele não respondia, este MENTIA que agiu. A agente
+   confia, não envia, e perde a venda achando que enviou. Agora ele copia de
+   verdade (`mensagemCobranca` em `src/lib/ui/whatsapp.ts` — retomada, não
+   cobrança: "me diz que eu ajusto", sem prazo inventado), com o mesmo caminho
+   de clipboard já usado em "Copiar mensagem" das tarefas, e o rótulo passou a
+   dizer o que ele faz: **"Copiar cobrança"** → "Copiada" por 2s.
+   `PropostaParada` (dashboard.ts) não traz o WhatsApp do contato, então
+   `wa.me` de um toque depende de um campo da Rafa — pedido aberto em
+   `docs/handoffs/nina-para-rafa.md`, sem bloqueio.
+2. **O hub do dinheiro perdia o período ao trocar de aba.** `MoneyHubTabs`
+   linkava `/vendas`, `/financeiro` e `/relatorios` sem query: quem estava
+   olhando o trimestre em Vendas e tocava em Relatórios caía no mês corrente,
+   em silêncio — a interface desfazendo a escolha da agente sem avisar, contra
+   o §1 inteiro ("o período mora na URL"). As três abas são UMA pergunta sobre
+   a MESMA janela de tempo. Agora carregam o `?periodo=`, recebido por prop da
+   página (server), como o `PeriodoSeletor` — sem `useSearchParams` para reler
+   o que já desceu. **Param torto não viaja**: `chaveDoParamPeriodo(...) ===
+   "invalido"` derruba o parâmetro, porque o `PeriodoInvalidoCard` já explicou
+   o problema na tela onde ele apareceu e propagar lixo faria o erro perseguir
+   a agente pelo hub. Verificado por curl: `/vendas?periodo=2026-01-01..2026-12-31`
+   renderiza os três hrefs com a faixa; `?periodo=lixo` renderiza os três
+   limpos + o card de aviso.
+3. **Três colunas de dinheiro que não eram colunas.** `reserveFor={o próprio
+   valor}` reserva o que já se ocupa — ou seja, não reserva nada: o número de
+   cada linha tinha a largura dele, e a ação ao lado ("Marcar paga", o Select de
+   status, o "Cobrar") escorregava de linha para linha. Corrigido com o teto da
+   LISTA, a mesma régua dos MonthCards e das tabelas de `/relatorios`:
+   `RecebivelRow` (dois tetos — aberto e acertado são duas listas),
+   `ComissaoRow`, e `ParkedProposalRow` do `/hoje`, que nem `reserveFor` tinha.
+   Bônus no mesmo arquivo: os três tiles de comissão reservavam pelo maior valor
+   INDIVIDUAL enquanto exibem SOMAS — e trocar o status de uma venda move valor
+   de um tile para outro. Agora reservam pelo maior dos três totais.
+4. **"Recomendar esta opção" falhava em silêncio** (editor de proposta) —
+   pendência que eu mesma registrei no S13a e que não custava mais nada
+   fechar. Era `if (result.ok) onUpdated(...)` sem ramo de recusa: a caixa é
+   controlada, então voltava sozinha ao estado anterior e ninguém dizia por
+   quê (inclusive com a conta bloqueada por dunning, onde o banner nunca
+   chegava). Agora tem `avisarRecusaDeEscrita` + toast com a mensagem do
+   servidor e a re-tentativa como botão do próprio toast.
+
+**LIMPO (varri e não achei nada)**
+
+- **Nenhum** botão/ação sem handler nas telas reais. Os dois positivos do
+  script são falsos: `CardAction` dentro de `DialogClose asChild`
+  (`DealStageMenu`) e o `<button>` do `PopoverPrimitive.Trigger asChild`
+  (`Combobox`) — os dois recebem o handler do Radix.
+- **Nenhum** `href` quebrado: os 12 literais e os 6 template hrefs batem com a
+  árvore de rotas do build.
+- **Nenhum** dado de exemplo vazado para tela real. Todas as ocorrências de
+  Marina / Fernando de Noronha / CVC Noronha estão dentro de `preview` de
+  `EmptyState` (o registro da casa) ou em `placeholder` de campo. O `9900` da
+  `/cobranca` é preview de fatura; os planos vêm de `listarPlanos`.
+- **Nenhum** outro toast que finge ação (o "Cobrar" era o último).
+- Estados vazios sem `action` própria: todos têm o CTA no `CardFooter` do card
+  que os contém (proposta do negócio, parcelas da venda) ou são leitura pura
+  (linha do tempo, faturas). Não é beco.
+- `TODO/FIXME/mock/em breve`: zero. Os 30 casamentos do grep são a palavra
+  "todo" em português.
+
+**DECISÃO CONSCIENTE (não é bug)**
+
+- **A barra inferior e o SideNav resetam o período** ao entrar no hub por
+  "Dinheiro". É navegação global ("vá para a seção"), não ajuste de leitura: o
+  recorte é do hub, e o link que a agente compartilha continua carregando o
+  recorte dentro dele. Carregar `?periodo=` no shell obrigaria toda rota a
+  saber de período, todo dia.
+- **`rounded-lg` sobrevive em 5 pontos** (fantasma de arrasto do funil,
+  skeletons que precisam casar com o raio do card que substituem, a folha da
+  prévia, a dropzone do importador). O proibido é `rounded-lg` em TUDO; o
+  sistema usa `rounded-md`/`sm`/`pill` e o gate passa. Não vou fazer churn.
+
+### §3 — Pós-venda: o bloco de texto ganhou largada
+
+O diagnóstico do PO estava certo — o problema nunca foi capacidade, foi
+descoberta. O bloco `text` já sobrevive ao `gerarRoteiro` e sai inteiro no
+roteiro público; o que não existia era alguém dizendo à agente, às 23h, que
+"Texto" é onde moram o contato do guia local e a validade do passaporte.
+
+**Onde:** dentro do `AddBlockSheet` do `BlocksEditor`, na aba "Novo" — o
+instante exato em que ela está escolhendo o que adicionar. **Abaixo de um
+`Rule`**, em segundo registro: a grade de 9 tipos é a ESCOLHA do tipo; os três
+modelos são um atalho de largada para UM deles. O fio separa os dois registros
+sem abrir uma segunda caixa (cornija, não moldura), o tipo é menor, e nenhum
+deles usa o accent — não disputam com a grade, complementam.
+
+Três botões `secondary size="sm"`, texto simples, com `loading` individual:
+**Contatos de emergência** (hotel / guia local / agência / emergência no
+destino), **Documentos necessários** (passaporte, visto, vacinas, voucher,
+apólice) e **Informações úteis** (moeda, clima, tomada, fuso, o que levar).
+
+**Zero mudança de contrato com a Rafa:** `criarBloco` já aceita `title` e
+`body` no `blocoInput`; o que nasce é um bloco `text` comum, no escopo em vigor,
+editável e removível como qualquer outro. Não inventei tipo, campo nem
+migration.
+
+O esqueleto é uma lista de **rótulo + dois pontos com o valor em branco**, de
+propósito: são perguntas para a agente responder, não texto pronto para o
+cliente ler. Um modelo que já vem preenchido com plausibilidade é como o
+roteiro chega ao cliente com "Hotel: Lorem".
+
+**E fechei o loop do outro lado:** o `RoteiroCard` (negócio ganho) agora diz na
+descrição do vazio que a fotografia é **definitiva** — a Rafa proibiu regenerar
+de propósito — e manda acrescentar os blocos ANTES, citando os modelos por
+nome. Era a informação que faltava no único momento em que ela importa: o
+segundo antes de tocar "Gerar roteiro".
+
+### §4 — Os quatro fluxos do S14, conferidos
+
+Subi contra o dev server que já estava de pé na porta 3000, autenticado por
+curl com cookie de sessão real (`dev@zarpa.local`). **Isto não é clicar** — é
+HTTP e leitura de HTML; ninguém arrastou card nem abriu sheet.
+
+- Sem sessão: `/hoje`, `/vendas`, `/financeiro`, `/relatorios`, `/funil`,
+  `/propostas`, `/clientes` e `/kitchen-sink` → **307 para `/entrar`**. `/` →
+  307 `/hoje`. O gate do layout `(app)` está firme.
+- Com sessão: as 12 rotas do app → **200**, incluindo `/relatorios`,
+  `/relatorios?periodo=2026-08`, `/relatorios?periodo=lixo` e
+  `/vendas?periodo=2026-01-01..2026-12-31`.
+- `?periodo=lixo` renderiza o `PeriodoInvalidoCard` ("O período deste link não
+  é válido") — conferido no HTML, não por fé.
+- "Em viagem" está presente no `/hoje` renderizado.
+- `/p/<token>` de uma proposta enviada real → **200**. `/p/inexistente` e
+  `/r/inexistente` → **404** (o `not-found` do roteiro responde).
+- **`/r/<slug>` de um roteiro REAL não foi exercitado**: o banco de dev não tem
+  nenhum `itinerary` e nenhum deal em `ganho` (conferi por SQL, leitura só).
+  Não vou semear dado no dev do PO no meio da rodada da Rafa. Por leitura de
+  código nada está pela metade — página, `not-found`, `RoteiroCard`, os
+  componentes públicos compartilhados e a geração idempotente estão inteiros e
+  compilam. É o único ponto dos quatro que continua dependendo do PO clicar.
+
+### Arquivos
+
+Editados: `src/components/app/AppShell.tsx` (§1),
+`src/components/app/MoneyHubTabs.tsx` (+ prop `periodoParam`),
+`src/app/(app)/{vendas/VendasScreen,financeiro/FinanceiroScreen,relatorios/RelatoriosScreen}.tsx`
+(passam o param; Financeiro também nos tetos de largura),
+`src/app/(app)/hoje/TodayScreen.tsx` (Cobrar + `reserveFor`),
+`src/app/(app)/propostas/[id]/editar/BlocksEditor.tsx` (modelos),
+`src/app/(app)/propostas/[id]/editar/PropostaEditorScreen.tsx` (recusa do
+"Recomendar"), `src/app/(app)/funil/[id]/NegocioScreen.tsx` (copy do roteiro),
+`src/lib/ui/whatsapp.ts` (`mensagemCobranca`),
+`docs/handoffs/nina-para-rafa.md` (pedido do `contactWhatsapp`).
+Não toquei `src/db`, `src/server`, `drizzle`, `tests`, `package.json` nem
+`src/middleware.ts`. **Nada commitado.**
+
+### O que o PO precisa clicar (o que curl não alcança)
+
+1. `/propostas/<id>/editar` → "Adicionar bloco" → aba **Novo** → abaixo do fio,
+   os três modelos. Tocar "Documentos necessários": nasce um bloco de texto com
+   título e o esqueleto no corpo, editável na hora, e o preview reflete a cada
+   tecla. Conferir em 390px que os três botões quebram em duas linhas sem
+   aperto, e no tema escuro.
+2. `/vendas?periodo=2026-01-01..2026-12-31` → tocar "Relatórios" e "Recebíveis":
+   **o período segue junto**, e o chip "Este ano" continua marcado nas três.
+   Depois `?periodo=lixo` → trocar de aba limpa o parâmetro.
+3. `/financeiro` com 3+ parcelas de valores bem diferentes (ex.: R$ 890 e
+   R$ 12.400): a coluna de dinheiro alinha e o "Marcar paga" fica na mesma
+   coluna em todas as linhas.
+4. `/hoje` com proposta parada há 7+ dias: "Copiar cobrança" → cola de verdade
+   no WhatsApp, e o rótulo vira "Copiada" por 2s.
+5. `/funil/<id>` de um negócio **ganho** sem roteiro: ler a descrição nova
+   antes de gerar, e então gerar → `/r/<slug>` (o único fluxo do S14 que ainda
+   não foi exercitado contra dado real).
+
 ## S14 — período na URL, resumo do período, em viagem e roteiro público
 
 Os quatro fluxos do §S14 (handoff rafa-para-nina), no registro que já tinha —

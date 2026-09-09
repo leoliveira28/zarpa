@@ -768,6 +768,32 @@ function OptionRow({
     }, { duration: 8000 });
   }, [option.id, option.name, toast]);
 
+  /**
+   * "Recomendar esta opção" falhava em SILÊNCIO: `if (result.ok) onUpdated(...)`
+   * e nada no ramo de recusa. A caixa é controlada por `option.isRecommended`,
+   * então ela voltava sozinha ao estado anterior sem ninguém dizer por quê — a
+   * agente marca de novo, e de novo. Agora a recusa fala, alimenta o banner de
+   * dunning e traz a re-tentativa como botão do próprio toast.
+   */
+  const recomendar = React.useCallback(
+    async function recomendar(checked: boolean | "indeterminate"): Promise<void> {
+      if (checked !== true) return;
+      const result = await atualizarOpcao(option.id, { isRecommended: true });
+      if (result.ok) {
+        onUpdated(result.data);
+        return;
+      }
+      avisarRecusaDeEscrita(result);
+      toast.show({
+        title: `Não consegui recomendar ${option.name}`,
+        description: result.mensagem,
+        tone: "danger",
+        action: { label: result.correcao ?? "Tentar de novo", onClick: () => void recomendar(true) },
+      });
+    },
+    [option.id, option.name, onUpdated, toast],
+  );
+
   const [cotacaoOpen, setCotacaoOpen] = React.useState(false);
 
   const suggestedCommission = sugerirComissaoCents(option.priceCents, option.costCents);
@@ -912,16 +938,7 @@ function OptionRow({
       </div>
 
       <label className="flex w-fit cursor-pointer items-center gap-2">
-        <Checkbox
-          checked={option.isRecommended}
-          onCheckedChange={(checked) => {
-            if (checked !== true) return;
-            void (async () => {
-              const result = await atualizarOpcao(option.id, { isRecommended: true });
-              if (result.ok) onUpdated(result.data);
-            })();
-          }}
-        />
+        <Checkbox checked={option.isRecommended} onCheckedChange={(checked) => void recomendar(checked)} />
         <span className="text-13 text-ink">Recomendar esta opção na proposta pública</span>
       </label>
 

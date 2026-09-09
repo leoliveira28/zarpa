@@ -908,7 +908,7 @@ function RoteiroCard({ negocio }: { negocio: NegocioDetalhe }) {
           <EmptyState
             compact
             title="Nenhum roteiro gerado"
-            description="Gere o roteiro da viagem vendida: ele fotografa a proposta aceita em um link público para o cliente — sem preço, sem custo, sem comissão."
+            description="Gere o roteiro da viagem vendida: ele fotografa a proposta aceita em um link público para o cliente — sem preço, sem custo, sem comissão. A fotografia é definitiva: acrescente ANTES, na proposta, os blocos de texto com contatos de emergência, documentos e informações úteis — em “Adicionar bloco” há modelos prontos para os três."
           />
         )}
       </CardBody>

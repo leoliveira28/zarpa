@@ -93,7 +93,7 @@ export function RelatoriosScreen({ periodoParam }: { periodoParam?: string }) {
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-3">
         <h2 className="display text-32 text-ink">Resumo do período</h2>
-        <MoneyHubTabs />
+        <MoneyHubTabs periodoParam={periodoParam} />
       </header>
 
       {parsed.ok ? (
