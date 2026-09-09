@@ -1,5 +1,248 @@
 # Status — Rafa (backend / plataforma)
 
+## 2026-09-09 — Fase 3 (fundação multiusuário) + recibo reescrito com @react-pdf/renderer
+
+**Veredito: PRONTO (com 1 pendência de DECISÃO do PO, não de código — item 5 de
+Riscos).** `npx tsc --noEmit`: zero erros no repositório inteiro. Suíte **605/605**
+(32 arquivos), com os 3 arquivos de teste novos desta rodada (15 testes). `npm run
+db:migrate` aplicando limpa (27 tabelas). **Nada commitado** — ordem do coordenador.
+Sem browser (PO testa).
+
+### Pronto
+
+1. **Recibo com a lib** (`src/lib/pdf/recibo.tsx`, React): mesmo contrato
+   (`renderizarReciboPdf(dados)`), mesmo conteúdo, `MAX_PARCELAS_IMPRESAS = 12` com a
+   nota de excedente. O writer à mão (`recibo.ts` + `writer.ts`) foi APAGADO — spike
+   provou o `renderToBuffer` em Node antes, sem fallback (duas implementações do mesmo
+   documento é duas verdades). Único toque na rota: o `await` (fronteira do PO visada
+   em `docs/handoffs/rafa-para-po.md`).
+2. **`drizzle/0019_multiusuario.sql`** (idx 19): tabelas do plugin `organization` do
+   Better Auth (`organization`, `member`, `invitation`) com RLS ENABLE+FORCE + DUAL
+   policy cada (`*_isolation` via `app.tenant_id` com EXISTS na junção com
+   `organization`; `*_auth_service` via `app.auth_context`) — o padrão de
+   `user`/`session` da 0000. **O id da organization É o id de `tenants`** (FK real,
+   CASCADE). `session.active_organization_id` (o adapter do plugin grava nela).
+   Sem `createAccessControl`, como travado. Papéis nativos com CHECK no banco
+   ('agente' nunca vira valor — é rótulo de UI).
+3. **Atribuição (§5)**: `deals.agent_id`/`sales.agent_id` (nullable, RESTRICT — apagar
+   usuário não desatribui venda), `sales.commission_split_pct` (default 100, CHECK
+   0–100, sem régua automática), `agent_profiles` (RLS padrão). Índices em toda FK nova
+   + `(tenant_id, agent_id)` para o escopo. Backfills: `agent_id` de deals pelo primeiro
+   ator da `activities` (sem activity → NULL honesto), vendas herdam do deal.
+4. **Assentos (§6)**: `subscriptions.seats_paid` (default 1, CHECK ≥ 1, Studio
+   backfillado para 3); `assentos.ts` com a régua única (R$ 39,90/assento além dos
+   inclusos; `valorTotalComAssentos`); `alterarAssentos` em `billing.ts` faz o PAR
+   cancelar+recriar no Asaas **preservando `nextDueDate`** (não existe endpoint de
+   mudar valor), na ordem POST → swap local ATÔMICO com a auditoria e COMMITADO →
+   DELETE da antiga — o webhook SUBSCRIPTION_CANCELED(old_id) é inerte POR CONSTRUÇÃO
+   (busca pelo id antigo não encontra linha). Falha do DELETE não bloqueia cliente:
+   linha de auditoria com `pendencia: cancelamento_manual…`. Solo recusa (fica sozinho
+   de propósito); reduzir abaixo dos membros recusa; idempotente.
+5. **Escopo fora da RLS (§4)**: `TenantScope` no `withTenant` (opção `scope`, `own`
+   afirma userId uuid — falha alta, nunca alarga silenciosamente) +
+   `filtroDeEscopoProprio` + `escopoDaSessao()` (`src/server/escopo.ts`, puro, o único
+   lugar a mudar quando o papel migrar para `member.role`). Funil, resumo do período e
+   criação/reatribuição de negócio já escopam; dono vê o tenant, membro vê o próprio.
+6. **Plugin ligado** (`auth.ts`): `organizationPlugin({ allowUserToCreateOrganization:
+   false, creatorRole: 'owner', membershipLimit: dinâmico lendo `subscriptions.seats_paid`
+   via `assentosPagosDoTenant`, sendInvitationEmail → `deliverInviteEmail` })`.
+   `signup.ts` detecta convite pendente para o e-mail e nasce DENTRO do tenant do
+   convite (jamais cria tenant novo), com checagem de assentos na MESMA transação e
+   compensação (apaga o usuário criado se algo falhar). `criarTenant` grava o gêmeo
+   `organization` na mesma transação.
+7. **Quebra por vendedor (§7)**: `QuebraPorVendedor` em `money.ts` — exclusiva do
+   Studio (decisão do PO de hoje) e só com 2+ membros; flag honesta
+   `motivo: 'plano' | 'membro_unico'`; `ResumoDoPeriodo` ganhou `escopo:
+   'tenant' | 'own'` para a tela rotular de quem são os números.
+8. **Contrato da Equipe**: `equipe.ts` com `listarEquipe()` (membros + convites
+   pendentes + assentos pagos/usados/inclusos + plano + solicitante). Mutations de
+   convite/papel são do plugin via `authClient.organization` — action própria não
+   existe de propósito. Barril `@/server` atualizado (`alterarAssentos`,
+   `listarEquipe`, tipos novos).
+9. **Testes (3 arquivos, 15 testes, os essenciais do PO)**:
+   `tests/security/auth-org-rls.test.ts` (catálogo ENABLE+FORCE, dual policy com USING
+   E WITH CHECK, isolamento cruzado zero linhas, WITH CHECK recusa insert cruzado com
+   42501, fechado sem contexto, canal `auth_context` é porta e não buraco, coluna da
+   session existe), `tests/billing/webhook-par-asaas.test.ts` (swap commitado ANTES do
+   DELETE medido por conexão externa, evento do par inerte com gate PASSANDO, replay
+   idempotente, churn real ainda cancela e bloqueia), `tests/deals/escopo-own.test.ts`
+   (membro vê só o próprio + null invisível para ele e visível para o dono, guarda de
+   reatribuição só de dono).
+
+### Decisões que tomei sozinha
+
+- **`organization.id`/`organization_id` são `uuid`** (o resto do plugin continua
+  text): o Postgres NÃO implementa FK text→uuid — a primeira versão da migration
+  quebrou ("foreign key constraint cannot be implemented", medido no globalSetup). A
+  identidade "organization É o tenant" manda mais que a convenção do plugin; o adapter
+  trata uuid como string e nada do plugin quebra. Documentado na migration e no schema.
+- **DELETE da assinatura antiga FORA da transação do swap**: dentro, o webhook poderia
+  chegar antes do commit e ler o id antigo vivo (corrida real). Fora, é inerte por
+  construção — e o teste mede o apontamento da linha POR OUTRA CONEXÃO no instante do
+  DELETE.
+- **Sem fallback do PDF à mão**: spike verde primeiro, writer apagado depois.
+- **Membro não escolhe escopo** (sem toggle "Time" para não-dono): visão de gestão sem
+  poder de gestão é promessa falsa. Toggle "só os meus" para o DONO é barato se o PO pedir.
+- **`billingType` do par = PIX fixo**: preservar o método da antiga é uma leitura a
+  mais; a fatura real grava o método por payment de qualquer forma. Divergência baixa,
+  registrada no handoff do PO.
+- **`atualizarNegocio` valida o novo agente contra `member` do tenant** (user ⋈
+  member): reatribuir para estranho é `NAO_ENCONTRADO` da validação, não FK estourada.
+
+### Riscos
+
+1. **Webhook em produção precisa dos eventos de subscription habilitados no Asaas** —
+   o par depende de SUBSCRIPTION_CANCELED existir (e chegar). Enquanto o webhook não
+   estiver configurado no painel do Asaas, o par funciona mas deixa assinatura antiga
+   ativa lá (cobrança dupla). Pendência operacional do PO, não de código.
+2. **`membershipLimit` conta MEMBROS, não convites**: convite pendente não reserva vaga
+   no banco (o gate morde no aceite/createInvitation pela contagem de member). Tela
+   mostra `assentos.usados = membros + convites` — pode divergir do limite do banco em
+   uma unidade momentaneamente. Comportamento do plugin, não bug.
+3. **Cancelamento manual de assinatura antiga no Asaas** (DELETE falho) aparece só na
+   auditoria — não há fila de retry. Volume esperado: raro. Revisão manual periódica
+   até existir job.
+4. **Backfill de `agent_id` de deals é aproximação** (primeiro ator da timeline): deals
+   criados fora da aplicação ficam NULL. A quebra por vendedor mostra "sem vendedor" —
+   honesto, não inventado.
+5. **PENDÊNCIA DE DECISÃO DO PO (código pronto, cenário não divulgado)**: usuário que
+   JÁ tem conta/tenant aceitando convite de outra agência — o plugin cria o member mas
+   a sessão segue no tenant antigo. Dominante (convidado sem conta) está inteiro via
+   signup. Decidir: bloquear convite a quem já tem conta OU trocar tenant no aceite.
+
+### Preciso dos outros
+
+- **PO**: visto na linha nova da rota de recibo (§1 do meu handoff); decisão do item 5
+  de Riscos; configuração dos eventos de webhook no Asaas quando as credenciais
+  entrarem.
+- **Nina**: telas Equipe + alternador + quebra por vendedor — contrato completo no §13
+  de `docs/handoffs/rafa-para-nina.md` (incluindo o que NÃO existe para não procurar).
+- **Téo**: os 3 arquivos de teste novos entram na suíte de CI como estão; o GUC
+  `app.auth_context` é a segunda porta das policies de auth — se ele quiser varredura
+  de catálogo para tabelas de plugin (sem tenant_id), o padrão está no meu teste de
+  security.
+
+## 2026-09-09 — Monde fases 1 e 2: templates, recibo PDF, resultado por viagem, ranking, exportações
+
+**Veredito: PRONTO (com 2 vermelhos ALHEIOS no tree — detalhados em Riscos).**
+`npm run db:migrate` aplicando limpa (**26 tabelas**, RLS habilitado e forçado em todas);
+suíte **583/584** (29 arquivos; +10 testes minhas em 5 arquivos NOVOS — nenhum teste
+existente editado; o 1 falho é o guard de design em
+`NovaPropostaSheet.tsx:436`, arquivo da Nina em edição, fora da minha fronteira).
+`npx tsc --noEmit`: **zero erros nos meus arquivos**; os 10 restantes estão todos em
+`src/app/(app)/relatorios/` (tela da Nina, em edição agora). Nada commitado. Sem browser
+(PO testa).
+
+### Pronto
+
+1. **`drizzle/0018_modelos_de_proposta.sql`** (idx 18 no journal) —
+   `proposal_templates` (id, tenant_id → tenants CASCADE, name, `blocks jsonb NOT NULL
+   DEFAULT '[]'`, is_default, created_at) + CHECK de array + índice
+   `(tenant_id, created_at DESC)` + **partial unique `(tenant_id) WHERE is_default`**
+   (um só padrão por tenant, no BANCO) + `ENABLE/FORCE RLS` + policy
+   `proposal_templates_isolation` na MESMA migration (estilo `sales_isolation`/0007).
+   `blocks` tem DEFAULT de propósito: o seed sintético do scanner do Téo insere só
+   `tenant_id` — sem DEFAULT a suíte de isolamento ficava vermelha por razão errada
+   (validação de quantidade vive no zod da action). Nenhum GUC novo.
+2. **`proposalTemplates.ts`** (actions, `'use server'`): `listarTemplates`,
+   `obterConteudoDoTemplate`, `criarTemplateDeProposta` (fotografa blocos ATUAIS,
+   achata blocos de opção, renumera posições, preserva `content`, recusa proposta vazia),
+   `removerTemplate`, `criarPropostaDeTemplate` (draft + blocos copiados sem optionId,
+   título pela regra da casa, audit `proposal.created` com `origem: 'template'`) —
+   gate de dunning em toda escrita, zod antes da transação, audit
+   `proposal_template.created/.deleted/.default_set`.
+3. **`definirTemplatePadrao`** — action EXTRA ao contrato (desliga os outros e liga este
+   numa transação; o throw de "não encontrado" derruba a transação inteira, nada fica
+   meio-desligado). Sem ela, `is_default` era inalcançável pela aplicação.
+4. **Recibo PDF** — `src/server/recibos.ts` (helper de rota, SEM `'use server'`;
+   envelope `comoResultado`; audit `sale.receipt_issued` com o FATO) +
+   `src/lib/pdf/writer.ts` + `src/lib/pdf/recibo.ts` + rota
+   `src/app/api/recibos/[vendaId]/route.ts`. **PDF sem dependência nenhuma** (ver
+   Decisões). Número estável por venda (`REC-` + 8 chars do id), parcelas pagas em ordem
+   de pagamento, assinatura via `assinaturaDaMarca`, nota "não substitui nota fiscal".
+5. **`resultadoDaViagem`** (`resultado.ts`) — previsto em cascata (venda → opção aceita
+   → negócio; `propostaAceitaRecente` de `itineraries.ts` EXPORTADA para as duas regras
+   de escolha nunca divergirem), realizado das parcelas, `margemPrevistaCents = valorVenda
+   − custoPrevisto`, recusa negócio aberto com CONFLITO + correção.
+6. **`rankingDeClientes`** (`ranking.ts`) — vendas ⋈ deals ⋈ stage isWon ⋈ contacts na
+   janela do `resolverPeriodo` (default mês corrente), agregação por contato em JS
+   (bigint mode:number; `sum()` em SQL voltaria string pelo driver), ordena total desc →
+   viagens → alfabético pt-BR, limite 10..50.
+7. **Exportações** (`exportacoes.ts` + helpers de ESCRITA movidos para `csv.ts`, que
+   `dashboard.ts` agora importa — uma verdade só para formato de CSV): passageiros do
+   negócio com PII DECIFRADA pela via da casa (`encryptedText` decifra na leitura) e
+   auditado `travelers.exported` (metadata sem documento); vendas do período com
+   "1/2 pagas" agregado em JS; BOM `;` `\r\n` escape RFC 4180; nomes datados.
+8. **Rotas** (`src/app/api/**` por atribuição do coordenador — visado do PO pedido em
+   `docs/handoffs/rafa-para-po.md`): as duas de export + a de recibo, todas com
+   `respostas.ts` mapeando o envelope para 401/404/400/409/402/503.
+9. **Barril `@/server`** — os 6 nomes que a ponte da Nina sonda + `definirTemplatePadrao`
+   + tipos. `recibos.ts`/`exportacoes.ts`/`respostas.ts` FORA do barril de propósito
+   (helpers de rota, não actions). `propostaAceitaRecente` exportada entre módulos, fora
+   do barril.
+10. **Testes novos (5 arquivos, 10 testes)** — `tests/proposals/templates.test.ts`
+    (fotografia + padrão + cópia + ISOLAMENTO: listar/obter/apagar de outro tenant =
+    vazio/NAO_ENCONTRADO), `tests/money/resultado.test.ts` (números + recusa aberto),
+    `tests/money/ranking.test.ts` (ordem + vizinho fora),
+    `tests/money/recibo.test.ts` (rota 200 + `application/pdf` + `%PDF-` + número no
+    header + 404 cross-tenant), `tests/money/exportacoes.test.ts` (PII decifrada,
+    células vazias, BOM, `1/2 pagas`, escopo de tenant). Recorte enxuto a pedido do PO.
+
+### Decisões que tomei sozinha
+
+- **PDF 1.4 escrito à mão** (`src/lib/pdf/`) em vez de `@react-pdf/renderer`: OWNERSHIP
+  R1 me proíbe instalar dependência. Recibo é uma página A4 de texto e fios — o writer
+  cobre exatamente isso (fontes base-14, WinAnsi, mapeamento de tipográficos, `?`
+  visível para o que não couber). Seam única (`renderizarReciboPdf`): instalar a
+  dependência um dia troca UM diretório, zero rota. Pedido formal ao PO no handoff.
+- **`dealId` exigido em runtime** em `criarPropostaDeTemplate` apesar de opcional no
+  contrato travado: `proposals.deal_id` é NOT NULL e "proposta sem negócio" não existe
+  no produto. Recusa `DADOS_INVALIDOS` com `campo: 'dealId'` + correção. Divergência
+  registrada no §12 do handoff da Nina (o tipo dela não muda).
+- **Fotografia inteira, sem filtrar chaves de `content`**: interpretar "nada de
+  opção/preço" como "sem optionId" (preço nunca foi coluna de bloco). Cortar chaves de
+  `content` seria corromper conteúdo deliberado (nº do voo, diárias); template é interno.
+- **Blocos com kind desconhecido viram `'text'`** ao copiar: jsonb mutável não promete
+  forma, e modelo não pode falhar por bloco escrito por versão antiga. CHECKs do banco
+  garantem array e nome; forma por bloco é responsabilidade do saneamento.
+- **Número de recibo derivado do id** (`REC-XXXXXXXX`) e não sequencial: reimpressão
+  TEM que sair o mesmo número; contador sequencial por tenant é concorrência de graça.
+  `emitidoEm` é da consulta — reimprimir atualiza a data, nunca o número.
+- **CSV de vendas NÃO audita** (audit é para export COM documento, como combinado);
+  passageiros audita com `{ dealId, total, comDocumento }` — o FATO, nunca o documento.
+- **Helpers de escrita de CSV movidos para `csv.ts`** (e `dashboard.ts` refatorado para
+  importar): exportação agora tem dois produtores; cópias privadas que divergem entregam
+  CSV que abre errado "de vez em quando". `dashboard.ts` é meu — o risco da mudança é
+  zero (import de módulo puro) e a suíte cobre o export antigo.
+- **`_a_` no nome do CSV de vendas em faixa** (`vendas-2026-09-01_a_2026-09-30.csv`),
+  mesmo padrão do export do resumo do mês.
+
+### Riscos
+
+- **2 vermelhos no tree, os dois fora da minha fronteira**: (1) guard de design
+  (`NovaPropostaSheet.tsx:436`, transição em `border-color` — Nina); (2) 10 erros de
+  compilação em `src/app/(app)/relatorios/` (Nina, em edição). Meu recorte está verde;
+  quando os arquivos dela estabilizarem, `npx tsc --noEmit` e `npm test` voltam a
+  100% SEM nenhum trabalho de minha parte.
+- O writer de PDF tem largura de texto APROXIMADA (fator por fonte, não métrica real).
+  Para recibo basta (centralização e quebra tolerantes); se um dia o PDF virar material
+  tipográfico fino, é mais um motivo para o `@react-pdf/renderer` do pedido.
+- `resultadoDaViagem` com venda sem parcelas geradas devolve
+  `aReceberCents = valorVenda − recebido` (melhor estimativa, não verdade de banco).
+  Se o produto preferir 0 aí, é uma linha.
+
+### O que precisa dos outros
+
+- **PO**: visto das 3 rotas em `src/app/api/**` + autorização (ou negação formal) do
+  `@react-pdf/renderer` (`docs/handoffs/rafa-para-po.md`).
+- **Nina**: §12 do handoff dela tem os shapes finais, a divergência do `dealId` e os
+  headers de erro das rotas. `definirTemplatePadrao` é a action extra para o sheet.
+- **Téo**: nada. As 5 tabelas-seed novas entram sozinhas no scanner (comprovado: suíte
+  de isolamento verde com a tabela nova). Se quiser canário dedicado de
+  `proposal_templates`, o meu teste de isolamento já prova os três verbos pela aplicação.
+
+---
+
 ## 2026-09-09 — Assinatura do agente (0017): "Agência · por Agente" + "via {APP_NAME}"
 
 **Veredito: PRONTO.** `npx tsc --noEmit` limpo, `npm run db:migrate` aplicando limpa (25

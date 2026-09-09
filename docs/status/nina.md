@@ -1,5 +1,166 @@
 # Nina — status
 
+## 2026-09-09 (noite) — Prévia do modelo na "Nova proposta" (`obterConteudoDoTemplate` ganhou chamador)
+
+O pendente que eu mesma registrei: a função existia no servidor sem nenhum
+consumidor, e escolher modelo era apostar no escuro — o nome da linha era toda
+a informação. Agora tocar num modelo (e o default, ao abrir) mostra o SUMÁRIO
+dos blocos logo abaixo da lista, no registro de sumário de livro: uma linha
+por bloco, rótulo do tipo em 13 + título em 15 truncado. O corpo completo
+mora no editor — prévia que quer ser lida inteira é editor disfarçado.
+
+Arquivos: `src/components/app/PreviaDoModelo.tsx` (novo, 210 linhas) e
+`src/components/app/NovaPropostaSheet.tsx` (chamada + `FieldHint` reescrita).
+
+### Verificação estática (números)
+
+- `npx tsc --noEmit`: **2 erros, ambos FORA da minha fronteira** —
+  `src/app/api/recibos/[vendaId]/route.ts:31` e `src/lib/pdf/recibo.tsx:123`
+  (rodada viva do recibo/PDF; o erro do route mudou de linha entre duas
+  execuções minhas — tem gente editando esse arquivo agora). Nenhum erro nos
+  meus dois arquivos.
+- `eslint` no `PreviaDoModelo.tsx`: **0 problemas**. A
+  `NovaPropostaSheet.tsx` mantém 2 erros pré-existentes da rodada de tarde
+  (`react-hooks/set-state-in-effect` nos efeitos das linhas 104/125 — código
+  que não é desta rodada; não mexi).
+- `npm run build`: falha somente nos 2 erros acima.
+- `npx vitest run tests/proposals/templates.test.ts`: **3/3** — incluindo o
+  isolamento (modelo de outro tenant não lista, não copia). É o contrato que a
+  prévia consome.
+- `tests/design` (guards + rules + deviations): **172/172** sobre a árvore com
+  o arquivo novo.
+- 390px: sheet full-width, conteúdo 358px (px-4 de cada lado). Pior rótulo
+  ("Contato de emergência", 13px) ≈ 134px → sobram ≈ 214px de título (~24–26
+  caracteres) antes da elipse. Prévia cheia (6 linhas) ≈ 217px de altura;
+  1 linha ≈ 75px; skeleton ≈ 132px (só existe no primeiro toque de cada
+  modelo; depois, cache).
+- Grep no componente novo: `accent` **0** (o único azul da seção é o ponto do
+  rádio, que é seleção), `serif/italic` **0**, animação **0** (a única
+  ocorrência de "motion" é em comentário). Skeleton é `still`.
+
+### Decisões que tomei sozinha
+
+1. **A prévia mora abaixo da lista inteira, não expande a linha escolhida.**
+   Proximidade vs. estabilidade: expandir linha empurra o "Do zero" e as
+   ações de remover/tornar padrão a cada toque — e só transform e opacity
+   animam, então a abertura seria seca. Posição fixa, conteúdo troca; o
+   cabeçalho do sumário diz o total, e a cauda diz onde o corte aconteceu.
+2. **O default abre com prévia montada.** Ele já vem marcado; mostrar o
+   sumário na abertura ensina o recurso sem um toque e o conteúdo está lá
+   quando ela olha — latência percebida é isso.
+3. **Uma linha por bloco, com fallback:** título → corpo inteiro truncado em
+   CSS → "n fotos". Zero contagem de caractere em JS; o CSS corta. Bloco oco
+   não entra nem na lista nem no total (a proposta também não o renderiza).
+4. **`price_note` APARECE.** Aqui é a casa da agente (autenticado); a trava
+   de vazamento é da página pública (§4), não desta tela. Ela precisa saber
+   que o modelo carrega nota de preço antes de mandar.
+5. **Modelo sem blocos = vazio sem exemplo de propósito.** Inventar blocos
+   mentiria sobre ESTE modelo — a regra do exemplo vale para lista vazia de
+   sistema. O que há: o que acontece se criar dele + UM caminho de volta
+   ("Começar do zero", texto, não botão).
+6. **Zero animação na troca.** Trocar de modelo é trocar de texto, e texto
+   não voa. O teste da doutrina: sem animação, a tela comunica igual.
+7. **Estado derivado de um Map de leituras**, sem `setState` síncrono em
+   efeito: a primeira forma que escrevi foi reprovada pelo lint da casa e eu
+   consertei a arquitetura (leituras por id, ausente = carregando, resposta
+   atrasada morre no cleanup) em vez de calar a regra. Cache por id: voltar
+   ao modelo de antes é instantâneo.
+8. **`FieldHint` saiu do `radiogroup`** (parágrafo não é rádio) e foi
+   reescrita para sobreviver ao modelo sem blocos: "o que o modelo tem —
+   blocos e opções — vai junto" continua verdade quando o que ele tem é nada.
+
+### Preciso dos outros
+
+Nada desta rodada. O build quebrado é dos arquivos da rodada do recibo
+(`src/app/api/recibos/…`, `src/lib/pdf/recibo.tsx`) — quem está lá fecha;
+não toquei porque não é meu e estava mudando sob os meus pés.
+
+---
+
+## 2026-09-09 (tarde) — Fases 1 e 2 do Monde: modelos, recibo, resultado por viagem, ranking e CSV
+
+Cinco entregas sobre os contratos que o rafa pôs no ar no meio da rodada
+(§12 do handoff dele): **"Salvar como modelo"** no editor, **"Começar de um
+modelo"** na `NovaPropostaSheet` (com "Tornar padrão"), **"Recibo"** na ficha
+da venda, **Resultado da viagem** na ficha do negócio ganho + **agregado no
+Resumo** do financeiro, **aba Clientes** nos Relatórios (ranking → ficha 360°)
+e **"Exportar CSV"** em três pontos (vendas, passageiros, relatórios).
+
+Verificação estática: `npx tsc --noEmit` **0 erros no repositório inteiro**
+(rodei ao fechar cada tela), `npm run build` limpo,
+`npx vitest run tests/design/guards.test.ts` **6/6** (pegou e eu consertei uma
+transição de `border-color` que um rádio meu tinha herdado — só transform e
+opacity animam, a régua vale para código meu de ontem também). Sem navegador —
+o PO testa.
+
+---
+
+### Decisões de desenho que tomei sozinha
+
+1. **"Tornar padrão" mora na linha escolhida, não em toda linha.** A sheet
+   abre quinze vezes por dia; um comando por linha viraria painel de controle.
+   A ação aparece só quando a agente acabou de preferir um modelo ao padrão —
+   o momento exato em que "esse merece ser o de sempre" acontece. O Badge
+   "Padrão" troca de linha no toque (otimista; recusa → reload honesto).
+2. **Recibo é âncora, não fetch.** `<a target="_blank">` dentro de
+   `Button asChild`: sai no toque, imune a popup blocker, e o PDF carrega no
+   próprio aba — o progresso é o do navegador. Fingir carregamento na ficha
+   seria um spinner, que a casa não tem.
+3. **O agregado usa o MESMO card da ficha** (`ResultadoViagemCard`,
+   `titulo="Resultado das viagens"`): os seis campos são somáveis, então a soma
+   tem o shape do item — a agente aprende uma gramática e a lê em qualquer
+   escala. Ficou depois de Comissão de propósito: margem = venda − custo −
+   comissão, o card é a conclusão dos dois blocos anteriores.
+4. **Soma falha fechada.** Uma recusa em `resultadoDaViagem` fecha o card
+   inteiro com "Tentar de novo" — nunca metade de uma soma. E deals repetidos
+   entram uma vez (`Set`), porque a action é por viagem, não por venda.
+5. **CSV segue o recinte da URL e ignora o chip de status** (vendas): o
+   arquivo é para o contador, que não conhece o filtro da tela. Em Relatórios,
+   o CSV mora no rodapé do card de resultado — o mesmo gesto dos passageiros.
+6. **Ranking: o azul só no nome.** Posição e números são leitura; o nome é o
+   único clique (→ ficha 360°). Molde de largura da coluna "Total comprado" =
+   o maior da lista — nada pula de linha para linha. Top 10; vazia, o estado
+   vazio mostra uma linha de exemplo.
+7. **Sub-abas Resumo/Clientes copiam a gramática do `MoneyHubTabs`**
+   (segmented, `aria-current`, links de verdade): aba na URL (`?aba=`), o
+   `?periodo=` viaja junto e a aba Resumo nem escreve o parâmetro — ausente É
+   resumo. O h2 virou "Relatórios" (mesmo padrão de /vendas, que repete a tab).
+8. **A ponte nasceu sonda e morreu no mesmo dia.** `fase12Api.ts` sondava o
+   barril em runtime enquanto o backend era forno; os nomes saíram, vira
+   re-export estático — nenhuma tela mudou na aposentadoria.
+
+### Números das checagens estáticas (por tela)
+
+`serif|italic|rounded-lg` = 0 e hex cru = 0 em TODOS os arquivos tocados;
+accent sempre = cliques; valores sempre por `Money`/`MoneyStat`/`tabular-nums`.
+
+| Arquivo | accent | Money/tabular | onClick/pointerdown | min-h-9/11 |
+|---|---|---|---|---|
+| `relatorios/RelatoriosScreen.tsx` | 0 | 10 | 1/0 | 2 |
+| `relatorios/RankingClientes.tsx` | 1 (nome→ficha) | 5 | 1/0 | — |
+| `relatorios/ResultadoDasViagens.tsx` | 0 | via card | 1/0 | — |
+| `vendas/VendasScreen.tsx` | 1 (margem) | 5 | 7/1 | 1 |
+| `vendas/[id]/VendaScreen.tsx` | 1 (link proposta) | 5 | 9/0 | — |
+| `NovaPropostaSheet.tsx` | 2 (rádio+badge) | — | 4/2 (rádios no toque) | 4 |
+
+(`onClick` aqui inclui os de componentes Button/Link da casa, que tratam o
+gesto internamente; os rádios das linhas reagem no `onPointerDown`.)
+
+### Arquivos tocados nesta rodada
+
+`src/lib/ui/fase12Api.ts` (nova, aposentada no mesmo dia), `src/lib/ui/periodo.ts`
+(`limitesDoPeriodo`), `src/components/app/ResultadoViagemCard.tsx` (novo),
+`src/components/app/SalvarComoModeloSheet.tsx` (novo),
+`src/components/app/NovaPropostaSheet.tsx` (modelos + tornar padrão + rádio sem
+transição de cor), `src/app/(app)/propostas/[id]/editar/PropostaEditorScreen.tsx`,
+`src/app/(app)/funil/[id]/NegocioScreen.tsx` (PassageirosCard + ResultadoCard),
+`src/app/(app)/vendas/VendasScreen.tsx`, `src/app/(app)/vendas/[id]/VendaScreen.tsx`,
+`src/app/(app)/relatorios/page.tsx`, `src/app/(app)/relatorios/RelatoriosScreen.tsx`,
+`src/app/(app)/relatorios/RankingClientes.tsx` (novo),
+`src/app/(app)/relatorios/ResultadoDasViagens.tsx` (novo). Nada commitado.
+
+---
+
 ## 2026-09-09 — Roteiro fechado, `/r/` editorial, e a marca com tela e assinatura
 
 Três entregas: o **editor de roteiro** terminado (a rodada interrompida deixou a
