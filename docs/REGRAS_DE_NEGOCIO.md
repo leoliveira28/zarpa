@@ -227,8 +227,11 @@ dashboard do mês, cobrança recorrente via Asaas com gate de inadimplência.
   futuro, só quando virar objeção real de venda repetida.
 - **Motor de reservas.** As integrações de fornecedor são cotação, não fechamento de
   compra automatizado — ver seção 3.
-- **Multiusuário real** (times, permissões, split de comissão entre vendedores). O
-  plano Studio existe no preço, mas a operação ainda é pensada para um agente por conta.
+- ~~Multiusuário real (times, permissões, split de comissão entre vendedores)~~ —
+  **revogado em 2026-09-09.** Entrou no roadmap como Fase 3 (`docs/ROADMAP_MONDE.md`),
+  mirando agências de **2 a 4 pessoas**, não a agência estruturada de 5+. Arquitetura,
+  modelo de dados e critério de aceite em `docs/MULTIUSUARIO_AGENCIAS.md` — não
+  duplicar a regra aqui, só linkar.
 - **App nativo.** PWA resolve o "instalar no celular"; não abrir uma frente de
   iOS/Android nativo.
 - **Despegar** como fornecedor de cotação (só Wooba e Infotravel existem hoje).

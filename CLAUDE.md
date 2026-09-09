@@ -3,7 +3,7 @@
 > `zarpa` é codinome de trabalho. O nome comercial ainda não foi decidido — não espalhe a string pela UI, use o token `APP_NAME` em `src/lib/config.ts`.
 
 ## Produto em uma frase
-O agente de viagem independente (MEI, home-based, 10–15 vendas/mês) monta uma **proposta de viagem com a marca dele em 2 minutos, do celular**, manda o link pelo WhatsApp, **sabe quando o cliente abriu**, e não perde a venda por esquecer o follow-up. Preço: **R$ 99/mês** (Solo R$ 49 / Pro R$ 99 / Studio R$ 199).
+O agente de viagem independente (MEI, home-based, 10–15 vendas/mês) monta uma **proposta de viagem com a marca dele em 2 minutos, do celular**, manda o link pelo WhatsApp, **sabe quando o cliente abriu**, e não perde a venda por esquecer o follow-up. Preço: **R$ 99/mês** (Solo R$ 49 / Pro R$ 99 / Studio R$ 199). Expansão de time mira agências de **2 a 4 pessoas** — não a agência estruturada de 5+, que já é terreno do Monde.
 
 Concorrência: Monde (R$ 440/mês, agências estruturadas), Otoos (R$ 95,92/mês, ERP com NF-e), Turismo CRM (R$ 39,90/mês). O concorrente real é **planilha + WhatsApp + Canva**.
 
@@ -19,7 +19,8 @@ Concorrência: Monde (R$ 440/mês, agências estruturadas), Otoos (R$ 95,92/mês
 | Motion | `motion` (ex-Framer Motion), springs |
 | Proposta | **Link web é o produto**. PDF é secundário (`@react-pdf/renderer` depois). Sem Chromium headless |
 | Cobrança | Asaas (Pix + cartão recorrente + boleto) |
-| Fora do v1 | Integrações (Infotravel/Wooba/Despegar), NF-e, multiusuário real, motor de reservas, app nativo |
+| Prioridade do roadmap (decisão do PO, 2026-09-09) | Multiusuário (equipe), faturamento PJ e centro de custo ENTRAM e vêm ANTES de integrações e NF-e — estas duas por último (ver `docs/ROADMAP_MONDE.md`). Motor de reservas e app nativo seguem fora |
+| Mira do time (decisão do PO, 2026-09-09) | Multiusuário mira agências de **2 a 4 pessoas** — não competir de frente com agência estruturada de 5+ (ali o Monde tem o fosso de 95+ integrações de fornecedor). Assento extra **R$ 39,90/mês** em Pro e Studio, régua única, sem taxa de implementação. Arquitetura, modelo de dados e critério de aceite completos em `docs/MULTIUSUARIO_AGENCIAS.md` |
 
 ## Ambiente local (já pronto)
 - Postgres 16 rodando. `DATABASE_URL=postgres://zarpa:zarpa@localhost:5432/zarpa_dev`
@@ -118,3 +119,5 @@ Motion tipográfico é quase todo subtração.
 ## Sprint atual: S1 + S2 (fundação e design system)
 Critério de aceite S1: dois tenants no banco e um teste automatizado que tenta ler dado do outro tenant **retorna zero linhas**, rodando no CI.
 Critério de aceite S2: rota `/kitchen-sink` com todos os componentes em todos os estados, verificada nos dois temas e com reduced-motion ligado.
+
+Depois do que já está em andamento (S2 com a Nina, S3 com a Rafa — ver `docs/status/po.md`), a próxima frente é a Fase 3 do `docs/ROADMAP_MONDE.md` (multiusuário). Não começar essa frente sem ler `docs/MULTIUSUARIO_AGENCIAS.md` inteiro primeiro — tem decisão de arquitetura (Better Auth `organization`, não RLS de segundo nível) e uma pesquisa já feita na API do Asaas que evita retrabalho.
