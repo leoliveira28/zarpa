@@ -69,7 +69,55 @@ export const KNOWN_ESCAPE_HATCHES: { table: string; policy: string }[] = [
   // `withTenant` real depois. Mesma ressalva: GUC forjável por SQL arbitrário,
   // alcance mínimo. Ver docs/handoffs/teo-para-rafa.md.
   { table: 'public.subscriptions', policy: 'subscriptions_webhook_read' },
+  // S3/S5 — acervo global da biblioteca (`drizzle/0003_construtor_de_proposta.sql`). O GUC
+  // `app.platform_context` não é ligado por nenhum caminho do código hoje (sem tela de
+  // administração no v1) — existe para o dia em que alguém precisar administrar o acervo
+  // global sem rodar como superuser. Achada por revisão manual: o WITH CHECK desta policy
+  // menciona `tenant_id` (`"tenant_id" IS NULL`), o que escondia do detector de string que
+  // o USING de leitura/escrita de fato só depende do GUC + `is_global`, não do tenant da
+  // sessão. Ver "ponto cego" abaixo.
+  { table: 'public.library_items', policy: 'library_items_platform_service' },
+  // S15 — dedupe do contador de visita (`drizzle/0014_visita_deduplicada.sql`). Mesmo GUC
+  // `app.proposal_public_context` da família 0004/0005, novo comando (UPDATE) na mesma
+  // tabela de `proposal_views`. Mesma ressalva de sempre.
+  { table: 'public.proposal_views', policy: 'proposal_views_public_update' },
 ]
+
+/**
+ * GUCs que a aplicação liga para abrir um escape hatch deliberado. `app.tenant_id` NÃO
+ * entra aqui — é o mecanismo normal de isolamento (toda policy de tenant o referencia), e
+ * incluí-lo faria o detector abaixo nunca disparar.
+ */
+const KNOWN_CONTEXT_GUCS = [
+  'app.auth_context',
+  'app.platform_context',
+  'app.proposal_public_context',
+  'app.roteiro_public_context',
+  'app.webhook_context',
+]
+
+/**
+ * PONTO CEGO ENCONTRADO E FECHADO (registrado pela Rafa em docs/status/rafa.md, S15):
+ * a varredura de "policy que ignora o tenant" original testava só
+ * `!expr.includes('tenant_id') && !/\bid\b/.test(expr)` — ou seja, bastava a policy
+ * mencionar a STRING `tenant_id` em QUALQUER lugar (inclusive dentro de um `EXISTS`
+ * comparando tenant de duas tabelas, ou um `WITH CHECK` com `"tenant_id" IS NULL`) para
+ * passar como "normal", mesmo que o `USING` de verdade só dependesse de um GUC de escape
+ * (`current_setting('app.algo_context', true) = 'on'`) e nada mais. Foi assim que
+ * `library_items_platform_service` (desde a 0003) e `proposal_views_public_update` (0014)
+ * nunca precisaram de entrada no `KNOWN_ESCAPE_HATCHES` — o detector nem via que eram
+ * escape hatches.
+ *
+ * A correção soma um segundo critério: qualquer policy cujo `USING`/`WITH CHECK` referencie
+ * um `current_setting('app.<algo>_context', ...)` de `KNOWN_CONTEXT_GUCS` conta como
+ * possível hatch, INDEPENDENTE de também mencionar `tenant_id` em outro trecho da mesma
+ * expressão. O critério antigo (bare, sem tenant_id nem id) continua valendo em paralelo —
+ * uma policy pega em QUALQUER um dos dois vira candidata, e só passa se estiver na
+ * allowlist.
+ */
+function referenciaGucDeEscape(expr: string): boolean {
+  return KNOWN_CONTEXT_GUCS.some((guc) => expr.includes(`current_setting('${guc}'`))
+}
 
 export type RlsAudit = {
   findings: RlsFinding[]
@@ -191,7 +239,8 @@ export async function runRlsAudit(sql: Sql): Promise<RlsAudit> {
       // na allowlist para que uma porta NOVA não apareça calada.
       const hatches = own.filter((p) => {
         const expr = `${p.using ?? ''} ${p.withCheck ?? ''}`
-        return !expr.includes('tenant_id') && !/\bid\b/.test(expr)
+        const bare = !expr.includes('tenant_id') && !/\bid\b/.test(expr)
+        return bare || referenciaGucDeEscape(expr)
       })
       const unexpected = hatches.filter(
         (p) => !KNOWN_ESCAPE_HATCHES.some((k) => k.table === t.qualified && k.policy === p.policy),
