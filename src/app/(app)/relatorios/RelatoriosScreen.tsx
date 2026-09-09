@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { resumoDoPeriodo, type PeriodoInput, type ResumoDoPeriodo } from "@/server";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -19,23 +20,33 @@ import {
   TR,
 } from "@/components/ui/Table";
 import { MoneyHubTabs } from "@/components/app/MoneyHubTabs";
+import { RankingClientes } from "./RankingClientes";
+import { ResultadoDasViagens } from "./ResultadoDasViagens";
 import {
   PeriodoInvalidoCard,
   PeriodoSeletor,
 } from "@/components/app/PeriodoSeletor";
+import { cn } from "@/lib/ui/cn";
+import { chaveDoParamPeriodo } from "@/lib/ui/periodo";
 import { parseParamPeriodo, formatarRotuloPeriodo } from "@/lib/ui/periodo";
 import { COMISSAO_STATUS_LABEL, COMISSAO_STATUS_TONE } from "../vendas/shared";
 
 /* =============================================================================
-   Resumo do período — a terceira tab do hub Dinheiro (§2)
+   Relatórios — a terceira tab do hub Dinheiro (§2), agora em duas sub-abas
    -----------------------------------------------------------------------------
    "Quanto entrou, quanto vem, de onde veio, onde se perdeu" num lugar só,
    recortado pelo MESMO seletor de período do /hoje e das outras tabs.
 
+   Resumo (a sub-aba de sempre) responde "quanto"; Clientes (fase 2 do Monde)
+   responde "de quem" — o ranking dos que sustentam a agência. A sub-aba mora
+   na URL (`?aba=`) como o período mora: um link compartilhado abre o MESMO
+   relatório na MESMA janela, e o Voltar restaura. As duas sub-abas carregam o
+   `?periodo=` — são perguntas diferentes sobre a mesma janela de tempo.
+
    Registro silencioso do miolo, à risca: número tabular com largura
-   reservada, tab simples de duas linhas, NENHUM gráfico. Um relatório que
-   precisa de pizza para ser entendido é um relatório mal posto — quatro
-   números de venda, três de comissão e duas listas ordenadas por dinheiro
+   reservada, tab simples, NENHUM gráfico. Um relatório que precisa de pizza
+   para ser entendido é um relatório mal posto — quatro números de venda, três
+   de comissão, o resultado das viagens e duas listas ordenadas por dinheiro
    respondem tudo que a agente leva para a reunião de fechar o mês.
 
    `porOrigem.origem: null` e `motivosDePerda.motivo: null` são linhas de
@@ -45,8 +56,18 @@ import { COMISSAO_STATUS_LABEL, COMISSAO_STATUS_TONE } from "../vendas/shared";
    ========================================================================== */
 
 type Status = "loading" | "ready" | "error";
+type Aba = "resumo" | "clientes";
 
-export function RelatoriosScreen({ periodoParam }: { periodoParam?: string }) {
+export function RelatoriosScreen({
+  periodoParam,
+  abaParam,
+}: {
+  periodoParam?: string;
+  abaParam?: string;
+}) {
+  // Aba na URL; qualquer coisa que não seja "clientes" é o resumo — link
+  // sem `aba` e link torto caem no relatório de sempre.
+  const aba: Aba = abaParam === "clientes" ? "clientes" : "resumo";
   const parsed = React.useMemo(() => parseParamPeriodo(periodoParam), [periodoParam]);
   const periodoInput: PeriodoInput | undefined = parsed.ok ? parsed.input : undefined;
   // A chave de efeito é o parâmetro cru: trocou a URL, relê.
@@ -80,6 +101,61 @@ export function RelatoriosScreen({ periodoParam }: { periodoParam?: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `periodoInput` é derivado de `periodoKey`
   }, [periodoKey, reloadToken]);
 
+  return (
+    <div className="flex flex-col gap-6">
+      <header className="flex flex-col gap-3">
+        {/* h2 nomeia a tela (como "Vendas" em /vendas, que também repete o
+            rótulo da tab ativa do hub) — o painel já se anuncia nas seções. */}
+        <h2 className="display text-32 text-ink">Relatórios</h2>
+        <MoneyHubTabs periodoParam={periodoParam} />
+        <SubAbas aba={aba} periodoParam={periodoParam} />
+      </header>
+
+      {parsed.ok ? (
+        <PeriodoSeletor param={periodoParam} className="-mt-3" />
+      ) : (
+        <PeriodoInvalidoCard />
+      )}
+
+      {aba === "clientes" ? (
+        <RankingClientes periodoParam={periodoParam} />
+      ) : (
+        <PainelResumo
+          status={status}
+          resumo={resumo}
+          errorInfo={errorInfo}
+          onRetry={retry}
+          periodoInput={periodoInput}
+          periodoParam={periodoParam}
+        />
+      )}
+    </div>
+  );
+}
+
+/* -----------------------------------------------------------------------------
+   PainelResumo — o relatório de sempre (vendas, comissão, resultado das
+   viagens, origem, perdas). Extraído do corpo da tela quando os Relatórios
+   ganharam a segunda aba: cada painel é um componente, a troca de aba é uma
+   ternária de uma linha.
+   ------------------------------------------------------------------------- */
+
+function PainelResumo({
+  status,
+  resumo,
+  errorInfo,
+  onRetry,
+  periodoInput,
+  periodoParam,
+}: {
+  status: Status;
+  resumo: ResumoDoPeriodo | null;
+  errorInfo: { mensagem: string; correcao?: string } | null;
+  onRetry: () => void;
+  /** Recorte da URL, já validado — o agregado e o CSV seguem o mesmo par. */
+  periodoInput?: PeriodoInput;
+  periodoParam?: string;
+}) {
   const maxReceitaPorOrigem = Math.max(
     1,
     ...(resumo?.porOrigem ?? []).map((o) => o.receitaBrutaCents),
@@ -90,18 +166,7 @@ export function RelatoriosScreen({ periodoParam }: { periodoParam?: string }) {
   );
 
   return (
-    <div className="flex flex-col gap-6">
-      <header className="flex flex-col gap-3">
-        <h2 className="display text-32 text-ink">Resumo do período</h2>
-        <MoneyHubTabs periodoParam={periodoParam} />
-      </header>
-
-      {parsed.ok ? (
-        <PeriodoSeletor param={periodoParam} className="-mt-3" />
-      ) : (
-        <PeriodoInvalidoCard />
-      )}
-
+    <>
       {status === "ready" && resumo ? (
         <p data-numeric className="-mt-4 text-13 tabular-nums text-muted">
           {formatarRotuloPeriodo(resumo.periodo)}
@@ -128,7 +193,7 @@ export function RelatoriosScreen({ periodoParam }: { periodoParam?: string }) {
       ) : status === "error" ? (
         <Card className="flex flex-col items-start gap-3 p-5">
           <p className="text-15 text-ink">{errorInfo?.mensagem}</p>
-          <Button variant="secondary" onClick={retry}>
+          <Button variant="secondary" onClick={onRetry}>
             {errorInfo?.correcao ?? "Tentar de novo"}
           </Button>
         </Card>
@@ -214,6 +279,12 @@ export function RelatoriosScreen({ periodoParam }: { periodoParam?: string }) {
               </Tile>
             </div>
           </section>
+
+          {/* --- Resultado das viagens (o agregado da fase 2) ------------ */}
+          {/* Depois de Comissão de propósito: margem = venda − custo −
+              comissão, então o card é a CONCLUSÃO dos dois blocos anteriores —
+              antes deles, seria um número sem a conta que o sustenta. */}
+          <ResultadoDasViagens periodoInput={periodoInput} periodoParam={periodoParam} />
 
           {/* --- Receita por origem ------------------------------------- */}
           <section aria-labelledby="relatorio-origem" className="flex flex-col gap-3">
@@ -308,7 +379,7 @@ export function RelatoriosScreen({ periodoParam }: { periodoParam?: string }) {
           </section>
         </>
       )}
-    </div>
+    </>
   );
 }
 
@@ -337,5 +408,48 @@ function Tile({
       </span>
       {children}
     </Card>
+  );
+}
+
+/* -----------------------------------------------------------------------------
+   SubAbas — Resumo | Clientes, a MESMA gramática visual do MoneyHubTabs
+   (segmented, `aria-current`, min-h-9). São links de verdade, não `<Tabs>`
+   de Radix: cada aba é um estado da URL renderizado no servidor — recarregar
+   abre na mesma aba e o histórico do navegador funciona. O `?periodo=` viaja
+   junto (param torto não viaja, mesma regra do hub) e a aba Resumo nem
+   escreve `aba=` — ausente É resumo, então o link padrão continua limpo.
+   ------------------------------------------------------------------------- */
+
+const ABAS = [
+  { valor: "resumo", rotulo: "Resumo", href: "/relatorios" },
+  { valor: "clientes", rotulo: "Clientes", href: "/relatorios?aba=clientes" },
+] as const;
+
+function SubAbas({ aba, periodoParam }: { aba: Aba; periodoParam?: string }) {
+  const carregavel =
+    periodoParam && chaveDoParamPeriodo(periodoParam) !== "invalido" ? periodoParam : null;
+  return (
+    <nav aria-label="Tipo de relatório" className="flex">
+      <div className="inline-flex w-fit gap-0.5 rounded-md bg-surface-2 p-0.5">
+        {ABAS.map((item) => {
+          const query = carregavel
+            ? `${item.href.includes("?") ? "&" : "?"}periodo=${encodeURIComponent(carregavel)}`
+            : "";
+          return (
+            <Link
+              key={item.valor}
+              href={`${item.href}${query}`}
+              aria-current={aba === item.valor ? "page" : undefined}
+              className={cn(
+                "flex min-h-9 items-center rounded-sm px-3.5 text-13 font-medium",
+                aba === item.valor ? "bg-surface text-ink shadow-1" : "text-muted",
+              )}
+            >
+              {item.rotulo}
+            </Link>
+          );
+        })}
+      </div>
+    </nav>
   );
 }

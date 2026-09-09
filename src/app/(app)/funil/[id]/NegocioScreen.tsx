@@ -7,6 +7,7 @@ import {
   atualizarNegocio,
   listarEstagios,
   listarPropostas,
+  listarViajantes,
   moverEstagioDoNegocio,
   obterNegocio,
   type AtividadeDoNegocio,
@@ -16,9 +17,15 @@ import {
   type PropostaResumo,
   type RoteiroResumo,
   type ServiceResult,
+  type ViajanteResumo,
 } from "@/server";
 import { listarRoteiroDoNegocio } from "@/lib/ui/roteiroApi";
 import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
+import {
+  resultadoDaViagem,
+  urlDoCsvDePassageiros,
+  type ResultadoDaViagem,
+} from "@/lib/ui/fase12Api";
 import { Badge, type BadgeProps } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import {
@@ -37,7 +44,9 @@ import { Skeleton, SkeletonRow, SkeletonText } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { DealStageMenu, LossReasonDialog } from "@/components/app/DealStageMenu";
 import { NovaPropostaSheet } from "@/components/app/NovaPropostaSheet";
-import { ChevronRightIcon, PlusIcon } from "@/components/app/icons";
+import { ResultadoViagemCard } from "@/components/app/ResultadoViagemCard";
+import { ChevronRightIcon, DownloadIcon, PlusIcon } from "@/components/app/icons";
+import { TRAVELER_KIND_LABELS } from "../../clientes/shared";
 import { formatDayMonth, formatarFaixaDeDatas, formatTime } from "@/lib/ui/format";
 import { useAutosave } from "@/lib/ui/useAutosave";
 
@@ -465,7 +474,12 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
           ) : null}
 
           <ViagemCard negocio={negocio} dealId={negocio.id} onPatched={patch} />
+          <PassageirosCard negocio={negocio} />
           <PropostaCard negocio={negocio} />
+          {/* Fase 2 Monde — o dinheiro da viagem fechada. Só em `isWon` pelo
+              mesmo recorte do roteiro: negócio aberto não tem resultado, e o
+              contrato (`resultadoDaViagem`) recusa de qualquer forma. */}
+          {negocio.isWon ? <ResultadoCard dealId={negocio.id} /> : null}
           {/* §4 — o roteiro existe só na coluna de fechamento ganho (`isWon`):
               é pós-venda, não argumento de venda. Entre a proposta e a linha
               do tempo. */}
@@ -772,6 +786,171 @@ function CentsAutoField({
       />
       {state === "error" ? <FieldError>{error}</FieldError> : null}
     </Field>
+  );
+}
+
+/* =============================================================================
+   Passageiros — quem viaja, e o CSV que vai para o fornecedor
+   -----------------------------------------------------------------------------
+   Fase 2 do Monde ("lista de passageiros exportável"). No nosso desenho o
+   passageiro mora no cadastro do cliente (`travelers.contactId`) — a lista da
+   viagem é a dos passageiros DESTE negócio, pelo contato dele. O export não
+   pede nada a mais: a rota `/api/export/passageiros/[dealId]` resolve o mesmo
+   recorte no servidor, então o botão é um link — download é navegação, não
+   action, e o arquivo não depende de JavaScript para existir.
+
+   O aviso do rodapé existe porque o CSV sai com documento: o arquivo é para o
+   fornecedor que vai operar a viagem, não para qualquer Grupo de WhatsApp.
+   ========================================================================== */
+
+function PassageirosCard({ negocio }: { negocio: NegocioDetalhe }) {
+  const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
+  const [travelers, setTravelers] = React.useState<ViajanteResumo[]>([]);
+  const [reloadToken, setReloadToken] = React.useState(0);
+  const reload = React.useCallback(() => setReloadToken((token) => token + 1), []);
+
+  React.useEffect(() => {
+    let active = true;
+    setStatus("loading");
+    void listarViajantes({ contatoId: negocio.contactId }).then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setStatus("error");
+        return;
+      }
+      setTravelers(result.data);
+      setStatus("ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, [negocio.contactId, reloadToken]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Passageiros</CardTitle>
+        {status === "ready" && travelers.length > 0 ? (
+          <span className="text-13 tabular-nums text-muted">
+            {travelers.length} {travelers.length === 1 ? "passageiro" : "passageiros"}
+          </span>
+        ) : null}
+      </CardHeader>
+      <CardBody flush={status !== "ready" || travelers.length === 0}>
+        {status === "loading" ? (
+          <div className="flex flex-col gap-4 p-4">
+            <SkeletonRow />
+          </div>
+        ) : status === "error" ? (
+          <div className="flex flex-col items-start gap-3 p-4">
+            <FieldError>Não consegui carregar os passageiros deste cliente.</FieldError>
+            <Button variant="secondary" size="sm" onClick={reload}>
+              Tentar de novo
+            </Button>
+          </div>
+        ) : travelers.length === 0 ? (
+          <EmptyState
+            compact
+            title="Nenhum passageiro cadastrado"
+            description="Os passageiros da viagem moram no cadastro do cliente — nome completo e documento para reservar com o fornecedor."
+          />
+        ) : (
+          <ul className="flex flex-col divide-y divide-line-subtle">
+            {travelers.map((traveler) => (
+              <li key={traveler.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate text-15 text-ink">{traveler.fullName}</span>
+                  <span className="truncate text-13 text-muted">
+                    {TRAVELER_KIND_LABELS[traveler.kind] ?? traveler.kind} · {traveler.nationality}
+                  </span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  {traveler.temCpf ? <Badge size="sm">CPF</Badge> : null}
+                  {traveler.temPassaporte ? <Badge size="sm">Passaporte</Badge> : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+      <CardFooter
+        action={
+          <Button variant="secondary" size="sm" asChild>
+            <a href={urlDoCsvDePassageiros(negocio.id)} download>
+              <DownloadIcon className="size-4" />
+              Exportar CSV
+            </a>
+          </Button>
+        }
+      >
+        O arquivo sai com nome e documento de cada passageiro — mande só para quem vai operar a viagem.
+      </CardFooter>
+    </Card>
+  );
+}
+
+/* =============================================================================
+   Resultado da viagem — o dinheiro do fechamento (fase 2 do Monde)
+   -----------------------------------------------------------------------------
+   O card só existe em negócio ganho (`isWon`): recém-fechado é exatamente o
+   momento em que a agente quer saber quanto sobrou. Quem busca é este card;
+   quem desenha é `ResultadoViagemCard` (o mesmo do Relatório, com a soma do
+   período no lugar do negócio).
+   ========================================================================== */
+
+function ResultadoCard({ dealId }: { dealId: string }) {
+  const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
+  const [dados, setDados] = React.useState<ResultadoDaViagem | null>(null);
+  const [erro, setErro] = React.useState<{ mensagem: string; correcao?: string } | null>(null);
+  const [reloadToken, setReloadToken] = React.useState(0);
+  const reload = React.useCallback(() => setReloadToken((token) => token + 1), []);
+
+  React.useEffect(() => {
+    let active = true;
+    setStatus("loading");
+    void resultadoDaViagem(dealId).then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setStatus("error");
+        setErro({ mensagem: result.mensagem, correcao: result.correcao });
+        return;
+      }
+      setDados(result.data);
+      setStatus("ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, [dealId, reloadToken]);
+
+  if (status === "ready" && dados) {
+    return <ResultadoViagemCard dados={dados} />;
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Resultado da viagem</CardTitle>
+      </CardHeader>
+      {status === "loading" ? (
+        <div className="flex flex-col gap-3 px-4 py-4">
+          <Skeleton className="h-8 w-44 rounded-sm" />
+          <Skeleton className="h-3.5 w-56 rounded-xs" />
+          <div className="pt-2">
+            <SkeletonRow />
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col items-start gap-3 px-4 py-4">
+          <FieldError>
+            {erro?.mensagem ?? "Não consegui carregar o resultado desta viagem."}
+          </FieldError>
+          <Button variant="secondary" size="sm" onClick={reload}>
+            {erro?.correcao ?? "Tentar de novo"}
+          </Button>
+        </div>
+      )}
+    </Card>
   );
 }
 

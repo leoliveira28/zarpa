@@ -158,6 +158,30 @@ export function chaveDoParamPeriodo(
 }
 
 /**
+ * As duas pontas `AAAA-MM-DD` do recorte da URL — para quem não lê a forma
+ * `mes` (o CSV de vendas do período, o ranking). Ausente ou inválido = mês
+ * corrente, a MESMA convenção de `parseParamPeriodo` e do servidor: o arquivo
+ * baixado nunca pode recortar uma janela diferente da que a tela mostra.
+ */
+export function limitesDoPeriodo(
+  param: string | undefined | null,
+  agora: Date = new Date(),
+): { de: string; ate: string } {
+  const parsed = parseParamPeriodo(param);
+  const input = parsed.ok ? parsed.input : undefined;
+  if (input?.de && input?.ate) return { de: input.de, ate: input.ate };
+  // `mes`, ausente ou param torto: mês corrente — o mesmo fallback das telas.
+  return limitesDoMes(input?.mes ?? mesCorrenteUTC(agora));
+}
+
+/** Primeiro e último dia de um mês civil `AAAA-MM`. */
+function limitesDoMes(mes: string): { de: string; ate: string } {
+  const [ano, numero] = mes.split("-").map(Number) as [number, number];
+  const ultimoDia = new Date(Date.UTC(ano, numero, 0)).getUTCDate();
+  return { de: `${mes}-01`, ate: `${mes}-${String(ultimoDia).padStart(2, "0")}` };
+}
+
+/**
  * O rótulo do backend (`ResumoDoMes.periodo` / `ResumoDoPeriodo.periodo`),
  * humanizado para a subtítulo da tela: `2026-09` → "set 2026";
  * `2026-01-01..2026-03-31` → "1 jan – 31 mar 2026". É o MESMO recorte que o

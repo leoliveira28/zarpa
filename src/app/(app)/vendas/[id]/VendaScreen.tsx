@@ -44,7 +44,8 @@ import {
 import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { Skeleton, SkeletonRow, SkeletonText } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import { ChevronRightIcon, PlusIcon } from "@/components/app/icons";
+import { ChevronRightIcon, PlusIcon, ReceiptIcon } from "@/components/app/icons";
+import { urlDoRecibo } from "@/lib/ui/fase12Api";
 import { formatDayMonth } from "@/lib/ui/format";
 import { useAutosave } from "@/lib/ui/useAutosave";
 import { useDeferredDelete } from "@/lib/ui/useDeferredDelete";
@@ -242,6 +243,25 @@ function ResumoCard({
           className="mt-1"
         />
       </CardBody>
+      <CardFooter
+        action={
+          /* Âncora de verdade, não onClick+window.open: popup blocker come
+             window.open dentro de gesture indireta, e a navegação de link sai
+             no toque. O PDF carrega no PRÓPRIO aba — o progresso é o do
+             navegador; fingir carregamento aqui dentro seria um spinner, que
+             esta casa não tem. */
+          <Button variant="secondary" size="sm" asChild>
+            <a href={urlDoRecibo(venda.id)} target="_blank" rel="noopener noreferrer">
+              <ReceiptIcon className="size-4" />
+              Recibo
+            </a>
+          </Button>
+        }
+      >
+        <span className="text-13 text-muted">
+          O PDF abre em outra aba — pronto para anexar no WhatsApp.
+        </span>
+      </CardFooter>
     </Card>
   );
 }

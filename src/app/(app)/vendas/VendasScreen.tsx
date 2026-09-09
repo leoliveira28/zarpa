@@ -21,9 +21,11 @@ import {
   PeriodoInvalidoCard,
   PeriodoSeletor,
 } from "@/components/app/PeriodoSeletor";
+import { DownloadIcon } from "@/components/app/icons";
 import { cn } from "@/lib/ui/cn";
+import { urlDoCsvDeVendas } from "@/lib/ui/fase12Api";
 import { formatDayMonth } from "@/lib/ui/format";
-import { parseParamPeriodo } from "@/lib/ui/periodo";
+import { limitesDoPeriodo, parseParamPeriodo } from "@/lib/ui/periodo";
 import {
   COMISSAO_STATUS_LABEL,
   COMISSAO_STATUS_OPTIONS,
@@ -90,17 +92,33 @@ export function VendasScreen({ periodoParam }: { periodoParam?: string }) {
   const maxBruto = Math.max(1, ...vendas.map((v) => v.valorBrutoCents));
   const maxMargem = Math.max(1, ...vendas.map((v) => margemCents(v)));
 
+  // O CSV sai com o RECINTE da URL (§1), ignorando o chip de status de
+  // comissão de propósito: o arquivo é para conferência externa (contador,
+  // declaração), que não conhece o filtro da tela — recortá-lo em silêncio
+  // produziria um CSV menor do que a agente acha que baixou.
+  const csvHref = urlDoCsvDeVendas(limitesDoPeriodo(periodoParam));
+
   return (
     <div className="flex flex-col gap-5">
       <header className="flex flex-col gap-3">
         <div className="flex items-end justify-between gap-3">
           <h2 className="display text-32 text-ink">Vendas</h2>
-          <Link
-            href="/cobranca"
-            className="shrink-0 pb-1 text-13 font-medium text-muted hover:text-ink"
-          >
-            Plano e cobrança
-          </Link>
+          <div className="flex shrink-0 items-center gap-4 pb-1">
+            <a
+              href={csvHref}
+              download
+              className="flex items-center gap-1 text-13 font-medium text-muted hover:text-ink"
+            >
+              <DownloadIcon className="size-3.5" />
+              Exportar CSV
+            </a>
+            <Link
+              href="/cobranca"
+              className="text-13 font-medium text-muted hover:text-ink"
+            >
+              Plano e cobrança
+            </Link>
+          </div>
         </div>
         <MoneyHubTabs periodoParam={periodoParam} />
       </header>

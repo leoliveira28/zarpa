@@ -34,6 +34,7 @@ import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { ChevronRightIcon, LinkIcon, PlusIcon, SearchIcon } from "@/components/app/icons";
 import { CotacaoSheet } from "@/components/app/CotacaoSheet";
+import { SalvarComoModeloSheet } from "@/components/app/SalvarComoModeloSheet";
 import { cn } from "@/lib/ui/cn";
 import { useAutosave } from "@/lib/ui/useAutosave";
 import { BlocksEditor } from "./BlocksEditor";
@@ -191,6 +192,8 @@ function PublishBar({
   const [convertingSale, setConvertingSale] = React.useState(false);
   const [markingAccepted, setMarkingAccepted] = React.useState(false);
   const [selectOptionOpen, setSelectOptionOpen] = React.useState(false);
+  // Fase 1 Monde — a proposta caprichada vira ponto de partida das próximas.
+  const [modeloOpen, setModeloOpen] = React.useState(false);
   const isDraft = proposta.status === "draft";
   // Estados que antecedem o aceite — a agente registra o aceite quando o
   // cliente confirmou por outro canal (telefone, WhatsApp fora do app).
@@ -367,6 +370,11 @@ function PublishBar({
         </>
       )}
 
+      {/* Disponível em TODOS os status de propósito: é exatamente quando a
+          proposta acabou de ficar boa (rascunho) que ela vale como modelo —
+          e uma enviada/aceita que converteu bem também. */}
+      <CardAction onClick={() => setModeloOpen(true)}>Salvar como modelo</CardAction>
+
       {/*
         Seletor curto de opção aceita — só abre quando a proposta tem MAIS de
         uma opção. `Dialog` (não `Sheet`): é uma decisão de uma só escolha,
@@ -397,6 +405,13 @@ function PublishBar({
           </div>
         </DialogContent>
       </Dialog>
+
+      <SalvarComoModeloSheet
+        open={modeloOpen}
+        onOpenChange={setModeloOpen}
+        propostaId={proposta.id}
+        propostaTitulo={proposta.title}
+      />
     </div>
   );
 }
