@@ -925,3 +925,121 @@ coluna `jsonb` via parâmetro texto do driver o DUPLICA-ENCODEIA (o CHECK
   entregue; se produto pedir, é decisão nova do PO e o token deve mudar junto).
 - Sem edição de roteiro, sem exclusão de roteiro (só gerar e listar, mais a leitura pública).
 - `resumoDoPeriodo` não tem export CSV (só o JSON — se a Nina/PO quiser, é ação nova).
+
+---
+
+## S15 — contador de visita em dobro (0014) + alicerce do funil configurável (0015)
+
+Duas entregas nesta rodada. Rodei a suíte INTEIRA num worktree descartável com os meus
+arquivos aplicados: **540/540 verdes, 16 migrations aplicadas do zero**. Nenhuma regressão,
+nenhuma allowlist nova obrigatória — mas há um pedido opcional (item 1.6) e um achado sobre
+o seu detector de escape hatch (item 1.7).
+
+### 1. `drizzle/0014_visita_deduplicada.sql` — a proposta pública contava 2 por abertura
+
+O bug: a página pública chama `registrarVisitaProposta` DUAS vezes por abertura (entrada no
+mount, saída no `visibilitychange`/`pagehide`) e a função SQL sempre inseria em
+`proposal_views` + `view_count + 1`. Uma abertura real virava 2 no contador, 2 linhas em
+`proposal_views` e 2 no `openCount` de `listarAberturasRecentes`. A correção é 100% do lado
+do banco (`src/app/**` é da Nina): a MESMA `(proposal_id, session_key)` dentro da janela é
+UMA visita — a 1ª chamada insere e conta, a 2ª faz UPDATE na linha existente.
+
+Pontos de teste (todos já exercidos por script descartável meu, contra `zarpa_test` —
+reproduza como teste permanente):
+
+1. **Mesma sessão = 1.** Entrada (`sessionKey` X, sem `durationSeconds`) seguida de saída
+   (`sessionKey` X, `durationSeconds: 42`, `focusedOptionId` válido) ⇒ `proposals.view_count
+   === 1` e **exatamente 1 linha** em `proposal_views`, com `duration_ms = 42000` e
+   `focused_option_id` preenchido. Este é O teste da rodada.
+2. **Sessão diferente = 2.** Repetir o par com `sessionKey` Y na MESMA proposta ⇒
+   `view_count === 2` e 2 linhas. Visita nova de verdade continua contando.
+3. **Sem sessão = comportamento antigo preservado.** `sessionKey: undefined` (modo privado
+   sem `sessionStorage`) duas vezes ⇒ conta as duas, insere as duas. É deliberado: sem
+   chave não há como deduplicar sem cooperação do cliente, e não pode ficar PIOR que hoje.
+   Cubra também `sessionKey: '   '` (string em branco) — é tratada como ausente e grava
+   `session_key` NULL, nunca `''` (senão todas as sessões vazias colidiriam entre si).
+4. **Janela.** Mesma sessão com a linha existente envelhecida além de 30 min (`update
+   proposal_views set created_at = now() - interval '90 minutes'`) e uma chamada de ENTRADA
+   nova ⇒ conta de novo (`view_count + 1`). `sessionStorage` sobrevive a reload: sem janela,
+   a dedupe viraria subcontagem permanente. Já a chamada de SAÍDA tem janela de 24h (teto do
+   `durationSeconds` no zod): envelheça a linha em 5 horas, mande a saída com duração ⇒
+   **não** conta, e a duração cai na MESMA linha.
+5. **Não regride nada de 0004.** `is_first_view` é `true` só na primeira chamada (a
+   notificação "seu cliente abriu" sai UMA vez); `optionId` de outra proposta continua
+   virando NULL sem perder a visita; slug inválido continua devolvendo zero linhas sem
+   escrever nada; duração já gravada nunca ENCURTA (uso `GREATEST`) e uma chamada sem opção
+   não apaga a opção focada que a saída gravou.
+6. **(Opcional, documentação)** A policy nova `proposal_views_public_update` é da mesma
+   família das outras de 0004 e eu registraria em `KNOWN_ESCAPE_HATCHES`:
+   `{ table: 'public.proposal_views', policy: 'proposal_views_public_update' }`. **Não é
+   obrigatório** — a suíte passa sem isso, ver o item seguinte.
+7. **Achado no detector de escape hatch (`tests/security/rls-checks.ts`).** O filtro
+   `hatches` ignora qualquer policy cujo texto de `USING`/`WITH CHECK` contenha a string
+   `tenant_id`. Como as policies públicas de 0004 correlacionam
+   `p."tenant_id" = "proposal_views"."tenant_id"` DENTRO do `EXISTS`, elas passam batidas —
+   a minha nova incluída. Ou seja: hoje dá para adicionar uma policy `USING (current_setting
+   ('app.qualquer_coisa') = 'on' AND EXISTS (... tenant_id ...))` e o detector não acusa. Se
+   quiser fechar, a heurística precisa olhar a condição de TOPO (o `AND` externo), não a
+   ocorrência da string em qualquer profundidade.
+8. **Roteiro público intacto.** `itineraries` continua com 2 policies
+   (`itineraries_isolation`, `itineraries_public_read`), `roteiro_publica` responde igual e
+   não ganhou contador nenhum (decisão do S14, "não inventei métrica"). Trave isso: o
+   roteiro NÃO deve ganhar `view_count` de carona.
+
+### 2. `drizzle/0015_estagios_do_funil.sql` — `pipeline_stages` (alicerce, sem UI)
+
+Tabela de configuração do funil POR TENANT. **Nada está ligado**: `deals.stage` continua o
+enum, `COLUNAS_DO_FUNIL` continua a fonte do quadro, nenhuma linha de `deals` foi tocada.
+Actions em `src/server/pipelineStages.ts`. RLS completo (ENABLE + FORCE + policy
+`USING`/`WITH CHECK`, nenhum escape hatch).
+
+Pontos de teste (os 9 primeiros já passaram num teste descartável meu, que rodou no
+worktree e foi apagado — vale como teste permanente em `tests/deals/`):
+
+1. **Backfill.** Tenant criado ANTES da 0015 ganha 6 estágios (`novo`, `cotando`,
+   `proposta_enviada`, `negociando`, `ganho`, `perdido`) na ordem de hoje, com rótulos
+   iguais aos de `COLUNAS_DO_FUNIL` + `Perdida`, `is_won` só em `ganho` e `is_lost` só em
+   `perdido`, nenhum arquivado. Para provar isso é preciso aplicar 0000..0014, criar o
+   tenant e SÓ ENTÃO aplicar a 0015 (foi o que fiz).
+2. **Tenant novo.** `criarTenant` (e portanto `criarConta`) semeia os mesmos 6 na MESMA
+   transação do nascimento. Rodar `semearEstagiosPadrao` duas vezes é no-op (índice único
+   parcial por `(tenant_id, legacy_stage)`).
+3. **Invariantes do banco** (todas provadas em SQL): segundo `is_won` ativo recusado
+   (`pipeline_stages_tenant_won_key`), segundo `is_lost` recusado, `is_won AND is_lost` na
+   mesma linha recusado (`pipeline_stages_outcome_check`), rótulo repetido entre ATIVOS
+   recusado (e liberado depois de arquivar), rótulo em branco recusado, `position` negativa
+   recusada, `legacy_stage` duplicado ou fora do enum recusado.
+4. **Isolamento**: sem `app.tenant_id` ⇒ 0 linhas; tenant B não vê/atualiza/arquiva estágio
+   do A (as actions devolvem `NAO_ENCONTRADO`, nunca a linha alheia); INSERT com `tenant_id`
+   alheio é recusado pelo `WITH CHECK`.
+5. **`arquivarEstagio` recusa fim de funil** (`is_won`/`is_lost`, mensagem com "fim de
+   funil") e **recusa coluna com negócio dentro** (mensagem com a contagem, singular e
+   plural). Depois de arquivar, ainda existe exatamente 1 `is_won` e 1 `is_lost` ativos —
+   é a invariante que o dashboard/relatório depende e que o banco sozinho NÃO garante
+   ("pelo menos um" é agregado; ver o topo da 0015).
+6. **`arquivarEstagio` é soft e idempotente**: a linha continua no banco (aparece em
+   `listarEstagios({ incluirArquivadas: true })`), arquivar de novo devolve o estado atual
+   sem erro, e as posições das que sobraram fecham o buraco (0..n sem furo).
+7. **`criarEstagio`** nasce sempre com `legacyStage: null`, `isWon/isLost false`, entra
+   ANTES do fim de funil por padrão (Fechada/Perdida continuam por último) e recusa nome
+   repetido com **`CONFLITO`** (não `DADOS_INVALIDOS` — ver o bug do item 10) e o 13º
+   estágio com `CONFLITO` + correção "Arquivar uma coluna antes de criar outra".
+8. **`reordenarEstagios`** exige a lista COMPLETA dos ativos: lista parcial, com id
+   repetido ou com id de outro tenant ⇒ `DADOS_INVALIDOS`, `campo: 'ids'`, e **nenhuma
+   posição muda**.
+9. **Nada foi ligado**: depois de criar/reordenar/arquivar, `deals.stage` do negócio
+   continua o mesmo valor, `deals` não tem coluna `stage_id`, e `deals_stage_check` continua
+   no catálogo. Esse é o teste que protege o "alicerce sem UI".
+10. **Regressão de um bug real desta rodada.** Meu `ehViolacaoDeUnicidade` inicial olhava só
+    o topo do erro e o drizzle-orm 0.45.2 embrulha a falha do driver em `DrizzleQueryError`
+    (o `code: '23505'` fica em `cause`) — resultado: nome duplicado voltava como
+    `DADOS_INVALIDOS`/"Não consegui completar essa ação agora" em vez de `CONFLITO`/"Já
+    existe uma coluna com esse nome." Foi o teste que pegou, não o `tsc`. É o MESMO bug que
+    apareceu em `criarTenant` no S13a — vale um teste em cada lugar que traduz 23505.
+11. **Nota sobre o seu seed sintético.** `pipeline_stages` entra sozinha na varredura de
+    `tenant-isolation.test.ts` e ela apanhou do meu CHECK de rótulo: o seeder monta o valor
+    como `zarpa-qa-<uuid do tenant com dígitos virando letras>-label` (~51 caracteres). Eu
+    afrouxei o CHECK do banco para 1..80 (o limite de 40 que a agente vê é do zod nas
+    actions, não do banco) — nada para você fazer, mas fica registrado: **qualquer CHECK de
+    comprimento abaixo de ~60 caracteres numa coluna de texto NOT NULL vai quebrar o seed
+    genérico**, e o sintoma aparece como "seed falhou", não como falha de isolamento.

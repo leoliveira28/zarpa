@@ -12,6 +12,7 @@ import { slugificar } from './normalize';
 import { registrarAuditoria } from './audit';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
 import { exigirContaAtiva } from './subscriptionGate';
+import { semearEstagiosPadrao } from './pipelineStagesDefaults';
 
 const PLAN_PRICE_CENTS = { solo: 4_900, pro: 9_900, studio: 19_900 } as const;
 
@@ -217,6 +218,13 @@ export async function criarTenant(dados: {
         billingCycle: 'monthly',
         trialEndsAt,
       });
+
+      // S15: o funil de fábrica nasce junto com o tenant, na MESMA transação. A 0015
+      // semeou os tenants que já existiam; daqui para frente é esta linha. Sem ela,
+      // tenant novo nasceria sem nenhuma coluna e sem fim de funil — e a invariante
+      // "sempre existe um `is_won` e um `is_lost`" começaria quebrada.
+      // NÃO liga nada ao quadro atual: `/funil` continua lendo `COLUNAS_DO_FUNIL`.
+      await semearEstagiosPadrao(tx, tenantId);
 
       await registrarAuditoria(tx, {
         tenantId,

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   check,
   date,
   index,
@@ -198,9 +199,72 @@ export const activities = pgTable(
   ],
 );
 
+/**
+ * `pipeline_stages` — as colunas do funil, POR TENANT (S15, `drizzle/0015_estagios_do_funil.sql`).
+ *
+ * Hoje `deals.stage` é enum de texto com CHECK, e `COLUNAS_DO_FUNIL`
+ * (`src/server/dealStages.ts`) é lista fixa no servidor: nenhum dos dois é por tenant. Esta
+ * tabela é o ALICERCE para o agente renomear/reordenar/criar coluna. **Ela ainda não está
+ * ligada a `deals`**: `deals.stage` continua sendo o enum, e `stage_id` (a FK) é migração de
+ * outra rodada — ver o topo da 0015 para o caminho documentado.
+ *
+ * `legacy_stage` é a ponte: guarda o valor do enum (`'novo'`, `'ganho'`…) na linha semeada
+ * correspondente. É por ele que a migração futura vai preencher `deals.stage_id` sem
+ * adivinhação, e é por ele que `arquivarEstagio` sabe contar negócios de hoje. Estágio
+ * criado pelo agente nasce com `legacy_stage` nulo — não existe enum para ele.
+ *
+ * Invariantes que o BANCO garante: um único estágio ativo `is_won` e um único `is_lost` por
+ * tenant (índices únicos parciais), nunca os dois na mesma linha, rótulo não vazio e único
+ * entre os ativos. A garantia de que SEMPRE EXISTE um de cada é da camada de serviço:
+ * `arquivarEstagio` recusa arquivar fim de funil e nenhuma action apaga linha (só arquiva).
+ */
+export const pipelineStages = pgTable(
+  'pipeline_stages',
+  {
+    id: uuid('id').primaryKey().$defaultFn(uuidv7),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    /** Valor correspondente em `deals.stage` — nulo quando o estágio é do agente. */
+    legacyStage: text('legacy_stage', {
+      enum: ['novo', 'cotando', 'proposta_enviada', 'negociando', 'ganho', 'perdido'],
+    }),
+    label: text('label').notNull(),
+    position: integer('position').notNull().default(0),
+    isWon: boolean('is_won').notNull().default(false),
+    isLost: boolean('is_lost').notNull().default(false),
+    /** Soft: estágio com negócio dentro nunca é apagado, só sai do quadro. */
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('pipeline_stages_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
+    index('pipeline_stages_tenant_position_idx').on(t.tenantId, t.position),
+    uniqueIndex('pipeline_stages_tenant_legacy_key')
+      .on(t.tenantId, t.legacyStage)
+      .where(sql`${t.legacyStage} is not null`),
+    uniqueIndex('pipeline_stages_tenant_label_key')
+      .on(t.tenantId, sql`lower(${t.label})`)
+      .where(sql`${t.archivedAt} is null`),
+    uniqueIndex('pipeline_stages_tenant_won_key')
+      .on(t.tenantId)
+      .where(sql`${t.isWon} and ${t.archivedAt} is null`),
+    uniqueIndex('pipeline_stages_tenant_lost_key')
+      .on(t.tenantId)
+      .where(sql`${t.isLost} and ${t.archivedAt} is null`),
+    // 80, não 40: o limite de 40 que a agente vê é do zod nas actions. Ver a 0015.
+    check('pipeline_stages_label_check', sql`char_length(btrim(${t.label})) between 1 and 80`),
+    check('pipeline_stages_position_check', sql`${t.position} >= 0`),
+    check('pipeline_stages_outcome_check', sql`not (${t.isWon} and ${t.isLost})`),
+  ],
+);
+
 export type Deal = typeof deals.$inferSelect;
 export type NewDeal = typeof deals.$inferInsert;
 export type Task = typeof tasks.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;
 export type Activity = typeof activities.$inferSelect;
 export type NewActivity = typeof activities.$inferInsert;
+export type PipelineStage = typeof pipelineStages.$inferSelect;
+export type NewPipelineStage = typeof pipelineStages.$inferInsert;

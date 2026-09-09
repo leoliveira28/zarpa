@@ -240,6 +240,13 @@ export const proposalViews = pgTable(
     index('proposal_views_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
     index('proposal_views_proposal_viewed_idx').on(t.proposalId, t.viewedAt.desc()),
     index('proposal_views_focused_option_id_idx').on(t.focusedOptionId),
+    // 0014: lookup da dedupe de visita (`registrar_visita_proposta` procura a visita
+    // aberta da MESMA `(proposal_id, session_key)` dentro da janela antes de decidir
+    // entre INSERT e UPDATE). Parcial porque a busca nunca é por chave nula, e NÃO
+    // único de propósito: a mesma sessão pode voltar amanhã, e aí é visita nova.
+    index('proposal_views_session_dedupe_idx')
+      .on(t.proposalId, t.sessionKey, t.createdAt.desc())
+      .where(sql`${t.sessionKey} is not null`),
   ],
 );
 

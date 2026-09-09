@@ -271,3 +271,21 @@ export {
 // Só TIPOS de `./periodo`: reexportar a função puxaria zod para o grafo de Client
 // Components que importa o barril (mesmo cuidado do `subscriptionGate` acima).
 export type { PeriodoInput, Periodo } from './periodo';
+// S15 — alicerce do funil configurável. As actions estão prontas, mas NADA no produto
+// está ligado nelas ainda: `/funil` e todas as leituras continuam no enum `deals.stage`
+// e em `COLUNAS_DO_FUNIL`. Ver `src/server/pipelineStages.ts` e a 0015.
+// `pipelineStagesDefaults.ts` NÃO é reexportado aqui (mesma razão do `subscriptionGate`:
+// módulo sem `'use server'` que importa o schema/driver arrasta o driver para o grafo de
+// Client Components e quebra o build).
+export {
+  listarEstagios,
+  criarEstagio,
+  renomearEstagio,
+  reordenarEstagios,
+  arquivarEstagio,
+  type EstagioDoFunil,
+  type CriarEstagioInput,
+  type RenomearEstagioInput,
+  type ReordenarEstagiosInput,
+  type ArquivarEstagioInput,
+} from './pipelineStages';

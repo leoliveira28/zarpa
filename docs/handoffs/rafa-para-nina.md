@@ -1657,3 +1657,109 @@ type RoteiroPublico = {
   ordenados por `position`; renderize por `kind` como o editor já faz.
 - NÃO há registro de visita no roteiro (não existe "sabe quando abriu" aqui — não é bug).
 - A rota `/r/[slug]` em si é sua (como a `/p/[slug]` é) — o backend já responde via action.
+
+---
+
+## S15 — funil configurável: o CONTRATO do backend (nada para fazer agora)
+
+Isto é preparação. **Nesta rodada não há nada para você ligar** — `/funil` continua lendo
+`COLUNAS_DO_FUNIL` (`@/server` → `dealStages.ts`) e `deals.stage` continua o enum de sempre.
+O contrato fica pronto aqui para quando a UI de reorganizar/renomear/criar coluna entrar.
+
+### O que existe no banco
+
+Tabela `pipeline_stages` por tenant (`drizzle/0015_estagios_do_funil.sql`), com RLS
+completo. Todo tenant nasce com 6 estágios, na ordem de hoje:
+
+| `legacyStage` | `label` | `position` | `isWon` | `isLost` |
+|---|---|---|---|---|
+| `novo` | Novo contato | 0 | | |
+| `cotando` | Montando | 1 | | |
+| `proposta_enviada` | Enviada | 2 | | |
+| `negociando` | Negociando | 3 | | |
+| `ganho` | Fechada | 4 | ✔ | |
+| `perdido` | Perdida | 5 | | ✔ |
+
+`perdido` EXISTE como estágio (o quadro de hoje não mostra) — quem decide esconder é a UI,
+com `isLost` na mão. Estágio criado pela agente tem `legacyStage: null`.
+
+### As actions (`@/server`)
+
+```ts
+import {
+  listarEstagios, criarEstagio, renomearEstagio, reordenarEstagios, arquivarEstagio,
+  type EstagioDoFunil,
+} from '@/server';
+
+type EstagioDoFunil = {
+  id: string;
+  legacyStage: string | null;  // null = coluna criada pela agente
+  label: string;
+  position: number;            // 0..n, sem furo, na ordem do quadro
+  isWon: boolean;
+  isLost: boolean;
+  archivedAt: Date | null;
+  totalNegocios: number;       // quantos negócios estão nessa coluna HOJE
+};
+
+listarEstagios(filtro?: { incluirArquivadas?: boolean })   // ServiceResult<EstagioDoFunil[]>
+criarEstagio({ label, position? })                          // ServiceResult<EstagioDoFunil>
+renomearEstagio({ id, label })                              // ServiceResult<EstagioDoFunil>
+reordenarEstagios({ ids })                                  // ServiceResult<EstagioDoFunil[]>
+arquivarEstagio({ id })                                     // ServiceResult<EstagioDoFunil>
+```
+
+Tudo `ServiceResult` como sempre; toda escrita passa pelo gate de dunning (pode voltar
+`ASSINATURA_INATIVA` — seu `avisarRecusaDeEscrita` já cobre).
+
+### As cinco coisas que mudam como você escreve a tela
+
+1. **`totalNegocios` vem junto da lista.** Mostre "3 negócios aqui" ANTES de oferecer
+   arquivar, em vez de deixar a agente descobrir a recusa depois do clique.
+2. **`reordenarEstagios` quer a lista COMPLETA dos ativos, na ordem final.** Lista parcial,
+   com id repetido ou faltando ⇒ `DADOS_INVALIDOS`, `campo: 'ids'`, correção "Recarregar o
+   funil e arrastar de novo", e **nada muda no banco**. Depois do drag, mande o array
+   inteiro; a resposta já vem reordenada e com `position` 0..n, pronta para substituir o
+   estado otimista.
+3. **Não existe "excluir coluna", só arquivar** — e arquivar recusa em dois casos, ambos com
+   `CONFLITO` e `correcao` pronta: coluna de fim de funil ("Renomear a coluna em vez de
+   arquivar") e coluna com negócio dentro ("Mover os negócios para outra coluna antes de
+   arquivar"). Não invente confirmação modal: mostre o erro com o botão da correção junto,
+   como manda o CLAUDE.md. Arquivar de novo é no-op silencioso (idempotente).
+4. **Fim de funil não é configurável nesta rodada.** `criarEstagio` sempre cria coluna
+   comum, e não existe action para mover o `isWon`/`isLost` de lugar — relatórios e
+   dashboard dependem de saber qual coluna fecha como ganho/perdido. Por padrão a coluna
+   nova entra ANTES de Fechada/Perdida, então o fim do quadro continua sendo o fim.
+   Renomear "Fechada" para "Vendido", isso pode.
+5. **Rótulo: 1 a 40 caracteres, único entre as colunas ativas** (comparação sem diferenciar
+   maiúscula). Nome repetido volta `CONFLITO`, `campo: 'label'`, correção "Escolher outro
+   nome". Máximo de 12 colunas por tenant; a 13ª volta `CONFLITO` com "Arquivar uma coluna
+   antes de criar outra".
+
+### O que ainda NÃO existe (e por que a tela ainda não pode ser ligada)
+
+`deals.stage` continua sendo o enum de 6 valores — **um negócio não consegue apontar para
+uma coluna criada pela agente**. Mover cartão para uma coluna nova só passa a funcionar
+depois da migração de `deals.stage` para `stage_id` (caminho documentado no topo da 0015).
+Quando o PO priorizar a UI, eu entrego essa migração primeiro; até lá, `listarEstagios` é
+leitura de configuração, não a fonte do quadro.
+
+---
+
+## S15 — contador de visita da proposta pública (nada muda para você)
+
+O contador contava em dobro porque `useProposalVisitBeacon` chama `registrarVisitaProposta`
+duas vezes por abertura (mount + `pagehide`) e a função SQL contava as duas. **Consertei no
+banco, não na sua tela** (`drizzle/0014_visita_deduplicada.sql`): a mesma
+`(proposta, sessionKey)` dentro da janela vira UMA visita — a primeira chamada conta, a
+segunda só completa duração e opção focada.
+
+Você não precisa mudar NADA em `PublicProposalScreen.tsx`. Duas observações para quando
+mexer nela:
+
+- **Continue mandando a MESMA `sessionKey` nas duas chamadas.** É ela que amarra entrada e
+  saída; sem ela (modo privado sem `sessionStorage`, hoje `undefined`) a dedupe não tem como
+  acontecer e as duas contam, como antes.
+- **Não "conserte" o beacon duplicando ou removendo chamadas.** O desenho de duas chamadas
+  está certo e o servidor conta com ele. Se um dia a página chamar 3 vezes na mesma sessão,
+  continua sendo 1 visita.

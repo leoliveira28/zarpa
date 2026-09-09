@@ -1,5 +1,210 @@
 # Status — Rafa (backend / plataforma)
 
+## 2026-09-08 — S15: contador de visita em dobro (0014) + alicerce do funil configurável (0015)
+
+**Veredito: as DUAS tarefas prontas e verificadas.** `npx tsc --noEmit` limpo, `npm run
+build` verde (24 rotas), e a suíte inteira **540/540 num worktree descartável** com os meus
+arquivos aplicados — sem allowlist nova, sem portão vermelho para ninguém desta vez. As
+duas migrations aplicam limpas do zero (16 no total) e em `zarpa_dev` (25 tabelas, todas com
+RLS habilitado e forçado). Nada commitado.
+
+### Tarefa 1 — o contador da proposta pública contava 2 por abertura
+
+`drizzle/0014_visita_deduplicada.sql`. Diagnóstico confirmado: a página chama
+`registrarVisitaProposta` duas vezes por abertura (entrada no mount sem `durationSeconds`,
+saída no `visibilitychange`/`pagehide` com duração e opção focada) e
+`public.registrar_visita_proposta` sempre fazia `INSERT` + `view_count + 1`. Toda abertura
+real virava 2 no contador, 2 linhas em `proposal_views` e 2 no `openCount` de
+`listarAberturasRecentes` (esse terceiro efeito ninguém tinha notado).
+
+Correção **100% do lado do servidor** — `PublicProposalScreen.tsx` é fronteira da Nina e não
+foi tocado; o cliente continua chamando duas vezes exatamente como hoje.
+
+**Como ficou.** A função (mesma assinatura, `CREATE OR REPLACE`, a action
+`registrarVisitaProposta` não mudou uma linha) passou a tratar a mesma
+`(proposal_id, session_key)` dentro de uma janela como UMA visita: a primeira chamada
+INSERE e incrementa `view_count`; a segunda faz UPDATE na linha existente
+(`duration_ms`/`focused_option_id`) sem inserir e sem contar de novo.
+
+**Decisões que tomei sozinha:**
+
+- **A chave é `session_key`, não "veio com duration".** Duration é dado do navegador; um
+  cliente que mandasse duas entradas (StrictMode, remount, reload) voltaria a contar em
+  dobro. `sessionKey` é o identificador estável da visita e chega nas duas chamadas.
+- **Duas janelas, de propósito.** SAÍDA (com duration) procura a visita das últimas **24h**
+  — é o teto do próprio `durationSeconds` no zod, e a aba pode ficar esquecida aberta por
+  horas. ENTRADA (sem duration) usa **30 min**: `sessionStorage` sobrevive a reload, então
+  sem janela um cliente que voltasse ao link amanhã na mesma aba NUNCA mais contaria — a
+  dedupe viraria subcontagem permanente, que é trocar um erro por outro. Recarregar dentro
+  de meia hora é "voltou a olhar", não abertura nova.
+- **Sem `session_key`, comportamento antigo, sem exceção.** Modo privado sem
+  `sessionStorage` manda `undefined` — não existe o que deduplicar sem cooperação do
+  cliente. Continua contando as duas: não fica PIOR que hoje, e nunca deixa de registrar uma
+  abertura real. `'   '` (em branco) é tratado como ausente e grava NULL, nunca `''` — senão
+  todas as sessões vazias colidiriam entre si e viraria uma visita só para o mundo inteiro.
+- **NÃO usei índice único parcial em `(proposal_id, session_key)`.** Unicidade impediria a
+  segunda visita LEGÍTIMA da mesma sessão (o cliente que volta amanhã), que é exatamente o
+  que a janela existe para permitir. Em vez disso: índice parcial **não** único para o
+  lookup (`proposal_views_session_dedupe_idx`) + `pg_advisory_xact_lock` sobre
+  `(proposal_id, session_key)` para serializar entrada e saída simultâneas (quem abre e
+  fecha rápido dispara as duas quase juntas; sem o lock, as duas leriam "não existe" e
+  inseririam).
+- **Policy nova `proposal_views_public_update`.** `proposal_views` tem FORCE RLS e o role é
+  NOBYPASSRLS: `SECURITY DEFINER` só troca de role, não fura policy. Havia INSERT e SELECT
+  públicos (0004), faltava UPDATE — e `SELECT ... FOR UPDATE` também consulta a policy de
+  UPDATE. Mesma guarda das outras (GUC `app.proposal_public_context` + proposta em estado
+  publicável), `USING` **e** `WITH CHECK`. **Nenhum GUC novo.**
+- **`is_first_view` continua saindo do status lido no INÍCIO** — na continuação da visita o
+  status já é `viewed`, então a notificação "seu cliente abriu" sai no máximo uma vez.
+- **`GREATEST` na duração e opção focada só sobrescrita por opção válida** — a saída nunca
+  encurta uma duração já gravada, e a entrada (que não manda opção) não apaga a que a saída
+  gravou.
+
+**Prova ao vivo** (script descartável contra `zarpa_test`, apagado; 31 asserções, todas
+verdes): mesma sessão ⇒ `view_count = 1` e **1 linha** com `duration_ms = 42000` e
+`focused_option_id` preenchido; sessão diferente ⇒ `2/2`; sem sessão ⇒ conta as duas (antigo
+preservado); janela de 30 min expirada ⇒ conta de novo; saída 5h depois ⇒ não conta e grava
+a duração na MESMA linha; `optionId` forjado ⇒ NULL sem perder a visita; slug inválido ⇒
+zero linhas e nada escrito; RLS (sem GUC = 0 linhas, tenant B não vê, UPDATE sem contexto
+alcança 0 linhas); e o **roteiro público intocado** — `itineraries` continua com as mesmas 2
+policies, `roteiro_publica` responde igual e segue sem contador (decisão do S14, "não
+inventei métrica").
+
+### Tarefa 2 — alicerce do funil configurável (SEM valor visível ainda)
+
+`drizzle/0015_estagios_do_funil.sql` + `src/server/pipelineStages.ts` +
+`src/server/pipelineStagesDefaults.ts` + tabela no schema (`src/db/schema/pipeline.ts`).
+
+**Deixando claro, porque é o ponto:** isto NÃO entrega nada que a agente veja. `/funil`,
+`deals.ts`, `dashboard.ts` e `money.ts` continuam lendo o enum `deals.stage` e
+`COLUNAS_DO_FUNIL`. Nenhuma linha de `deals` foi tocada. É preparação para a rodada da UI.
+
+**A decisão principal: NÃO migrei `deals.stage` para FK nesta rodada.** Trocar o enum por
+`stage_id` significa, de uma vez: coluna nova em `deals`, backfill por tenant, derrubar o
+CHECK e reescrever todo `where stage = ...` espalhado por seis arquivos de serviço, mais o
+seed e a suíte do Téo — risco de quebrar o produto inteiro para entregar ZERO valor visível.
+A tabela em paralelo dá o mesmo alicerce sem tocar no que funciona, e o caminho de migração
+ficou escrito passo a passo no topo da 0015. **`legacy_stage` é a ponte**: guarda o valor do
+enum na linha semeada, é por ele que o backfill futuro de `deals.stage_id` casa sem
+adivinhação, e é por ele que `arquivarEstagio` já sabe contar negócio hoje.
+
+**Outras decisões minhas:**
+
+- **Invariante de fim de funil, dividida entre banco e serviço.** O banco garante NO MÁXIMO
+  um `is_won` e um `is_lost` ativos por tenant (índices únicos parciais) e que nenhuma linha
+  é as duas coisas (CHECK). "PELO MENOS um de cada" é agregado e não cabe em CHECK de
+  tabela; a garantia vem da camada de serviço, que é a única escritora: `arquivarEstagio`
+  RECUSA arquivar fim de funil e **nenhuma action apaga linha** (soft, sempre). Sem DELETE e
+  sem arquivar ganho/perdido, o par semeado não tem como desaparecer. Preferi isso a um
+  trigger de constraint — trigger para um alicerce sem UI é peso que ninguém pediu (risco
+  registrado abaixo).
+- **`perdido` entra como estágio**, mesmo não sendo coluna visível do quadro hoje: é valor
+  real de `deals.stage` e é o `is_lost`. Quem esconde é a UI, com `isLost` na mão; o backend
+  não pode fingir que não existe.
+- **Backfill ANTES de ligar o RLS, dentro da MESMA migration.** Com FORCE RLS, um INSERT que
+  atravessa vários tenants numa instrução é impossível por construção (a policy compara com
+  UM `app.tenant_id`). E para LER a lista de tenants precisei de `app.auth_context` num `DO`
+  block (`tenants` também é FORCE RLS: sem contexto o `SELECT` devolve zero linhas e o
+  backfill seria um no-op silencioso — o pior resultado possível). A tabela nasce, é semeada
+  e sai da migration com `ENABLE` + `FORCE` + policy `USING`/`WITH CHECK`. A regra 1 do
+  CLAUDE.md continua cumprida; só a ORDEM dentro do arquivo é ditada pelo backfill.
+- **Tenant novo é semeado em `criarTenant`**, na mesma transação do nascimento (idempotente
+  via o índice único de `legacy_stage`). Sem isso, conta criada depois da 0015 nasceria sem
+  coluna nenhuma e sem fim de funil — a invariante já começaria quebrada.
+- **`criarEstagio` nunca cria fim de funil** e, sem `position`, entra ANTES de
+  Fechada/Perdida (o fim do quadro continua sendo o fim). Trocar qual coluna fecha como
+  ganho é decisão de produto que ainda não existe — relatórios dependem dela.
+- **`reordenarEstagios` exige a lista COMPLETA dos ativos.** Reordenação parcial é a receita
+  para posição duplicada e para o quadro pular na tela de quem não mandou a lista inteira.
+- **Teto de 12 colunas por tenant** e rótulo único entre as ativas (comparação sem
+  diferenciar maiúscula) — quadro que não cabe na tela não é quadro, e duas colunas com o
+  mesmo nome é erro de dedo, não configuração.
+- **CHECK de rótulo no banco é 1..80, não 1..40.** O limite de 40 que a agente vê é do zod
+  nas actions. Constraint de banco que espelha regra de tela vira migration a cada mudança
+  de copy — e o seed sintético do scanner de isolamento do Téo (rótulo de ~51 caracteres com
+  o uuid do tenant dentro) é a prova de que os dois limites não são a mesma coisa.
+- **`pipelineStagesDefaults.ts` fora do barril `@/server`** — mesma lição do
+  `subscriptionGate` (S13a): módulo sem `'use server'` que importa schema/driver,
+  reexportado pelo barril, arrasta o driver para o grafo de Client Components e quebra o
+  build.
+
+### Bug real encontrado pelo meu próprio teste (e corrigido)
+
+`ehViolacaoDeUnicidade` no `pipelineStages.ts` olhava só o topo do erro — e o drizzle-orm
+0.45.2 embrulha a falha do driver em `DrizzleQueryError`, com o `code: '23505'` em `cause`.
+Resultado: nome de coluna duplicado voltava como `DADOS_INVALIDOS` / "Não consegui completar
+essa ação agora" em vez de `CONFLITO` / "Já existe uma coluna com esse nome." **O `tsc` e o
+build passavam limpos com o bug dentro** — foi o teste descartável que pegou, exatamente
+como o bug de slug do S13a (é o MESMO bug, no mesmo lugar conceitual). Corrigido percorrendo
+a cadeia de `cause`, igual ao helper de `tenants.ts`.
+
+### Verificação (números reais)
+
+- `npx tsc --noEmit` — limpo. `npm run build` — verde, 24 rotas.
+- **Script descartável 0014** contra `zarpa_test`: 31 asserções, todas verdes (detalhe
+  acima). Apagado.
+- **Script descartável 0015** contra `zarpa_test`: 26 asserções, todas verdes — backfill de
+  tenant pré-existente (aplicando 0000..0014, criando o tenant e SÓ ENTÃO a 0015), paridade
+  entre `ESTAGIOS_PADRAO` (TS) e o backfill (SQL), RLS, e cada CHECK/índice único recusando
+  o que deve recusar. Apagado.
+- **Teste descartável de vitest** (worktree, apagado com ele) exercitando as ACTIONS de
+  verdade com a sessão mockada, como o Téo faz: 9 casos, todos verdes — lista de fábrica,
+  contagem por estágio, criação antes do fim de funil, teto e nome repetido, renomear sem
+  tocar em `legacyStage`, reordenar completo vs. parcial, isolamento entre tenants,
+  arquivamento (recusa com negócio, recusa fim de funil, idempotente, soft) e "nada disso
+  mexeu em `deals.stage`".
+- **Suíte inteira no worktree: 540/540, 20 arquivos, 16 migrations do zero.** Nenhuma
+  regressão nas duas migrations.
+- `npm run db:migrate` em `zarpa_dev`: 25 tabelas, "todas as tabelas com RLS habilitado e
+  forçado".
+- **Não testei clicando** — o PO clica. **Nada commitado.**
+
+### O que NÃO fiz
+
+- **UI** — nina: a tela do funil configurável (contrato completo em `rafa-para-nina.md`
+  §S15) e nada em `PublicProposalScreen.tsx` (a correção do contador não pede uma linha de
+  frontend).
+- **Migração de `deals.stage` para `stage_id`** — decisão consciente, caminho documentado.
+- **Action para trocar qual estágio é ganho/perdido** — decisão de produto, não existe.
+- **Testes permanentes** — teo: 8 pontos da 0014 + 11 da 0015 em `rafa-para-teo.md` §S15.
+- Não toquei em `src/app`, `src/components`, `tests/`, `package.json`.
+
+### Riscos
+
+- **"Pelo menos um fim de funil" não é garantido pelo BANCO**, só pelas actions (ver
+  decisão). Quem escrever em `pipeline_stages` por fora (SQL direto, script de manutenção)
+  consegue deixar um tenant sem `is_won`. Se o produto passar a depender disso em relatório,
+  vale um trigger de constraint — hoje seria peso sem uso.
+- **Janela de 30 min da dedupe de entrada é um julgamento, não uma medida.** Reload 20 min
+  depois conta como a mesma visita (subcontagem de 1), reload 40 min depois conta como nova.
+  Escolhi errar para o lado de contar de novo, porque o defeito reportado era contar a MAIS
+  e porque `sessionStorage` não expira sozinho. É um número, muda numa linha da função.
+- **`proposal_views_public_update` é escape hatch novo** — o alcance é mínimo (uma tabela de
+  analytics, com a mesma guarda das outras de 0004), mas a ressalva estrutural de sempre
+  vale: GUC é forjável por quem já executa SQL arbitrário. **Achado colateral**: o detector
+  de escape hatch do Téo não flagra essa família de policy porque o texto contém a string
+  `tenant_id` dentro do `EXISTS` — está no handoff dele como item 1.7; é um ponto cego real
+  do portão, não só um detalhe desta policy.
+- **`listarEstagios` faz duas queries** (estágios + contagem agrupada de `deals`); no volume
+  MEI é irrelevante, mas se um dia a tela do funil chamar isso a cada drag, é a primeira
+  coisa a revisar.
+- Nenhum GUC novo nesta rodada; risco estrutural inalterado no resto.
+
+### O que precisa dos outros
+
+- **Téo**: os pontos de `rafa-para-teo.md` §S15 — em especial "mesma sessão = 1 / sessão
+  diferente = 2 / sem sessão = comportamento antigo", o ponto cego do detector de escape
+  hatch (1.7), e o teste de regressão do 23505 embrulhado (2.10). A allowlist para
+  `proposal_views_public_update` é **opcional** (a suíte passa sem), mas eu registraria.
+- **Nina**: nada nesta rodada. O contrato do funil configurável está em
+  `rafa-para-nina.md` §S15 para quando a UI entrar — inclusive o motivo de a tela ainda não
+  poder ser ligada (negócio não consegue apontar para coluna nova antes da FK).
+- **PO**: decidir se/quando prioriza a UI do funil — a migração de `deals.stage` para
+  `stage_id` é minha e vem ANTES da tela. E, se quiser, revisar dois números que escolhi
+  sozinha: a janela de 30 min da dedupe de entrada e o teto de 12 colunas por tenant.
+
+---
+
 ## 2026-09-07 — S14: os 4 fluxos de `docs/PROPOSTAS_PRODUTO.md` (período, relatórios, em viagem, roteiro)
 
 **Veredito: PRONTO no meu lado, com o portão vermelho por DUAS falhas esperadas que moram

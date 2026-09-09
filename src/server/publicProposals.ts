@@ -152,6 +152,19 @@ type LinhaVisita = {
  * Registra uma abertura do link público. Chamado pela página pública ao montar (e,
  * opcionalmente, de novo ao desmontar/trocar de aba, com `durationSeconds` preenchido).
  *
+ * DUAS CHAMADAS, UMA VISITA. A página chama esta action duas vezes por abertura
+ * (entrada no mount + saída no `visibilitychange`/`pagehide`). Quem deduplica é o BANCO,
+ * não esta action: `public.registrar_visita_proposta` trata a mesma
+ * `(proposal_id, session_key)` dentro da janela como a MESMA visita — a primeira chamada
+ * insere e incrementa `view_count`, a segunda só completa `duration_ms`/`focused_option_id`
+ * na linha que já existe. Ver `drizzle/0014_visita_deduplicada.sql` (o "contador em dobro"
+ * que o PO reportou) para o desenho, as janelas e o caso sem `sessionKey`.
+ *
+ * `sessionKey` é, portanto, o que separa "visita nova" de "continuação". Sem ela (modo
+ * privado sem `sessionStorage`) não há como deduplicar e o comportamento antigo vale:
+ * conta as duas. Se um dia a UI mudar, MANDAR a mesma `sessionKey` nas duas chamadas
+ * continua sendo o contrato.
+ *
  * Nunca lança para o chamador por "proposta não existe" — devolve `{ ok: true, data:
  * null }` tanto para slug errado quanto para proposta em rascunho/arquivada. A página
  * pública não deveria distinguir os dois casos (nenhuma pista sobre qual dos dois
