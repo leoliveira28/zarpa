@@ -180,3 +180,41 @@ export function mascararDigitos(bruto: string): string {
   if (digitos.length < 4) return '***';
   return `***${digitos.slice(-4)}`;
 }
+
+// ---------------------------------------------------------------------------
+// ESCREVER CSV — o espelho da leitura acima. As regras de formato são as MESMAS
+// (`;` como delimitador, escape RFC 4180, BOM UTF-8), só que na direção de saída.
+// Vivem aqui e não em `dashboard.ts` (que tinha cópias privadas) porque exportação
+// passou a ter DOIS produtores — o resumo do mês e as exportações de
+// `exportacoes.ts` — e cópias que divergem são o jeito mais barato de entregar um
+// CSV que abre errado no Excel de vez em quando, sempre nos dias em que ninguém
+// está olhando. Formato calibrado para Excel/Sheets pt-BR: `;` (não `,`, que é
+// separador decimal no Brasil) e BOM UTF-8 (sem ele o Excel do Windows abre
+// acento errado no duplo clique).
+// ---------------------------------------------------------------------------
+
+/** `﻿` — cole no INÍCIO do conteúdo do arquivo, antes da primeira linha. */
+export const BOM_UTF8 = '﻿';
+
+/** Escape RFC 4180: campo com `;`, `"`, `\r` ou `\n` vira campo entre aspas, com `""` interna. */
+export function escaparCampoCsv(valor: string): string {
+  if (/[;"\r\n]/.test(valor)) {
+    return `"${valor.replace(/"/g, '""')}"`;
+  }
+  return valor;
+}
+
+/** Uma linha do arquivo — campos juntados com `;`. As quebras de linha ficam com o chamador. */
+export function linhaCsv(campos: string[]): string {
+  return campos.map(escaparCampoCsv).join(';');
+}
+
+/** `423456` → `"4.234,56"` — só para exibição no CSV; a aplicação nunca guarda dinheiro assim. */
+export function centavosParaReaisCsv(cents: number): string {
+  const negativo = cents < 0;
+  const absCents = Math.abs(Math.round(cents));
+  const inteiro = Math.floor(absCents / 100);
+  const centavos = String(absCents % 100).padStart(2, '0');
+  const comMilhar = inteiro.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return `${negativo ? '-' : ''}${comMilhar},${centavos}`;
+}

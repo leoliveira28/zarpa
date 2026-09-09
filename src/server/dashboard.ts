@@ -6,6 +6,7 @@ import { withTenant, type TenantDb } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { comoResultado, type ServiceResult } from './errors';
 import { resolverPeriodo, type Periodo, type PeriodoInput } from './periodo';
+import { BOM_UTF8, linhaCsv, centavosParaReaisCsv } from './csv';
 
 /**
  * S10 — o resumo do mês que a agente abre para DECIDIR o que fazer, não só para olhar
@@ -367,33 +368,10 @@ export async function obterResumoDoMes(
 // fronteira do PO (ver `docs/OWNERSHIP.md`), então não criei endpoint de download aqui.
 // A Nina chama `exportarResumoDoMesCsv()`, pega `conteudo` e dispara o download no
 // navegador com um `Blob`/`URL.createObjectURL` — não precisa de rota nova para isso.
-// Formato calibrado para abrir direto no Excel/Sheets em pt-BR (mesma preocupação
-// documentada em `src/server/csv.ts`, que é sobre LER planilha — aqui é o espelho, sobre
-// ESCREVER uma): delimitador `;` (não `,`, que é separador decimal em pt-BR) e BOM UTF-8 no
-// início (sem ele, o Excel do Windows abre acento errado ao dar duplo clique no arquivo).
-
-const BOM_UTF8 = '﻿';
-
-function escaparCampoCsv(valor: string): string {
-  if (/[;"\r\n]/.test(valor)) {
-    return `"${valor.replace(/"/g, '""')}"`;
-  }
-  return valor;
-}
-
-function linhaCsv(campos: string[]): string {
-  return campos.map(escaparCampoCsv).join(';');
-}
-
-/** `423456` → `"4.234,56"` — só para exibição no CSV; a aplicação nunca guarda dinheiro assim. */
-function centavosParaReaisCsv(cents: number): string {
-  const negativo = cents < 0;
-  const absCents = Math.abs(Math.round(cents));
-  const inteiro = Math.floor(absCents / 100);
-  const centavos = String(absCents % 100).padStart(2, '0');
-  const comMilhar = inteiro.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-  return `${negativo ? '-' : ''}${comMilhar},${centavos}`;
-}
+// Formato calibrado para abrir direto no Excel/Sheets em pt-BR: delimitador `;` (não
+// `,`, que é separador decimal em pt-BR) e BOM UTF-8 no início. Os helpers de ESCRITA
+// (`BOM_UTF8`/`escaparCampoCsv`/`linhaCsv`/`centavosParaReaisCsv`) moram em `csv.ts` —
+// `exportacoes.ts` (as rotas de `/api/export/…` da rodada Monde) escreve com os MESMOS.
 
 export type ResumoDoMesCsv = {
   /** `resumo-2026-09.csv` — já pronto para o atributo `download` do link/blob. */

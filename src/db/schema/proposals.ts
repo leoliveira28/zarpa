@@ -250,6 +250,41 @@ export const proposalViews = pgTable(
   ],
 );
 
+/**
+ * O modelo de proposta ("salvar como modelo" / "criar de modelo" — fase 1 do roadmap).
+ * `blocks` é FOTOGRAFIA dos blocos no instante da criação, não referência: a proposta de
+ * origem pode sumir e o modelo sobrevive; editar a proposta não reescreve o modelo. A
+ * forma de cada bloco é a de `proposal_blocks` SEM `option_id` (blocos de opção são
+ * achatados para o nível da proposta). Migration `0018_modelos_de_proposta` — leia o
+ * comentário dela para o porquê do DEFAULT em `blocks` e do partial unique de
+ * `is_default` (um só modelo padrão por tenant, garantido no banco).
+ */
+export const proposalTemplates = pgTable(
+  'proposal_templates',
+  {
+    id: uuid('id').primaryKey().$defaultFn(uuidv7),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    blocks: jsonb('blocks').notNull().default(sql`'[]'::jsonb`),
+    isDefault: boolean('is_default').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('proposal_templates_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
+    // Mesmo desenho do banco: a vaga de "padrão" é única por tenant (parcial — só as
+    // linhas default disputam).
+    uniqueIndex('proposal_templates_tenant_default_key')
+      .on(t.tenantId)
+      .where(sql`${t.isDefault}`),
+    check(
+      'proposal_templates_blocks_is_array_check',
+      sql`jsonb_typeof(${t.blocks}) = 'array'`,
+    ),
+  ],
+);
+
 export type Proposal = typeof proposals.$inferSelect;
 export type NewProposal = typeof proposals.$inferInsert;
 export type ProposalOption = typeof proposalOptions.$inferSelect;
@@ -258,3 +293,5 @@ export type ProposalBlock = typeof proposalBlocks.$inferSelect;
 export type NewProposalBlock = typeof proposalBlocks.$inferInsert;
 export type ProposalView = typeof proposalViews.$inferSelect;
 export type NewProposalView = typeof proposalViews.$inferInsert;
+export type ProposalTemplate = typeof proposalTemplates.$inferSelect;
+export type NewProposalTemplate = typeof proposalTemplates.$inferInsert;

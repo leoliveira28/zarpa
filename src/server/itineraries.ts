@@ -261,8 +261,13 @@ export type GerarRoteiroInput = z.infer<typeof roteiroInput>;
  * proposta certa para a tela) não podem discordar sobre qual proposta é a verdade — por
  * isso os dois passam por aqui. `null` nos dois casos de vazio (sem aceita, aceita sem
  * opção): para quem pergunta, "não há o que fotografar" é uma resposta só.
+ *
+ * Exportada desde a rodada de dinheiro do Monde (fase 2): `resultadoDaViagem`
+ * (`src/server/resultado.ts`) usa a MESMA proposta como fonte do "previsto" — venda sem
+ * lançamento cai na opção aceita, e a opção aceita tem de ser A MESMA nos dois lugares.
+ * Uso interno entre módulos de servidor; NÃO é reexportada pelo barril `@/server`.
  */
-async function propostaAceitaRecente(
+export async function propostaAceitaRecente(
   tx: TenantDb,
   dealId: string,
 ): Promise<{
