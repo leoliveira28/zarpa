@@ -400,6 +400,7 @@ function ParcelasCard({ venda }: { venda: VendaResumo }) {
   const [parcelas, setParcelas] = React.useState<ParcelaResumo[]>([]);
   const [gerarOpen, setGerarOpen] = React.useState(false);
   const [novaOpen, setNovaOpen] = React.useState(false);
+  const [editando, setEditando] = React.useState<ParcelaResumo | null>(null);
 
   const [reloadToken, setReloadToken] = React.useState(0);
   const reload = React.useCallback(() => setReloadToken((token) => token + 1), []);
@@ -485,6 +486,7 @@ function ParcelasCard({ venda }: { venda: VendaResumo }) {
                 parcela={parcela}
                 onRemoved={() => handleRemove(parcela)}
                 onMarkPaid={() => void handleMarkPaid(parcela)}
+                onEdit={() => setEditando(parcela)}
               />
             ))}
           </ul>
@@ -528,6 +530,16 @@ function ParcelasCard({ venda }: { venda: VendaResumo }) {
           setNovaOpen(false);
         }}
       />
+      <EditarParcelaSheet
+        parcela={editando}
+        onOpenChange={(open) => {
+          if (!open) setEditando(null);
+        }}
+        onSaved={(atualizada) => {
+          handleUpdated(atualizada);
+          setEditando(null);
+        }}
+      />
     </Card>
   );
 }
@@ -536,10 +548,12 @@ function ParcelaRow({
   parcela,
   onRemoved,
   onMarkPaid,
+  onEdit,
 }: {
   parcela: ParcelaResumo;
   onRemoved: () => void;
   onMarkPaid: () => void;
+  onEdit: () => void;
 }) {
   const dias = diasParaVencimento(parcela.venceEm);
   const late = (parcela.status === "pendente" || parcela.status === "atrasado") && dias < 0;
@@ -563,6 +577,7 @@ function ParcelaRow({
         {canPay ? (
           <CardAction onClick={onMarkPaid}>Marcar paga</CardAction>
         ) : null}
+        {canPay ? <CardAction onClick={onEdit}>Editar</CardAction> : null}
         <CardAction className="text-danger hover:text-danger" onClick={onRemoved}>
           Remover
         </CardAction>
@@ -786,5 +801,94 @@ function EncerramentoCard({ venda }: { venda: VendaResumo }) {
         }
       />
     </Card>
+  );
+}
+
+/* -----------------------------------------------------------------------------
+   EditarParcelaSheet — valor e vencimento editáveis (juros, renegociação)
+   -------------------------------------------------------------------------
+   O servidor SEMPRE teve `atualizarParcela` (valor/vencimento/status); a UI
+   nunca expôs — com juros de cartão, a agente hoje teria que remover e
+   recriar a parcela. Só parcela NÃO paga edita: valor pago é conferência,
+   renegociar valor pago é apagar e lançar de novo com o rastro do toast.
+   ------------------------------------------------------------------------- */
+
+function EditarParcelaSheet({
+  parcela,
+  onOpenChange,
+  onSaved,
+}: {
+  parcela: ParcelaResumo | null;
+  onOpenChange: (open: boolean) => void;
+  onSaved: (atualizada: ParcelaResumo) => void;
+}) {
+  const open = parcela !== null;
+  const [venceEm, setVenceEm] = React.useState("");
+  const [valor, setValor] = React.useState<number | null>(null);
+  const [saving, setSaving] = React.useState(false);
+  const [fieldError, setFieldError] = React.useState<{ campo?: string; mensagem: string } | null>(null);
+
+  // Semeia o formulário QUANDO abre — o estado local acompanha a parcela escolhida.
+  React.useEffect(() => {
+    if (parcela) {
+      setVenceEm(parcela.venceEm);
+      setValor(parcela.valorCents);
+      setFieldError(null);
+    }
+  }, [parcela]);
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!parcela) return;
+    setSaving(true);
+    setFieldError(null);
+    const result = await atualizarParcela(parcela.id, {
+      venceEm,
+      valorCents: valor ?? parcela.valorCents,
+    });
+    setSaving(false);
+    if (!result.ok) {
+      avisarRecusaDeEscrita(result);
+      setFieldError({ campo: result.campo, mensagem: result.mensagem });
+      return;
+    }
+    onSaved(result.data);
+  }
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        open={open}
+        onOpenChange={onOpenChange}
+        title="Editar parcela"
+        description="Para juros de cartão ou renegociação com o cliente — o valor da venda não muda, só o cobrado aqui."
+        footer={
+          <Button
+            variant="primary"
+            block
+            type="submit"
+            form="editar-parcela-form"
+            loading={saving}
+            disabled={!venceEm || !valor}
+          >
+            Salvar
+          </Button>
+        }
+      >
+        <form id="editar-parcela-form" onSubmit={handleSubmit} className="flex flex-col gap-4 py-2">
+          <Field invalid={fieldError?.campo === "venceEm"}>
+            <Label>Vencimento</Label>
+            <Input type="date" value={venceEm} onChange={(event) => setVenceEm(event.target.value)} />
+            {fieldError?.campo === "venceEm" ? <FieldError>{fieldError.mensagem}</FieldError> : null}
+          </Field>
+          <Field invalid={fieldError?.campo === "valorCents"}>
+            <Label>Valor</Label>
+            <CentsInput cents={valor} onCommit={setValor} invalid={fieldError?.campo === "valorCents"} />
+            {fieldError?.campo === "valorCents" ? <FieldError>{fieldError.mensagem}</FieldError> : null}
+          </Field>
+          {fieldError && !fieldError.campo ? <FieldError>{fieldError.mensagem}</FieldError> : null}
+        </form>
+      </SheetContent>
+    </Sheet>
   );
 }
