@@ -37,15 +37,15 @@ export default function RootLayout({
 }) {
   return (
     <html lang="pt-BR" className={`h-full ${display.variable}`} suppressHydrationWarning>
-      {/* Antes do primeiro paint: sem isso a tela pisca clara antes de escurecer.
-          next/script antes da hidratação — <script> inline em componente o React
-          renderiza mas NUNCA executa no cliente (erro de console do React 19). */}
-      <Script
-        id="theme-bootstrap"
-        strategy="beforeInteractive"
-        dangerouslySetInnerHTML={{ __html: themeBootstrapScript }}
-      />
       <body className="min-h-full">
+        {/* Antes do primeiro paint: sem isso a tela pisca clara antes de escurecer.
+            Primeiro filho de <body> e strategy beforeInteractive: HTML válido
+            (script como filho de <html> quebra hidratação) e roda antes do React. */}
+        <Script
+          id="theme-bootstrap"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: themeBootstrapScript }}
+        />
         <Providers>{children}</Providers>
       </body>
     </html>
