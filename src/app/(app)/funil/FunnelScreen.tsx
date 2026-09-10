@@ -1006,6 +1006,15 @@ function CardBody({
         <p className="min-w-0 flex-1 truncate text-15 font-medium text-ink">
           {deal.contactName}
         </p>
+        {/* 0020 — acompanhantes do mesmo negócio ("Ana +2"). CONTAGEM, nunca
+            lista (a lista completa é da ficha) e nunca cor: é informação, não
+            convite a clicar. Fora do truncate de propósito — nome comprido não
+            come o número. */}
+        {deal.clientesSecundarios > 0 ? (
+          <span className="shrink-0 pt-0.5 text-13 tabular-nums text-muted">
+            +{deal.clientesSecundarios}
+          </span>
+        ) : null}
         {inert ? <span className="w-7 shrink-0" aria-hidden /> : menu}
       </div>
 

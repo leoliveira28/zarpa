@@ -4,19 +4,23 @@ import * as React from "react";
 import Link from "next/link";
 import {
   gerarRoteiro,
+  obterNegocio,
   obterTenantAtual,
   type BlocoDoRoteiro,
+  type ClienteDoNegocio,
   type RoteiroResumo,
 } from "@/server";
 import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { mensagemDoRoteiro } from "@/lib/ui/assinaturaDaMarca";
-import { whatsappShareLink } from "@/lib/ui/whatsapp";
+import { waMeLink, whatsappShareLink } from "@/lib/ui/whatsapp";
 import { Button } from "@/components/ui/Button";
 import { Card, CardAction, CardBody, CardFooter, CardHeader } from "@/components/ui/Card";
 import { FieldError, FieldHint, SavedMark } from "@/components/ui/Field";
+import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { ChatIcon, ChevronRightIcon } from "@/components/app/icons";
+import { Rule } from "@/components/plates";
 import { cn } from "@/lib/ui/cn";
 import { formatarFaixaDeDatas } from "@/lib/ui/format";
 import {
@@ -69,6 +73,8 @@ export function RoteiroEditorScreen({ dealId }: { dealId: string }) {
   const [itens, setItens] = React.useState<ItemBloco[]>([]);
   const [errorInfo, setErrorInfo] = React.useState<ErroInfo | null>(null);
   const [view, setView] = React.useState<View>("editar");
+  /** O toque no envio pede a lista de clientes ao servidor — o botão mostra. */
+  const [enviando, setEnviando] = React.useState(false);
   const [reloadToken, setReloadToken] = React.useState(0);
   const retry = React.useCallback(() => setReloadToken((token) => token + 1), []);
 
@@ -165,16 +171,50 @@ export function RoteiroEditorScreen({ dealId }: { dealId: string }) {
     }
   }
 
+  /** Destinatários com telefone confiável, para a escolha do §15.5. `null`
+   * enquanto a leitura do negócio não volta — a lista é só pedida NO ENVIO:
+   * quem não manda, não paga a leitura. */
+  const [destinatarios, setDestinatarios] = React.useState<
+    { cliente: ClienteDoNegocio; link: string }[] | null
+  >(null);
+  const [escolhaOpen, setEscolhaOpen] = React.useState(false);
+  /** A mensagem pronta da última tentativa de envio — o sheet relê no render,
+   *  então ela mora em state, não em ref. */
+  const [mensagemPronta, setMensagemPronta] = React.useState("");
+
   /**
-   * O envio: `wa.me/?text=…` abre o WhatsApp com a mensagem pronta — link,
-   * assinatura — e DEIXA a agente escolher a conversa. O número do cliente não
-   * precisa passar por aqui (e a ficha não o tem: contrato pendente com o
-   * rafa); o share-picker resolve hoje com zero contrato novo.
+   * O envio (§15.5 — WhatsApp com casal): a mensagem sai pronta com link e
+   * assinatura. Com UM telefone no negócio, vai direto para ele — sem novo
+   * passo, comportamento de sempre. Com MAIS de um, o toque abre a escolha de
+   * destinatário (a linha do principal vem primeiro; vem do servidor já
+   * ordenado). Sem telefone nenhum — ou se a leitura do negócio falhar —, cai
+   * no share-picker de hoje, que deixa a agente escolher a conversa: o envio
+   * NUNCA fica bloqueado por uma conveniência que não veio.
    */
-  function mandarPorWhatsApp() {
+  async function mandarPorWhatsApp() {
     if (!roteiro) return;
     const url = `${window.location.origin}/r/${roteiro.publicToken}`;
     const mensagem = mensagemDoRoteiro(roteiro, url, marca ?? {});
+    setMensagemPronta(mensagem);
+
+    setEnviando(true);
+    const result = await obterNegocio(dealId);
+    setEnviando(false);
+    const telefones = result.ok
+      ? result.data.clientes
+          .map((cliente) => ({ cliente, link: waMeLink(cliente.telefone, mensagem) }))
+          .filter((item): item is { cliente: ClienteDoNegocio; link: string } => item.link !== null)
+      : [];
+
+    if (telefones.length === 1) {
+      window.open(telefones[0]!.link, "_blank", "noopener,noreferrer");
+      return;
+    }
+    setDestinatarios(telefones);
+    if (telefones.length > 1) {
+      setEscolhaOpen(true);
+      return;
+    }
     window.open(whatsappShareLink(mensagem), "_blank", "noopener,noreferrer");
   }
 
@@ -231,8 +271,9 @@ export function RoteiroEditorScreen({ dealId }: { dealId: string }) {
             autosave={autosave}
             itensRef={itensRef}
             blocoComErro={blocoComErro}
+            enviando={enviando}
             onCopiar={() => void copiarLink()}
-            onCompartilhar={mandarPorWhatsApp}
+            onCompartilhar={() => void mandarPorWhatsApp()}
           />
           <RoteiroBlocos
             itens={itens}
@@ -247,6 +288,15 @@ export function RoteiroEditorScreen({ dealId }: { dealId: string }) {
           <RoteiroPreview roteiro={roteiro} blocos={blocosDe(itens)} />
         </div>
       </div>
+
+      {destinatarios ? (
+        <DestinatarioSheet
+          open={escolhaOpen}
+          onOpenChange={setEscolhaOpen}
+          destinatarios={destinatarios}
+          mensagem={mensagemPronta}
+        />
+      ) : null}
     </div>
   );
 }
@@ -302,6 +352,7 @@ function FichaCard({
   autosave,
   itensRef,
   blocoComErro,
+  enviando,
   onCopiar,
   onCompartilhar,
 }: {
@@ -311,6 +362,8 @@ function FichaCard({
   itensRef: React.RefObject<ItemBloco[]>;
   /** Índice (0-based) do bloco apontado pela portaria, quando a recusa diz. */
   blocoComErro: number | null;
+  /** O envio consulta os clientes do negócio antes de abrir o WhatsApp. */
+  enviando: boolean;
   onCopiar: () => void;
   onCompartilhar: () => void;
 }) {
@@ -356,16 +409,86 @@ function FichaCard({
       </CardBody>
       <CardFooter
         action={
-          <Button variant="primary" size="sm" onPointerDown={onCompartilhar}>
+          <Button variant="primary" size="sm" loading={enviando} onPointerDown={onCompartilhar}>
             <ChatIcon className="size-4" />
             Mandar por WhatsApp
           </Button>
         }
         secondary={<CardAction onClick={onCopiar}>Copiar link</CardAction>}
       >
-        A mensagem sai pronta com o link e a sua assinatura — você escolhe a conversa.
+        A mensagem sai pronta com o link e a sua assinatura.
       </CardFooter>
     </Card>
+  );
+}
+
+/* -----------------------------------------------------------------------------
+   Destinatário — §15.5, a viagem de casal/família
+   -----------------------------------------------------------------------------
+   Mais de um cliente com telefone: o toque pergunta PARA QUEM antes de abrir o
+   WhatsApp. Um item por cliente, o principal primeiro (a ordem vem do
+   servidor), o telefone como foi digitado no cadastro — não formato o que não
+   é meu. O link `wa.me` leva a mensagem pronta; escolher conversa no WhatsApp
+   (o caminho de hoje, sem destinatário) continua existindo como TEXTO, a
+   segunda ação — duas saídas lado a lado no mesmo peso é pergunta mal feita.
+   -------------------------------------------------------------------------- */
+
+function DestinatarioSheet({
+  open,
+  onOpenChange,
+  destinatarios,
+  mensagem,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  destinatarios: { cliente: ClienteDoNegocio; link: string }[];
+  mensagem: string;
+}) {
+  function abrir(link: string) {
+    onOpenChange(false);
+    window.open(link, "_blank", "noopener,noreferrer");
+  }
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        open={open}
+        onOpenChange={onOpenChange}
+        title="Mandar para quem?"
+        description="Esta viagem tem mais de um cliente com WhatsApp."
+      >
+        <div className="flex flex-col pb-2 pt-1">
+          {destinatarios.map(({ cliente, link }) => (
+            <React.Fragment key={cliente.contactId}>
+              <button
+                type="button"
+                onPointerDown={() => abrir(link)}
+                className={cn(
+                  "flex min-h-11 items-center gap-3 py-1.5 text-left",
+                  "[transition:transform_120ms_var(--curve-out)] active:scale-[0.99]",
+                )}
+              >
+                <span className="min-w-0 flex-1 truncate text-15 text-ink">
+                  <span className={cn(cliente.principal && "font-medium")}>{cliente.nome}</span>
+                  {cliente.principal ? <span className="text-muted"> · principal</span> : null}
+                </span>
+                <span className="shrink-0 text-13 tabular-nums text-muted">
+                  {cliente.telefone}
+                </span>
+              </button>
+              <Rule inner />
+            </React.Fragment>
+          ))}
+
+          <CardAction
+            className="mt-2 self-start"
+            onClick={() => abrir(whatsappShareLink(mensagem))}
+          >
+            Escolher conversa no WhatsApp
+          </CardAction>
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 

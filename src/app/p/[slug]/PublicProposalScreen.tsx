@@ -3,6 +3,7 @@
 import * as React from "react";
 import { registrarVisitaProposta, aceitarOpcaoPublica, type PropostaPublica } from "@/server";
 import { Assinatura } from "@/components/public/Assinatura";
+import { PreparadoPara } from "@/components/public/PreparadoPara";
 import { Badge } from "@/components/ui/Badge";
 import { Money } from "@/components/ui/Money";
 import { ArchPlate, BiplanePlate, Rule } from "@/components/plates";
@@ -59,7 +60,7 @@ export function PublicProposalScreen({
   data: PropostaPublica;
   slug: string;
 }) {
-  const { proposal, brand, blocks } = data;
+  const { proposal, brand, blocks, clientes } = data;
 
   const options = React.useMemo(
     () => [...data.options].sort((a, b) => a.position - b.position),
@@ -123,6 +124,12 @@ export function PublicProposalScreen({
             termina em 32, e a capa é a exceção editorial (CLAUDE.md: display
             grande é peso 800 sobre leading 0.94, nunca itálico). */}
         <h1 className="display text-32 text-ink lg:text-[56px]">{proposal.title}</h1>
+        {/* 0020 — "Preparado para Ana e Carlos", principal primeiro. Entre o
+            título e o resumo: é QUEM viaja, a informação mais pessoal da capa —
+            e quando o acompanhante lê o próprio nome ali, a proposta deixa de
+            ser um documento e vira convite. Mesma gramática do roteiro
+            (`/r/[slug]`), mesmo componente. */}
+        <PreparadoPara nomes={clientes} />
         {proposal.summary ? (
           <p className="max-w-[34rem] text-17 leading-[1.5] text-muted lg:text-20">
             {proposal.summary}

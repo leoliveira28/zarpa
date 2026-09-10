@@ -190,6 +190,20 @@ export function formatarFaixaDeDatas(
   return null;
 }
 
+/**
+ * Lista de nomes em português, para "Preparado para …" (0020 — um negócio,
+ * vários clientes): "Ana"; "Ana e Carlos"; "Ana, Carlos e Débora". Uma função
+ * só porque a MESMA gramática precisa valer na proposta pública, na ficha do
+ * negócio e no editor — duas telas escrevendo o join à mão é a garantia de que
+ * elas vão divergir.
+ */
+export function juntarNomes(nomes: string[]): string {
+  const limpos = nomes.map((nome) => nome.trim()).filter(Boolean);
+  if (limpos.length === 0) return "";
+  if (limpos.length === 1) return limpos[0] ?? "";
+  return `${limpos.slice(0, -1).join(", ")} e ${limpos[limpos.length - 1]}`;
+}
+
 /** Iniciais para avatar textual — no máximo duas letras. */
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);

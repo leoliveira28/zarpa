@@ -54,9 +54,15 @@ import {
 import { Skeleton, SkeletonRow, SkeletonText } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { DealStageMenu, LossReasonDialog } from "@/components/app/DealStageMenu";
+import {
+  AdicionarClienteSheet,
+  ClienteRow,
+  useClientesDoNegocio,
+} from "@/components/app/ClientesDoNegocio";
 import { NovaPropostaSheet } from "@/components/app/NovaPropostaSheet";
 import { ResultadoViagemCard } from "@/components/app/ResultadoViagemCard";
 import { ChevronRightIcon, DownloadIcon, PlusIcon } from "@/components/app/icons";
+import { Rule } from "@/components/plates";
 import { TRAVELER_KIND_LABELS } from "../../clientes/shared";
 import { formatDayMonth, formatarFaixaDeDatas, formatTime } from "@/lib/ui/format";
 import { useAutosave } from "@/lib/ui/useAutosave";
@@ -485,6 +491,7 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
           ) : null}
 
           <ViagemCard negocio={negocio} dealId={negocio.id} onPatched={patch} />
+          <ClientesCard negocio={negocio} onRecarregar={retry} />
           <PassageirosCard negocio={negocio} />
           <PropostaCard negocio={negocio} />
           {/* Fase 2 Monde — o dinheiro da viagem fechada. Só em `isWon` pelo
@@ -987,6 +994,90 @@ function CentsAutoField({
    O aviso do rodapé existe porque o CSV sai com documento: o arquivo é para o
    fornecedor que vai operar a viagem, não para qualquer Grupo de WhatsApp.
    ========================================================================== */
+
+/* =============================================================================
+   Clientes — a composição da viagem (0020: um negócio, vários clientes)
+   -----------------------------------------------------------------------------
+   Casal, família, amigos: a lista vem de `negocio.clientes` (principal PRIMEIRO,
+   secundários na ordem de entrada) e as mutações são as duas actions do §15 do
+   handoff — `adicionarClienteAoNegocio`/`removerClienteDoNegocio`, com o retorno
+   JÁ atualizado, então aqui não existe leitura de confirmação. A gramática
+   (hook, linha, sheet) é a mesma do editor de proposta: um só lugar, em
+   `src/components/app/ClientesDoNegocio.tsx`.
+
+   O principal não tem botão de remover — nem desabilitado. Ele é o titular que
+   responde pela venda (`deals.contact_id`, imutável nesta rodada): relatório,
+   ranking e a ficha 360° dele continuam lendo por esse contato.
+   ========================================================================== */
+
+function ClientesCard({
+  negocio,
+  onRecarregar,
+}: {
+  negocio: NegocioDetalhe;
+  /** O "Recarregar a lista" das correções do servidor cai no retry da ficha. */
+  onRecarregar: () => void;
+}) {
+  const [sheetOpen, setSheetOpen] = React.useState(false);
+  const gestor = useClientesDoNegocio({
+    dealId: negocio.id,
+    iniciais: negocio.clientes,
+    aoFecharSheet: () => setSheetOpen(false),
+  });
+  const { definirRetentativa } = gestor;
+
+  React.useEffect(() => {
+    definirRetentativa(onRecarregar);
+  }, [definirRetentativa, onRecarregar]);
+
+  return (
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle>Clientes</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <div className="flex flex-col">
+            {gestor.clientes.map((cliente, indice) => (
+              <React.Fragment key={cliente.contactId}>
+                <ClienteRow
+                  cliente={cliente}
+                  href={`/clientes/${cliente.contactId}`}
+                  onRemover={(c) => void gestor.remover(c)}
+                />
+                {/* fio só ENTRE registros: depois do último vem o rodapé, que
+                    já desce com o fio dele — dois fios a 16px é ruído. */}
+                {indice < gestor.clientes.length - 1 ? <Rule inner /> : null}
+              </React.Fragment>
+            ))}
+          </div>
+        </CardBody>
+        <CardFooter
+          action={
+            <Button
+              variant="primary"
+              size="sm"
+              onPointerDown={() => setSheetOpen(true)}
+            >
+              <PlusIcon className="size-4" />
+              Adicionar cliente
+            </Button>
+          }
+        >
+          Quem viaja junto aparece por nome na proposta pública.
+        </CardFooter>
+      </Card>
+
+      <AdicionarClienteSheet
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        clientes={gestor.clientes}
+        onEscolher={gestor.adicionar}
+        pendente={gestor.pendente}
+      />
+    </>
+  );
+}
 
 function PassageirosCard({ negocio }: { negocio: NegocioDetalhe }) {
   const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");

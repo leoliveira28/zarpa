@@ -11,9 +11,11 @@ import {
   enviarProposta,
   excluirOpcao,
   marcarPropostaComoAceita,
+  obterNegocio,
   obterPropostaParaEdicao,
   reordenarOpcoes,
   type BlocoEdicao,
+  type ClienteDoNegocio,
   type OpcaoEdicao,
   type PropostaEdicao,
 } from "@/server";
@@ -32,7 +34,12 @@ import { Field, FieldError, FieldHint, Label, SavedMark } from "@/components/ui/
 import { Input, Textarea } from "@/components/ui/Input";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
+import {
+  ClientesDaViagemSheet,
+  useClientesDoNegocio,
+} from "@/components/app/ClientesDoNegocio";
 import { ChevronRightIcon, LinkIcon, PlusIcon, SearchIcon } from "@/components/app/icons";
+import { juntarNomes } from "@/lib/ui/format";
 import { CotacaoSheet } from "@/components/app/CotacaoSheet";
 import { SalvarComoModeloSheet } from "@/components/app/SalvarComoModeloSheet";
 import { cn } from "@/lib/ui/cn";
@@ -531,6 +538,7 @@ function MetaCard({
         </div>
       </CardHeader>
       <CardBody>
+        <ClientesMeta dealId={proposta.dealId} />
         <div className="grid gap-4 sm:grid-cols-2">
           <Field>
             <div className="flex items-baseline justify-between gap-2">
@@ -593,6 +601,92 @@ function MetaCard({
         </Field>
       </CardBody>
     </Card>
+  );
+}
+
+/* =============================================================================
+   Clientes — quem recebe esta proposta (0020: um negócio, vários clientes)
+   -----------------------------------------------------------------------------
+   A capa pública diz "Preparado para Ana e Carlos"; o editor não podia saber
+   MENOS que a capa. A linha é o sumário (o MESMO nome que o cliente vai ler —
+   `juntarNomes`), e a edição inteira mora na sheet: lista com remover
+   (destrutivo com desfazer de 8s) + busca de contato. Mesmo hook, mesma
+   `ClienteRow`, mesmas duas actions da ficha do negócio — uma fonte de verdade
+   (`deal_contacts`), duas superfícies.
+
+   A leitura é `obterNegocio(dealId)` inteiro só para a lista — mais pesado do
+   que o card precisa, mas é o ÚNICO contrato que existe hoje; a leitura leve
+   (`listarClientesDoNegocio`) está pedida em docs/handoffs/nina-para-rafa.md.
+   Quando chegar, trocar aqui e no roteiro é uma linha.
+   ========================================================================== */
+
+type EstadoClientes =
+  | { fase: "carregando" }
+  | { fase: "pronto"; iniciais: ClienteDoNegocio[] }
+  | { fase: "erro"; mensagem: string; correcao?: string };
+
+const NENHUM_CLIENTE: ClienteDoNegocio[] = [];
+
+function ClientesMeta({ dealId }: { dealId: string }) {
+  const [estado, setEstado] = React.useState<EstadoClientes>({ fase: "carregando" });
+  const [sheetOpen, setSheetOpen] = React.useState(false);
+  const [reloadToken, setReloadToken] = React.useState(0);
+  const retry = React.useCallback(() => setReloadToken((token) => token + 1), []);
+
+  React.useEffect(() => {
+    let active = true;
+    void obterNegocio(dealId).then((result) => {
+      if (!active) return;
+      if (result.ok) {
+        setEstado({ fase: "pronto", iniciais: result.data.clientes });
+        return;
+      }
+      setEstado({ fase: "erro", mensagem: result.mensagem, correcao: result.correcao });
+    });
+    return () => {
+      active = false;
+    };
+  }, [dealId, reloadToken]);
+
+  const gestor = useClientesDoNegocio({
+    dealId,
+    iniciais: estado.fase === "pronto" ? estado.iniciais : NENHUM_CLIENTE,
+    aoFecharSheet: () => setSheetOpen(false),
+  });
+  const { definirRetentativa } = gestor;
+
+  React.useEffect(() => {
+    definirRetentativa(retry);
+  }, [definirRetentativa, retry]);
+
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p className="text-13 text-muted">Preparado para</p>
+        {estado.fase === "carregando" ? (
+          /* Lugar reservado: a linha não pula quando os nomes chegam. */
+          <Skeleton className="mt-1 h-5 w-44 rounded-xs" />
+        ) : estado.fase === "erro" ? (
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <p className="text-13 text-ink">{estado.mensagem}</p>
+            <button
+              type="button"
+              onClick={retry}
+              className="text-13 font-medium text-ink underline underline-offset-4 hover:text-muted"
+            >
+              {estado.correcao ?? "Tentar de novo"}
+            </button>
+          </div>
+        ) : (
+          <p className="mt-0.5 text-15 font-medium text-ink">
+            {juntarNomes(gestor.clientes.map((cliente) => cliente.nome))}
+          </p>
+        )}
+      </div>
+      <CardAction onClick={() => setSheetOpen(true)}>Editar</CardAction>
+
+      <ClientesDaViagemSheet open={sheetOpen} onOpenChange={setSheetOpen} gestor={gestor} />
+    </div>
   );
 }
 
