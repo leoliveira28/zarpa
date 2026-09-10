@@ -819,6 +819,14 @@ export type NegocioDetalhe = {
   closedAt: Date | null;
   contactId: string;
   contactName: string;
+  /**
+   * Fase 3 (§5) — de quem é o negócio, MESMO shape do quadro (`NegocioDoFunil`).
+   * `null`/`null` = sem vendedor (dado antigo) — é o valor que o select de
+   * reatribuição mostra como estado ATUAL, inclusive em negócio PERDIDO, que o quadro
+   * não devolve (`isLost` fica fora da listagem).
+   */
+  agentId: string | null;
+  agentName: string | null;
   createdAt: Date;
   updatedAt: Date;
   /** Mais recente primeiro. */
@@ -854,12 +862,18 @@ async function buscarNegocioDetalhe(tx: TenantDb, dealId: string): Promise<Negoc
       closedAt: deals.closedAt,
       contactId: deals.contactId,
       contactName: contacts.name,
+      // Fase 3 (§5): o MESMO LEFT JOIN do quadro — a ficha sabe de quem é o negócio
+      // sem segunda leitura, e o retorno do `atualizarNegocio` (que passa por aqui)
+      // reconcilia o select de vendedor na hora, com o valor recém-gravado.
+      agentId: deals.agentId,
+      agentName: user.name,
       createdAt: deals.createdAt,
       updatedAt: deals.updatedAt,
     })
     .from(deals)
     .innerJoin(contacts, eq(contacts.id, deals.contactId))
     .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
+    .leftJoin(user, eq(user.id, deals.agentId))
     .where(eq(deals.id, dealId))
     .limit(1);
 

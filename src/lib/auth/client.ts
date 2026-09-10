@@ -1,5 +1,5 @@
 import { createAuthClient } from 'better-auth/react';
-import { magicLinkClient } from 'better-auth/client/plugins';
+import { magicLinkClient, organizationClient } from 'better-auth/client/plugins';
 
 /**
  * Client de auth para o browser.
@@ -20,7 +20,11 @@ import { magicLinkClient } from 'better-auth/client/plugins';
  * servido de um único domínio; não há proxy nem subdomínio de API separado no v1.
  */
 export const authClient = createAuthClient({
-  plugins: [magicLinkClient()],
+  // `organizationClient` É o par client-side do plugin server de `./auth.ts` — sem ele
+  // o `authClient.organization` até FUNCIONA em runtime (o client é proxy dinâmico de
+  // rotas), mas não existe em tipo, e a tela não compila contra ele. Fase 3 (§13.2):
+  // convite/cancelar/papel/remover são endpoints do plugin, não actions de `@/server`.
+  plugins: [magicLinkClient(), organizationClient()],
 });
 
 export const { signIn, signUp, signOut, useSession, getSession } = authClient;

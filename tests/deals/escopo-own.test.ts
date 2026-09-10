@@ -40,7 +40,8 @@ vi.mock('@/lib/auth/session', () => ({
   getAuthContext: async () => ({ ...authCtx }),
 }))
 
-const { listarNegociosDoFunil, atualizarNegocio } = await import('@/server/deals')
+const { listarNegociosDoFunil, atualizarNegocio, obterNegocio, moverEstagioDoNegocio } =
+  await import('@/server/deals')
 
 // ---------------------------------------------------------------------------
 // Fixture — um tenant, dois usuários (dono e agente), três negócios
@@ -195,5 +196,33 @@ describe('guarda de reatribuição — membro não muda agent_id', () => {
       tx.select({ agentId: deals.agentId }).from(deals).where(eq(deals.id, f.dealDoAgente)),
     )
     expect(depois?.agentId).toBe(f.agenteId)
+  })
+
+  it('a FICHA (obterNegocio) carrega agentId/agentName — inclusive no PERDIDO, que o quadro não devolve', async () => {
+    // Furo de contrato da nina (docs/handoffs/nina-para-rafa.md, item 2): o contorno
+    // dela lia o valor atual do QUADRO — e negócio perdido não volta no quadro
+    // (isLost fica fora da listagem). O detalhe é a fonte da verdade da ficha.
+    const f = await seedEscopo()
+    criados.push(f.tenantId)
+    entrarComo(f, { id: f.donoId, role: 'owner' })
+
+    const perdido = await moverEstagioDoNegocio(f.dealDoAgente, 'perdido', 'Cliente desistiu')
+    expect(perdido.ok, !perdido.ok ? perdido.mensagem : '').toBe(true)
+    if (!perdido.ok) return
+
+    const ficha = await obterNegocio(f.dealDoAgente)
+    expect(ficha.ok, !ficha.ok ? ficha.mensagem : '').toBe(true)
+    if (!ficha.ok) return
+    expect(ficha.data.isLost).toBe(true)
+    expect(ficha.data.agentId).toBe(f.agenteId)
+    expect(ficha.data.agentName).toBe('Agente QA')
+
+    // E o negócio SEM vendedor: null/null é o estado atual legítimo — o select do
+    // dono mostra "onde está" sem fingir que sabe.
+    const semVendedor = await obterNegocio(f.dealSemVendedor)
+    expect(semVendedor.ok).toBe(true)
+    if (!semVendedor.ok) return
+    expect(semVendedor.data.agentId).toBeNull()
+    expect(semVendedor.data.agentName).toBeNull()
   })
 })
