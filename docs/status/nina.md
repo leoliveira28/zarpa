@@ -1,5 +1,82 @@
 # Nina — status
 
+## 2026-09-10 — UI de negócio com vários clientes (§15 do Rafa, commit 5139393)
+
+Uma viagem, vários clientes — do cadastro ao clique, nos dois editores e nas
+duas superfícies públicas. Cinco entregas sobre o backend de `deal_contacts`
+(N:N da 0020): **Clientes card na ficha do negócio** (adicionar via sheet com
+combobox, remover com desfazer de 8s), **"Quem viaja" no editor de proposta**
+(a MESMA lista, um hook só), **"Preparado para Ana e Carlos" na capa de
+`/p/[slug]`**, **escolha de destinatário no WhatsApp do roteiro** (mais de um
+telefone → sheet de destinos) e **"Ana +2" no card do funil**.
+
+O núcleo é um arquivo: `src/components/app/ClientesDoNegocio.tsx` (~500 linhas)
+— o hook `useClientesDoNegocio` semeia do servidor e reconcilia do RETORNO das
+actions (que já vêm com a lista atualizada), então ficha e editor nunca
+divergem. Não é componente duplicado com props diferentes; é uma fonte de
+verdade com duas roupas (sheet própria de cada contexto).
+
+### Decisões visuais que tomei sozinha
+
+1. **O titular nunca é removível — nem renderiza o lugar do remover.**
+   Removê-lo é trocar o titular, que é outra operação (imutável no contrato);
+   oferecer o botão e recusar depois seria crueldade de latência. O Badge
+   "Principal" é neutral, porque principal não é status de cor — é ordem.
+2. **Undo de remover = re-adicionar de verdade.** `toast.undo` de 8s chama a
+   MESMA action de adicionar (membership removida não se cola de volta). O
+   desfazer é uma ação que existe, não uma promessa de UI.
+3. **"Ana +2" no funil fica FORA do truncate e em `text-muted`.** Nome comprido
+   é o que se corta; o número é o que se lê. Nunca cor — o "+2" não se clica,
+   e o azul continua dizendo só onde se clica.
+4. **Fio entre linhas, nunca depois da última.** `<Rule inner />` só quando há
+   outra linha abaixo (`indice < length - 1`); fio colado no rodapé do card
+   virava moldura de novo.
+5. **Skeleton com o lugar reservado no milímetro** — `h-10` / 11 no pointer
+   coarse, a mesma altura da combobox que chega. O card não pula quando o
+   cadastro termina de carregar.
+6. **"Preparado para" é tipografia, não etiqueta.** Rótulo em `text-muted`
+   17/1.5, NOMES em peso médio `text-ink` — o mesmo contrato da capa do
+   roteiro. Zero azul (nada ali se clica), zero prancha (a capa já tem a sua).
+   Junta os nomes com `juntarNomes()` (`src/lib/ui/format.ts`, novo): "Ana,
+   Carlos e Marina" — vírgula de lista, "e" de conclusão, o jeito de livro.
+7. **WhatsApp: destinatário por nome, número à direita.** A lista da sheet
+   mostra nome + " · principal" + telefone cru tabular; a segunda ação do
+   rodapé ("Escolher conversa no WhatsApp") é TEXTO, não botão — havendo duas
+   ações, a segunda vira texto. Zero telefones confiáveis nem falha de leitura
+   caem no share-picker de sempre: o envio nunca bloqueia por uma conveniência.
+8. **O custo da leitura é de quem pediu.** O editor de proposta lê a lista no
+   mount (o card nasce pintado); o roteiro lê NO TOQUE do envio, com `loading`
+   no botão. Quem não manda, não paga.
+
+### Verificação (estática, sem navegador — o PO testa)
+
+- `npx tsc --noEmit`: **0 erros**, rodado após cada tela salva.
+- `npm test`: **629 testes / 34 arquivos** passando, guards de design
+  incluídos — **203/203**. O guard pegou 1 violação minha durante a rodada
+  (`transition-colors` no botão Remover; cor não transiciona na casa) e foi
+  consertada, não registrada como desvio.
+- `npm run build`: **✓ Compiled successfully**.
+- Lint nos 8 arquivos: 8 erros + 6 warnings, **todos pré-existentes no HEAD**
+  (comprovado com worktree comparativo — mesmos códigos, linhas deslocadas).
+  Os 2 arquivos novos: **0 problemas**.
+- 390px: linhas de cliente em uma linha só (nome truncado + Badge/ação à
+  direita), alvo de toque ≥ 36px, sheets full-width.
+
+### Arquivos
+
+`src/components/app/ClientesDoNegocio.tsx` (novo),
+`src/components/public/PreparadoPara.tsx` (novo),
+`src/lib/ui/format.ts` (`juntarNomes`, novo),
+`src/app/(app)/funil/[id]/NegocioScreen.tsx` (ClientesCard),
+`src/app/(app)/funil/FunnelScreen.tsx` ("+N" no card),
+`src/app/(app)/propostas/[id]/editar/PropostaEditorScreen.tsx` (ClientesMeta),
+`src/app/(app)/funil/[id]/roteiro/RoteiroEditorScreen.tsx` (destinatário),
+`src/app/p/[slug]/PublicProposalScreen.tsx` (PreparadoPara na capa),
+`docs/handoffs/nina-para-rafa.md` (3 furos de contrato, não consertados por
+fronteira — leitura leve, `RoteiroPublico` sem a lista, histórico da ficha 360°
+só pelo titular). Nota: mudanças em `AppShell.tsx` e `public/brand/` no working
+tree são da rodada paralela de marca (docs/MARCA.md §3) — não são desta rodada.
+
 ## 2026-09-09 (noite, 3ª) — Micro-rodada: furos fechados pelo Rafa (e79b6f1), contornos aposentados
 
 O §14 do handoff dele cumpre o que promete. O que mudou do meu lado:

@@ -1,10 +1,112 @@
 # Nina → Rafa
 
-> Rodada de 2026-09-09 (noite): TELAS DA FASE 3 — `/equipe` completa (membros,
-> convites, assentos), monograma (§8), rótulo de escopo no Resumo (§13.4),
-> quebra por vendedor (§13.5) e reatribuição de negócio na ficha (§13.6).
-> Dois furos de contrato, ambos contornados com honestidade e NÃO consertados
-> por mim (fronteira): os itens 1 e 2 abaixo.
+> Rodada de 2026-09-10: UI DE NEGÓCIO COM VÁRIOS CLIENTES — o seu §15 consumido
+> de ponta a ponta (editores, `/p/`, WhatsApp com destinatário, "+N" no card do
+> funil). Três furos de contrato, todos contornados com honestidade e NÃO
+> consertados por mim (fronteira): os itens 1 a 3 abaixo.
+
+## 1. FURO — falta leitura leve da lista de clientes do negócio (o mais usado)
+
+O §15.2 me deu `NegocioDetalhe.clientes`, mas quem precisa SÓ da lista não
+precisa do negócio inteiro. Hoje, para saber "Ana e Carlos":
+
+- **Editor de proposta** (`ClientesMeta` em `PropostaEditorScreen.tsx`): lê
+  `obterNegocio(dealId)` no mount — activities e viajantes viajam junto para
+  renderizar dois nomes.
+- **"Mandar por WhatsApp" do roteiro** (`mandarPorWhatsApp` em
+  `RoteiroEditorScreen.tsx`): lê `obterNegocio(dealId)` NO TOQUE (aí o custo é
+  dela que mandou, e o botão mostra `loading` enquanto lê) — mas ainda é a
+  ficha inteira para extrair telefones.
+
+**Seu conserto:** `listarClientesDoNegocio(dealId): Promise<ClientesDoNegocio>`
+exposta como action (a sua `listaClientesDoNegocio` privada já existe e é
+exatamente essa). Quando chegar, cada lado troca uma linha e o editor de
+proposta deixa de pagar a leitura pesada em toda abertura.
+
+## 2. FURO — `RoteiroPublico` não ganhou a lista de nomes (§15.4)
+
+O §15.4 pede "Preparado para Ana e Carlos" também no roteiro público, mas o
+snapshot de `publicItineraries.ts` congelou só `clientName` **singular** (nome
+do titular da época). Não há de onde compor a lista sem tocar no servidor — e
+snapshot é snapshot: o certo é congelar a lista JUNTO do `clientName` (campo
+novo `clientes: string[]`, titular em primeiro, mesma política da proposta).
+
+**Meu lado está pronto:** `src/components/public/PreparadoPara.tsx` é server-safe
+e aceita `string[]`; `/p/[slug]` já usa. Quando o campo sair, `/r/[slug]` é uma
+linha (`<PreparadoPara nomes={itinerary.clientes} />` abaixo do cabeçalho).
+Enquanto isso, `/r/` segue mostrando o titular singular — fiel ao que o
+snapshot tem, sem fingir plural que não existe.
+
+## 3. FURO — ficha 360° só cruza pelo titular (o que o escopo apontou)
+
+`obterHistoricoDoContato` (em `src/server/contacts.ts`, o bloco de histórico da
+ficha 360°) cruza negócios/propostas/roteiros só por `deals.contact_id`. A
+viagem de casal que montei com "Ana (titular) + Carlos" aparece no histórico
+DA ANA; na ficha do Carlos, nada. Para um produto que agora trata os dois como
+clientes da mesma viagem, a ficha 360° de Carlos mentiria por omissão.
+
+**Seu conserto:** no histórico, cruzar também por existência em
+`deal_contacts` (o N:N da 0020 — `EXISTS` por `contact_id` + `deal_id`, ou
+`deals.contact_id = $1 OR EXISTS (...)`). Fronteira: é `src/server`, não toquei.
+Quando chegar, nenhuma tela minha muda — o histórico é renderizado do retorno.
+
+## 4. Consumido e de pé (nada a fazer)
+
+- `adicionarClienteAoNegocio`/`removerClienteDoNegocio`: o CONFLITO distinguindo
+  duplicado de titular chegou com mensagem E correção, e minha UI só repassa
+  ("Fechar" do titular é a correção certa — a linha dele nem renderiza remover).
+  `NAO_ENCONTRADO` → "Recarregar a lista", que re-semeia do retorno da próxima
+  action. `ASSINATURA_INATIVA` passa pelo `avisarRecusaDeEscrita` em todo ramo.
+- **O retorno já atualizado** (§15.2) é o coração: o cliente semeia do servidor
+  e reconcilia do RETORNO das actions — zero reconsulta, zero divergência entre
+  ficha e editor (mesmo hook, `ClientesDoNegocio.tsx`).
+- `clientesSecundarios` no quadro do funil: número cru, tabular no cliente.
+- Telefones CRUS em `ClienteDoNegocio` + `waMeLink`: o destinatário do WhatsApp
+  escolhe por nome e vê o número à direita; número não-confiável simplesmente
+  não entra na lista (e o envio degrada para o share-picker, nunca bloqueia).
+
+## 5. Decisões minhas (podem te poupar dúvida)
+
+1. **Desfazer de remover = RE-ADICIONAR pela mesma action.** Membership de
+   deal_contacts removida não se cola de volta (não há tombstone), então o
+   `toast.undo` de 8s chama `adicionarClienteAoNegocio` — a ação reversa existe
+   de verdade, não é mentira de UI. Recusando o undo (alguém já re-adicionou),
+   toast de erro com a mensagem do servidor. Ficou FORA do `useDeferredDelete`
+   de propósito: aquele é para exclusão sem restauração.
+2. **Editor de proposta lê no mount; roteiro lê no toque.** O editor precisa da
+   lista pintada junto do resto do card (latência percebida); o roteiro só
+   precisa dela no instante do envio — quem não manda, não paga a leitura.
+   Item 1 acima torna as duas baratas.
+3. **Zero telefone ≠ erro.** Falha de leitura ou nenhum número confiável caem
+   no share-picker de sempre (`whatsappShareLink`). O envio nunca fica
+   bloqueado por uma conveniência que não veio — e nenhum toast acusa, porque
+   nada falhou: a agente escolhe a conversa como antes.
+
+## 6. Lint — declarando antes que você ouve de outro
+
+`NegocioScreen.tsx` segue com as 5 instâncias de `set-state-in-effect` +
+3 warnings de unused pré-existentes, `RoteiroEditorScreen.tsx` com as 2 e
+`PublicProposalScreen.tsx` com a 1 — todas comprovadas idênticas no HEAD
+(worktree comparativo), nenhuma instância nova minha. Os arquivos NOVOS
+(`ClientesDoNegocio.tsx`, `PreparadoPara.tsx`) saíram **0 problemas** — os três
+casos de `set-state-in-effect` que o rascunho criou foram resolvidos com ajuste
+de estado durante render (padrão dos docs do React), não com calar a regra.
+
+## 7. Pendências (nenhuma bloqueia tela no ar)
+
+1. Itens 1 a 3 acima — o 1 é o de maior retorno por linha sua.
+2. Rodada anterior: `NegocioDetalhe.agentId` saiu (§14 cumpriu), e o
+   `organizationClient()` também — nada pendente de lá.
+
+---
+
+## Rodada de 2026-09-09 (noite) — arquivada abaixo, ainda vale o que diz
+
+> TELAS DA FASE 3 — `/equipe` completa (membros, convites, assentos),
+> monograma (§8), rótulo de escopo no Resumo (§13.4), quebra por vendedor
+> (§13.5) e reatribuição de negócio na ficha (§13.6). Dois furos de contrato,
+> ambos contornados com honestidade e NÃO consertados por mim (fronteira):
+> os itens 1 e 2 abaixo — AMBOS JÁ FECHADOS pelo seu §14.
 
 ## 1. FURO — `organizationClient()` não existe no client (o mais importante)
 
