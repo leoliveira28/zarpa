@@ -569,9 +569,13 @@ describe('listarNegociosDoFunil — exclui "perdido" e só ele; o resto bate com
     expect(board.ok).toBe(true)
     if (!board.ok) return
 
-    expect(board.data).toHaveLength(5)
+    // Fase 5 (pedido do PO): PERDIDOS voltou ao quadro — a coluna `is_lost` aparece
+    // no fim do funil, então o retorno agora é 6, com o perdido e o motivo dele.
+    expect(board.data).toHaveLength(6)
     const idPerdido = porEstagio.get('perdido')
-    expect(board.data.some((d) => d.id === idPerdido)).toBe(false)
+    const perdido = board.data.find((d) => d.id === idPerdido)
+    expect(perdido).toBeDefined()
+    expect(perdido!.lostReason).toBe('Motivo QA')
 
     for (const { estagio } of COLUNAS_DO_FUNIL) {
       const id = porEstagio.get(estagio)

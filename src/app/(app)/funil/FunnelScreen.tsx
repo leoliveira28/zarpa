@@ -108,6 +108,7 @@ const HINT_BY_LEGACY: Record<string, string> = {
   proposta_enviada: "link no WhatsApp do cliente",
   negociando: "ajuste de valor ou data",
   ganho: "venda confirmada",
+  perdido: "não rolou — o motivo está no card",
 };
 
 const HINT_CUSTOM = "Nenhuma viagem aqui ainda";
@@ -291,11 +292,16 @@ export function FunnelScreen() {
     [estagios],
   );
 
-  /** O quadro: todas as colunas menos as `isLost` — saída do funil, não lugar onde negócio fica. */
-  const colunasDoQuadro = React.useMemo(
-    () => estagios.filter((estagio) => !estagio.isLost),
-    [estagios],
-  );
+  /**
+   * O quadro: colunas ativas + PERDIDOS no fim (pedido do PO, Fase 5) — a saída do
+   * funil agora é visível tanto quanto a entrada. `isLost` continua por último e
+   * o drop para ela abre o diálogo de motivo (não move direto — motivo é obrigatório).
+   */
+  const colunasDoQuadro = React.useMemo(() => {
+    const perdida = estagios.find((estagio) => estagio.isLost);
+    const ativas = estagios.filter((estagio) => !estagio.isLost);
+    return perdida ? [...ativas, perdida] : ativas;
+  }, [estagios]);
 
   const columns = React.useMemo(
     () =>
@@ -394,6 +400,12 @@ export function FunnelScreen() {
     viaGesture: boolean,
   ) {
     if (destino.stageId === deal.stageId) return;
+    // Perder segue sendo DIÁLOGO: o motivo é obrigatório (0016) e a coluna Perdidos
+    // não recebe drop direto — o gesto encaminha para o mesmo diálogo do menu.
+    if (colunaPorId.get(destino.stageId)?.isLost) {
+      setLossDialog(deal);
+      return;
+    }
     dismissHint();
     const anterior: PosicaoAnterior = {
       stageId: deal.stageId,
@@ -468,7 +480,22 @@ export function FunnelScreen() {
       stageLabel: deal.stageLabel,
       diasParado: deal.diasParado,
     };
-    setItems((current) => current.filter((item) => item.id !== deal.id));
+    // Fase 5: Perdidos tem coluna — o card ENTRA nela (não some do quadro) e o
+    // desfazer devolve para a coluna anterior como sempre.
+    const perdidaId = colunaPerdida?.id;
+    setItems((current) =>
+      current.map((item) =>
+        item.id === deal.id
+          ? {
+              ...item,
+              stageId: perdidaId ?? item.stageId,
+              stageLabel: colunaPerdida?.label ?? item.stageLabel,
+              lostReason: motivo,
+              diasParado: 0,
+            }
+          : item,
+      ),
+    );
     setLossDialog(null);
 
     toast.undo(

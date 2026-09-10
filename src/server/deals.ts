@@ -358,10 +358,16 @@ export type NegocioDoFunil = {
   departureOn: string | null;
   /** Dias desde a última movimentação: o maior entre `deals.updatedAt` e a `activity` mais recente do negócio. */
   diasParado: number;
+  /**
+   * Motivo de perda — preenchido só quando o negócio está na coluna `is_lost`
+   * (Fase 5: a coluna Perdidos está no quadro; o motivo é o que o card diz).
+   */
+  lostReason: string | null;
 };
 
 /**
- * Board pronto: todo negócio do tenant que não é `perdido` (perdido não tem coluna — ver
+ * Board pronto: todo negócio do tenant (a coluna `is_lost` está no quadro desde a
+ * Fase 5 — ver
  * o comentário de topo do arquivo), com o contato já resolvido e os dias parados já
  * calculados. Limite de 500 é rede de segurança, não paginação de produto — no volume
  * esperado (MEI, 10-15 vendas/mês) um tenant não chega perto disso tão cedo; se chegar,
@@ -399,18 +405,19 @@ export async function listarNegociosDoFunil(): Promise<ServiceResult<NegocioDoFu
             agentId: deals.agentId,
             agentName: user.name,
             ultimaAtividadeEm: ultimaAtividadeSql(),
+            lostReason: deals.lostReason,
           })
           .from(deals)
           .innerJoin(contacts, eq(contacts.id, deals.contactId))
           .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
           // LEFT: negócio sem vendedor definido (dado antigo) continua no quadro.
           .leftJoin(user, eq(user.id, deals.agentId))
-          // "Perdido" saiu do quadro pela SEMÂNTICA, não pelo literal: quem manda é
-          // `is_lost` da coluna do funil (0016). Mesmo resultado de antes para o funil de
-          // fábrica, e correto também para um funil renomeado pela agente. O segundo
-          // termo é o escopo do papel: `undefined` para dono (tenant inteiro), o filtro
-          // por `agent_id` para agente.
-          .where(and(eq(pipelineStages.isLost, false), filtroDeEscopoProprio(escopo, deals.agentId)))
+          // Fase 5 (pedido do PO): PERDIDOS voltam ao quadro — a coluna `is_lost`
+          // (0016) agora aparece no fim do funil com os negócios dela, e a agente vê
+          // a saída tanto quanto a entrada. Continua sendo SEMÂNTICA, não literal:
+          // quem manda é `is_lost` da coluna. O segundo termo é o escopo do papel:
+          // `undefined` para dono (tenant inteiro), o filtro por `agent_id` para agente.
+          .where(filtroDeEscopoProprio(escopo, deals.agentId))
           .orderBy(desc(deals.createdAt))
           .limit(500);
 
@@ -436,6 +443,7 @@ export async function listarNegociosDoFunil(): Promise<ServiceResult<NegocioDoFu
             maisRecente(linha.updatedAt, paraDataOuNula(linha.ultimaAtividadeEm)),
             agora,
           ),
+          lostReason: linha.lostReason,
         }));
       },
       { scope: escopo },
@@ -852,6 +860,8 @@ export async function criarNegocio(
         clientesSecundarios: 0,
         departureOn: negocio.departureOn,
         diasParado: 0,
+        // Negócio recém-criado: nunca nasce perdido (regra do criarNegocio).
+        lostReason: null,
       };
     });
   });
