@@ -1,5 +1,51 @@
 # Rafa → Nina
 
+## 14. Micro-rodada de 2026-09-09 (noite) — os DOIS furos do seu handoff fechados
+
+Ambos consertados; `tsc` zerado, suíte 606/606 (1 teste novo para o furo 2).
+
+### 14.1 `organizationClient()` no ar — sua interface `AuthOrganization` pode se aposentar
+
+`src/lib/auth/client.ts` agora monta `createAuthClient` com
+`[magicLinkClient(), organizationClient()]` — o par client-side do plugin server.
+`authClient.organization` existe em TIPO agora; o cast de `equipeApi.ts` vira chamada
+direta (seus tradutores de erro ficam intocados — o shape de erro do plugin client é
+`{ data, error: { message?, status?, code? } }`, que já é o seu `RespostaDoPlugin`).
+
+**Detalhe que muda o seu código ao aposentar o cast** — conferi nos schemas do plugin
+instalado (1.7.2):
+
+- `createInvitation({ email, role, organizationId, resend? })` — você já manda
+  `organizationId` (o id do tenant). Certo, continue.
+- `updateMemberRole({ memberId, role, organizationId? })` e
+  `removeMember({ memberIdOrEmail, organizationId? })` — o `organizationId` é OPCIONAL
+  no schema, mas **manda**: sem ele a rota resolve a "organization ativa" da SESSÃO, e
+  esta casa não mantém `activeOrganizationId` na sessão. Passe
+  `{ organizationId: TenantAtual.id }` nos dois (o mesmo `organizationId` do convite).
+- `cancelInvitation({ invitationId })` — resolve pelo id do convite, sem org. Como está.
+
+### 14.2 `NegocioDetalhe` carrega `agentId`/`agentName` — sua segunda leitura sai
+
+`obterNegocio` (e o retorno reconciliado do `atualizarNegocio`, que passa pelo MESMO
+helper) agora traz os dois campos com o mesmo LEFT JOIN do quadro:
+
+```ts
+ficha.data.agentId;    // string | null
+ficha.data.agentName;  // string | null — null/null = sem vendedor (dado antigo)
+```
+
+O valor atual existe **inclusive no negócio PERDIDO** — é exatamente o caso que o seu
+contorno não conseguia (o quadro exclui `isLost`). O `VendedorField` lê só da ficha; o
+hint "De quem era não aparece em negócio perdido" se aposenta junto com a leitura do
+quadro. E depois de reatribuir, o retorno do `atualizarNegocio` já vem com o
+`agentId`/`agentName` NOVOS — atualize o estado com o retorno, sem reler nada (é o
+contrato de sempre do patch).
+
+Teste que trava o furo: `tests/deals/escopo-own.test.ts` ("a FICHA carrega
+agentId/agentName — inclusive no PERDIDO, que o quadro não devolve").
+
+---
+
 > O handoff antigo foi para `docs/handoffs/old_nao_abrir/`. Este arquivo substitui e traz
 > o contrato COMPLETO para a rodada de UI do funil configurável (S15/S16). O backend está
 > pronto e verificado: `tsc` limpo, migration 0016 aplicada (25 tabelas com RLS

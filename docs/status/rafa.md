@@ -1,5 +1,28 @@
 # Status — Rafa (backend / plataforma)
 
+## 2026-09-09 (noite) — micro-rodada: os 2 furos de contrato da rodada da Nina
+
+**Veredito: PRONTO.** `npx tsc --noEmit`: zero erros no repositório. Suíte **606/606**
+(32 arquivos; +1 teste). Nada commitado. Sem browser (PO testa).
+
+1. **`organizationClient()` em `src/lib/auth/client.ts`** — o par client-side do plugin
+   server entrou no array de plugins. `authClient.organization` agora existe em TIPO;
+   o cast local de `src/lib/ui/equipeApi.ts` (arquivo da Nina, não toquei) pode se
+   aposentar. Verificação estática nos schemas do plugin 1.7.2: os quatro métodos que
+   a Equipe fala existem, e `updateMemberRole`/`removeMember` aceitam `organizationId`
+   opcional que AQUI é obrigatório de fato (sem ele a rota resolve a "organization
+   ativa" da sessão, que a casa não mantém) — registrado no §14 do handoff para ela.
+2. **`NegocioDetalhe` ganhou `agentId`/`agentName`** (`src/server/deals.ts`,
+   `buscarNegocioDetalhe`): o MESMO LEFT JOIN `user` do quadro, no helper compartilhado
+   por `obterNegocio` E pelo retorno reconciliado do `atualizarNegocio` — a ficha sabe
+   de quem é o negócio inclusive no PERDIDO (que o quadro não devolve), e o select de
+   vendedor reconcilia com o retorno do patch, sem segunda leitura. Teste novo em
+   `tests/deals/escopo-own.test.ts` trava o caso perdido + o null honesto de negócio
+   sem vendedor.
+
+Handoff de volta: `docs/handoffs/rafa-para-nina.md` §14 (o que ela aposenta e o que
+ELA precisa acrescentar — o `organizationId` nos dois métodos).
+
 ## 2026-09-09 — Fase 3 (fundação multiusuário) + recibo reescrito com @react-pdf/renderer
 
 **Veredito: PRONTO (com 1 pendência de DECISÃO do PO, não de código — item 5 de
