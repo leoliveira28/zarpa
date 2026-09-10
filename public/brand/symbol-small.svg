@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none">
+  <!-- VELA DE PAPEL — variante pequena (16–24px). docs/PROMPT_LOGO_FIGMA.md.
+       O glifo exato do Wordmark de hoje, na grade 160; vinco e mar descartados
+       (o que não sobrevive a 16px não entra). Traço 10 unidades = 1px em 16px. -->
+  <g stroke="#14181B" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M80 25 L125 100 L80 100 Z"/>
+    <path d="M70 55 L35 100 L70 100 Z"/>
+    <path d="M25 122.5 L135 122.5"/>
+  </g>
+</svg>

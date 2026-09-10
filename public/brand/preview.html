@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marca — pré-visualização da logo (Vela de Papel)</title>
+<style>
+  /* Pré-visualização de trabalho — não é parte do produto. Papel e Pedra. */
+  :root { color-scheme: light; --paper:#F4F3F0; --ink:#14181B; --accent:#12557F; --hair:#d8d6d0; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink);
+         font:15px/1.5 system-ui, sans-serif; padding:48px 24px 96px; }
+  main { max-width:920px; margin:0 auto; }
+  h1 { font-weight:800; font-size:32px; letter-spacing:-0.035em; line-height:0.94; margin:0 0 4px; }
+  .sub { color:#6a6f73; margin:0 0 40px; max-width:60ch; }
+  h2 { font-weight:600; font-size:17px; margin:56px 0 16px; padding-top:16px; border-top:1px solid var(--hair); }
+  .row { display:flex; align-items:flex-end; gap:32px; flex-wrap:wrap; }
+  figure { margin:0; text-align:center; }
+  figcaption { font-size:13px; color:#6a6f73; margin-top:8px; font-variant-numeric: tabular-nums; }
+  .box { display:grid; place-items:center; border:1px dashed var(--hair); }
+  .ink { background:var(--ink); }
+  .ink img { filter:invert(0.94); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Vela de papel</h1>
+  <p class="sub">A marca de hoje — a vela do <code>Wordmark</code> — evoluída: a proposta do agente
+  é uma folha; a folha dobrada vira a vela que zarpa. No mestre, o vinco da dobra e as duas
+  linhas d'água (o horizonte do "Hoje"). Rascunho para aprovação do PO (docs/MARCA.md §13).</p>
+
+  <h2>Símbolo mestre — vela + vinco + mar (grade 160)</h2>
+  <div class="row">
+    <figure><div class="box" style="width:160px;height:160px"><img src="symbol-master.svg" width="160" height="160" alt=""></div><figcaption>160px · papel</figcaption></figure>
+    <figure><div class="box ink" style="width:160px;height:160px"><img src="symbol-master.svg" width="160" height="160" alt=""></div><figcaption>160px · tinta</figcaption></figure>
+    <figure><div class="box" style="width:48px;height:48px"><img src="symbol-master.svg" width="48" height="48" alt=""></div><figcaption>48px</figcaption></figure>
+  </div>
+
+  <h2>Variante pequena — o glifo de hoje, só ele</h2>
+  <div class="row">
+    <figure><div class="box" style="width:160px;height:160px"><img src="symbol-small.svg" width="160" height="160" alt=""></div><figcaption>160px</figcaption></figure>
+    <figure><div class="box" style="width:48px;height:48px"><img src="symbol-small.svg" width="48" height="48" alt=""></div><figcaption>48px</figcaption></figure>
+    <figure><div class="box" style="width:24px;height:24px"><img src="symbol-small.svg" width="24" height="24" alt=""></div><figcaption>24px</figcaption></figure>
+    <figure><div class="box" style="width:16px;height:16px"><img src="symbol-small.svg" width="16" height="16" alt=""></div><figcaption>16px</figcaption></figure>
+  </div>
+  <p class="sub" style="margin-top:12px">Nos fundos de tinta, os arquivos monocromáticos em #14181B são invertidos aqui via CSS
+  só para conferência — cada arquivo continua com uma cor só.</p>
+
+  <h2>Favicon 16px (arquivo próprio, coordenadas na escala final)</h2>
+  <div class="row">
+    <figure><div class="box" style="width:32px;height:32px"><img src="favicon-16.svg" width="16" height="16" alt=""></div><figcaption>16px · 1×</figcaption></figure>
+    <figure><div class="box" style="width:64px;height:64px"><img src="favicon-16.svg" width="32" height="32" alt=""></div><figcaption>32px · 2×</figcaption></figure>
+    <figure><div class="box" style="width:96px;height:96px"><img src="favicon-16.svg" width="48" height="48" alt=""></div><figcaption>48px · 3×</figcaption></figure>
+  </div>
+
+  <h2>Ícone de app 512px — vela branca no azul, como o tile de hoje</h2>
+  <div class="row">
+    <figure><div class="box" style="width:256px;height:256px"><img src="app-icon-512.svg" width="256" height="256" alt=""></div><figcaption>azul #12557F</figcaption></figure>
+    <figure><div class="box" style="width:256px;height:256px"><img src="app-icon-inverse-512.svg" width="256" height="256" alt=""></div><figcaption>papel #F4F3F0</figcaption></figure>
+  </div>
+
+  <h2>Teste de silhueta — a vela 100% preenchida ainda lê como barra?</h2>
+  <div class="row">
+    <figure><div class="box" style="width:96px;height:96px">
+      <svg viewBox="0 0 160 160" width="96" height="96"><g fill="#14181B"><path d="M80 25 L125 100 L80 100 Z"/><path d="M70 55 L35 100 L70 100 Z"/><path d="M25 117 L135 117 L135 128 L25 128 Z"/></g></svg>
+    </div><figcaption>preenchida · 96px</figcaption></figure>
+    <figure><div class="box" style="width:32px;height:32px">
+      <svg viewBox="0 0 160 160" width="32" height="32"><g fill="#14181B"><path d="M80 25 L125 100 L80 100 Z"/><path d="M70 55 L35 100 L70 100 Z"/><path d="M25 117 L135 117 L135 128 L25 128 Z"/></g></svg>
+    </div><figcaption>preenchida · 32px</figcaption></figure>
+  </div>
+</main>
+</body>
+</html>

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none">
+  <!-- VELA DE PAPEL — símbolo mestre. docs/MARCA.md §3 e docs/PROMPT_LOGO_FIGMA.md.
+       Geometria herdada do Wordmark (src/components/app/AppShell.tsx), na grade 160:
+       vela principal (80,25 → 125,100 → 80,100), vela de proa (70,55 → 35,100 → 70,100),
+       casco (25,122.5 → 135,122.5).
+       O conceito: a proposta do agente é uma folha; a folha dobrada vira a vela.
+       O vinco da dobra e as duas linhas d'água (eco do horizonte do TodayIcon) são
+       fio cabelo — visíveis no mestre, descartados na variante pequena.
+       Traço principal 1.2 (0.75% de 160), fio cabelo 0.55, pontas arredondadas. -->
+  <g stroke="#14181B" stroke-linecap="round" stroke-linejoin="round">
+    <!-- vela principal — a folha dobrada -->
+    <path d="M80 25 L125 100 L80 100 Z" stroke-width="1.2"/>
+    <!-- vinco da dobra -->
+    <path d="M80 25 L80 100" stroke-width="0.55" opacity="0.65"/>
+    <!-- vela de proa -->
+    <path d="M70 55 L35 100 L70 100 Z" stroke-width="1.2"/>
+    <!-- casco -->
+    <path d="M25 122.5 L135 122.5" stroke-width="1.2"/>
+    <!-- mar — o horizonte do "Hoje", em dois fios -->
+    <path d="M42 134 L80 134 M56 143 L98 143" stroke-width="0.55" opacity="0.65"/>
+  </g>
+</svg>

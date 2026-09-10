@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- Favicon 16px — o glifo de hoje, como está no Wordmark (AppShell.tsx),
+       com pontas arredondadas. Já provado em produção; nada a inventar aqui. -->
+  <g stroke="#14181B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M8 2.5 12.5 10H8z"/>
+    <path d="M7 5.5 3.5 10H7z"/>
+    <path d="M2.5 12.25h11"/>
+  </g>
+</svg>

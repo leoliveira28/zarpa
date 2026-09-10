@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Ícone de app 512px — como o tile de hoje: vela branca sobre o azul de carta
+       náutica #12557F. Raio do tile ~22.5% (padrão iOS). docs/PROMPT_LOGO_FIGMA.md. -->
+  <rect width="512" height="512" rx="115" fill="#12557F"/>
+  <g transform="translate(128 128) scale(1.6)">
+    <g stroke="#F4F3F0" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M80 25 L125 100 L80 100 Z"/>
+      <path d="M70 55 L35 100 L70 100 Z"/>
+      <path d="M25 122.5 L135 122.5"/>
+    </g>
+  </g>
+</svg>

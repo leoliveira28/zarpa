@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Ícone de app 512px, claro — a mesma vela em tinta sobre papel, para usos
+       claros (site, apresentação). docs/PROMPT_LOGO_FIGMA.md. -->
+  <rect width="512" height="512" rx="115" fill="#F4F3F0"/>
+  <g transform="translate(128 128) scale(1.6)">
+    <g stroke="#14181B" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M80 25 L125 100 L80 100 Z"/>
+      <path d="M70 55 L35 100 L70 100 Z"/>
+      <path d="M25 122.5 L135 122.5"/>
+    </g>
+  </g>
+</svg>

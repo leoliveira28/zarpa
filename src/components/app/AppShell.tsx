@@ -433,9 +433,10 @@ function BottomNav({ activeHref }: { activeHref: string | null }) {
 /* --------------------------------------------------------------- marca */
 
 /**
- * Marca provisória: o nome comercial ainda não foi decidido (CLAUDE.md), então
- * nada de logotipo. Uma vela estilizada + o codinome, os dois trocáveis num
- * arquivo só.
+ * Marca — Vela de Papel (docs/MARCA.md §3, aprovada pelo PO em 2026-09-10).
+ * O glifo é o mesmo de sempre; a fonte da verdade do símbolo (mestre, variante
+ * pequena, tiles) mora em `public/brand/`. O nome comercial ainda não foi
+ * decidido (CLAUDE.md), então a assinatura textual continua sendo o codinome.
  */
 function Wordmark({ compact }: { compact?: boolean }) {
   return (
@@ -450,6 +451,7 @@ function Wordmark({ compact }: { compact?: boolean }) {
           fill="none"
           stroke="currentColor"
           strokeWidth="1.5"
+          strokeLinecap="round"
           strokeLinejoin="round"
         >
           <path d="M8 2.5 12.5 10H8z" />

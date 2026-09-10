@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Favicon — Vela de Papel (docs/MARCA.md §3), tile azul com a vela branca.
+       Fonte da verdade do desenho: public/brand/app-icon-512.svg. -->
+  <rect width="512" height="512" rx="115" fill="#12557F"/>
+  <g transform="translate(128 128) scale(1.6)">
+    <g stroke="#F4F3F0" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M80 25 L125 100 L80 100 Z"/>
+      <path d="M70 55 L35 100 L70 100 Z"/>
+      <path d="M25 122.5 L135 122.5"/>
+    </g>
+  </g>
+</svg>
