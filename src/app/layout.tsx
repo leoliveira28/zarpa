@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import { Libre_Franklin } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/app/Providers";
@@ -36,12 +37,14 @@ export default function RootLayout({
 }) {
   return (
     <html lang="pt-BR" className={`h-full ${display.variable}`} suppressHydrationWarning>
-      <head>
-        {/* Antes do primeiro paint: sem isso a tela pisca clara antes de escurecer. */}
-        <script
-          dangerouslySetInnerHTML={{ __html: themeBootstrapScript }}
-        />
-      </head>
+      {/* Antes do primeiro paint: sem isso a tela pisca clara antes de escurecer.
+          next/script antes da hidratação — <script> inline em componente o React
+          renderiza mas NUNCA executa no cliente (erro de console do React 19). */}
+      <Script
+        id="theme-bootstrap"
+        strategy="beforeInteractive"
+        dangerouslySetInnerHTML={{ __html: themeBootstrapScript }}
+      />
       <body className="min-h-full">
         <Providers>{children}</Providers>
       </body>
