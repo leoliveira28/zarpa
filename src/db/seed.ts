@@ -52,6 +52,8 @@ import {
   camposDocumentoDoContato,
   camposNascimento,
 } from '../server/piiFields';
+import { groupMembers, groups } from './schema/groups';
+import { offers as offersTable } from './schema/offers';
 // Import direto dos módulos, não do barril `../lib/auth`: o barril reexporta `session.ts`,
 // que importa `next/headers` — inexistente fora do runtime do Next.js, e este seed roda
 // como script Node puro.
@@ -1461,7 +1463,118 @@ async function cenarioVoltaAoMundo(tx: TenantDb, tenantId: string, ownerId: stri
     },
   ]);
 
-  console.log('[seed] tenant A: 10 contatos, 11 negócios (6 estágios, um deles o casal Ana e Carlos), 9 propostas, 3 vendas, 2 roteiros, 17 lembretes.');
+  await semearVitrine(tx, tenantId);
+
+  console.log('[seed] tenant A: 10 contatos, 11 negócios (6 estágios, um deles o casal Ana e Carlos), 9 propostas, 3 vendas, 2 roteiros, 17 lembretes, 1 grupo com 4 ofertas na vitrine.');
+}
+
+// ---------------------------------------------------------------------------
+// Vitrine (Fit 7) — o grupo "Fátima 2027" com lugares + quatro ofertas públicas:
+// o pacote-GRUPO (com lugares), o pacote solto, o voo e o transfer. Uma
+// despublicada para o PO ver o interruptor.
+// ---------------------------------------------------------------------------
+
+async function semearVitrine(tx: TenantDb, tenantId: string): Promise<void> {
+  const [fatima] = await tx
+    .insert(groups)
+    .values({
+      tenantId,
+      title: 'Fátima 2027 — Peregrinação',
+      destination: 'Portugal',
+      departureOn: '2027-05-12',
+      returnOn: '2027-05-19',
+      totalSeats: 10,
+      pricePerSeatCents: 550_000,
+      costPerSeatCents: 400_000,
+      commissionPerSeatCents: 30_000,
+      serviceFeePerSeatCents: 20_000,
+      status: 'vendendo',
+    })
+    .returning({ id: groups.id });
+
+  // A família da Helena ocupa 3 lugares como um bloco (6a).
+  const [helena] = await tx
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(eq(contacts.name, 'Helena Prado'))
+    .limit(1);
+  if (helena) {
+    await tx.insert(groupMembers).values({
+      tenantId,
+      groupId: fatima!.id,
+      contactId: helena.id,
+      seats: 3,
+    });
+  }
+
+  const ofertas = [
+    {
+      title: 'Fátima 2027 — Peregrinação (10 lugares)',
+      type: 'pacote' as const,
+      priceCents: 550_000,
+      summary: '7 noites com voo, hospedagem com café, transfers e acompanhamento. Restam poucos lugares.',
+      coverUrl: null,
+      groupId: fatima!.id,
+      publicada: true,
+      position: 0,
+    },
+    {
+      title: 'Noronha — 7 noites pé na areia',
+      type: 'pacote' as const,
+      priceCents: 890_000,
+      summary: 'Pousada pé na areia, traslados inclusos e o roteiro que a Marina levou em setembro.',
+      coverUrl: null,
+      groupId: null,
+      publicada: true,
+      position: 1,
+    },
+    {
+      title: 'Passagem aérea — Lisboa ida e volta',
+      type: 'voo' as const,
+      priceCents: 412_000,
+      summary: 'Voo direto GRU–LIS, bagagem de 23kg inclusa. Tarde para reservar sujeita a disponibilidade.',
+      coverUrl: null,
+      groupId: null,
+      publicada: true,
+      position: 2,
+    },
+    {
+      title: 'Traslado privado aeroporto × hotel',
+      type: 'transfer' as const,
+      priceCents: 28_000,
+      summary: 'Carro executivo com motorista em português. Até 4 passageiros.',
+      coverUrl: null,
+      groupId: null,
+      publicada: true,
+      position: 3,
+    },
+    {
+      title: 'Natal em Santiago — pacote 5 noites',
+      type: 'pacote' as const,
+      priceCents: 640_000,
+      summary: 'Montagem para o Natal — abro as reservas em outubro.',
+      coverUrl: null,
+      groupId: null,
+      publicada: false,
+      position: 4,
+    },
+  ];
+
+  await tx.insert(offersTable).values(
+    ofertas.map((oferta) => ({
+      tenantId,
+      title: oferta.title,
+      type: oferta.type,
+      priceCents: oferta.priceCents,
+      summary: oferta.summary,
+      blocks: [],
+      publicToken: `seed-${oferta.position}-${uuidv7()}`,
+      position: oferta.position,
+      publishedAt: oferta.publicada ? new Date() : null,
+      unpublishedAt: oferta.publicada ? null : new Date(),
+      groupId: oferta.groupId,
+    })),
+  );
 }
 
 // ---------------------------------------------------------------------------
