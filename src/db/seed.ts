@@ -1511,56 +1511,188 @@ async function semearVitrine(tx: TenantDb, tenantId: string): Promise<void> {
   // do produto (`enviarImagemDaProposta`); no seed vale referência externa.
   const capa = (id: string) => `https://images.unsplash.com/${id}?auto=format&fit=crop&w=1200&q=70`;
 
-  const ofertas = [
+  type BlocoSeed = {
+    kind: string;
+    title: string | null;
+    body: string | null;
+    images: string[];
+    content: Record<string, string>;
+  };
+  const bloco = (
+    kind: string,
+    title: string,
+    content: Record<string, string> = {},
+    body: string | null = null,
+  ): BlocoSeed => ({ kind, title, body, images: [], content });
+
+  interface OfertaSeed {
+    title: string;
+    type: 'pacote' | 'voo' | 'hospedagem' | 'transfer' | 'servico';
+    priceCents: number;
+    summary: string;
+    coverUrl: string;
+    groupId: string | null;
+    publicada: boolean;
+    position: number;
+    blocks: BlocoSeed[];
+  }
+
+  const ofertas: OfertaSeed[] = [
     {
       title: 'Fátima 2027 — Peregrinação (10 lugares)',
-      type: 'pacote' as const,
+      type: 'pacote',
       priceCents: 550_000,
       summary: '7 noites com voo, hospedagem com café, transfers e acompanhamento. Restam poucos lugares.',
       coverUrl: capa('photo-1555881400-74d7acaacd8b'),
       groupId: fatima!.id,
       publicada: true,
       position: 0,
+      blocks: [
+        bloco('text', 'Sobre a peregrinação', {}, 'Sete noites por Fátima, Batalha e Nazaré com acompanhamento de Gravity desde o embarque em São Paulo. Grupo fechado de 10 pessoas — a saída confirmada para maio de 2027.'),
+        bloco('flight', 'Voo internacional', { airline: 'TAP Air Portugal', flightNumber: 'TP 088', from: 'São Paulo (GRU)', to: 'Lisboa (LIS)', departure: '12 mai, 17:35', arrival: '13 mai, 06:20' }),
+        bloco('hotel', 'Hotel em Fátima', { hotelName: 'Hotel Santa Maria', roomType: 'Quarto duplo padrão', checkIn: '2027-05-13', checkOut: '2027-05-19', mealPlan: 'Café da manhã incluso' }),
+        bloco('transfer', 'Transfers do grupo', { transferType: 'Aeroporto × Fátima × Aeroporto', vehicle: 'Micro-ônibus climatizado', pickup: 'Aeroporto de Lisboa, no desembarque' }),
+        bloco('insurance', 'Seguro viagem', { insurer: 'TAAC Europa 60k', coverage: 'Cobertura médica de €60.000' }),
+        bloco('price_note', 'O que está incluso', {}, 'Inclui: voo, 7 noites com café, transfers, passeios citados, seguro e kit peregrino. Não inclui: almoços, jantares e despesas pessoais.'),
+      ],
     },
     {
       title: 'Noronha — 7 noites pé na areia',
-      type: 'pacote' as const,
+      type: 'pacote',
       priceCents: 890_000,
       summary: 'Pousada pé na areia, traslados inclusos e o roteiro que a Marina levou em setembro.',
       coverUrl: capa('photo-1585208798174-6cedd86e019a'),
       groupId: null,
       publicada: true,
       position: 1,
+      blocks: [
+        bloco('text', 'A ilha do jeito certo', {}, 'Sete noites na Praia do Cachorro, passeio de buggy pelas praias e o mergulho com arraias que é o cartão-postal da ilha.'),
+        bloco('hotel', 'Pousada pé na areia', { hotelName: 'Pousada Maravilha', roomType: 'Chalé vista mar', checkIn: '2027-03-14', checkOut: '2027-03-21', mealPlan: 'Café da manhã regional' }),
+        bloco('flight', 'Voo para a ilha', { airline: 'Latam', flightNumber: 'LA 3610', from: 'Recife (REC)', to: 'Fernando de Noronha (FEN)', departure: '14 mar, 09:10', arrival: '14 mar, 11:00' }),
+        bloco('tour', 'Mergulho com arraias', { location: 'Baía dos Golfinhos', date: '2027-03-17', duration: '3 horas', includes: 'Equipamento completo e instrutor' }),
+      ],
     },
     {
       title: 'Passagem aérea — Lisboa ida e volta',
-      type: 'voo' as const,
+      type: 'voo',
       priceCents: 412_000,
-      summary: 'Voo direto GRU–LIS, bagagem de 23kg inclusa. Tarde para reservar sujeita a disponibilidade.',
+      summary: 'Voo direto GRU–LIS, bagagem de 23kg inclusa. Tarifa para reservar sujeita a disponibilidade.',
       coverUrl: capa('photo-1436491865332-7a61a109cc05'),
       groupId: null,
       publicada: true,
       position: 2,
+      blocks: [
+        bloco('flight', 'Ida — GRU × LIS', { airline: 'TAP Air Portugal', flightNumber: 'TP 088', from: 'São Paulo (GRU)', to: 'Lisboa (LIS)', departure: '12 mai, 17:35', arrival: '13 mai, 06:20' }),
+        bloco('flight', 'Volta — LIS × GRU', { airline: 'TAP Air Portugal', flightNumber: 'TP 087', from: 'Lisboa (LIS)', to: 'São Paulo (GRU)', departure: '19 mai, 12:10', arrival: '19 mai, 19:05' }),
+        bloco('price_note', 'Condições', {}, 'Bagagem despachada de 23kg + bagagem de mão. Tarifa reembolsável com taxa da companhia.'),
+      ],
     },
     {
       title: 'Traslado privado aeroporto × hotel',
-      type: 'transfer' as const,
+      type: 'transfer',
       priceCents: 28_000,
       summary: 'Carro executivo com motorista em português. Até 4 passageiros.',
       coverUrl: capa('photo-1549317661-bd32c8ce0db2'),
       groupId: null,
       publicada: true,
       position: 3,
+      blocks: [
+        bloco('transfer', 'Traslado de chegada', { transferType: 'Aeroporto × Hotel', vehicle: 'Sedan executivo', pickup: 'O motorista espera na saída do desembarque com placa' }),
+      ],
     },
     {
       title: 'Natal em Santiago — pacote 5 noites',
-      type: 'pacote' as const,
+      type: 'pacote',
       priceCents: 640_000,
       summary: 'Montagem para o Natal — abro as reservas em outubro.',
       coverUrl: capa('photo-1531968455001-5c5272a41129'),
       groupId: null,
       publicada: false,
       position: 4,
+      blocks: [
+        bloco('text', 'Natal nos Andes', {}, 'Cinco noites em Santiago com vinícola, Cordilheira e ceia de Natal inclusa.'),
+      ],
+    },
+    {
+      title: 'Hospedagem — Estalagem do Douro',
+      type: 'hospedagem',
+      priceCents: 210_000,
+      summary: '3 noites em estalagem à beira do rio, com degustação de vinho do Porto.',
+      coverUrl: capa('photo-1555881400-74d7acaacd8b'),
+      groupId: null,
+      publicada: true,
+      position: 5,
+      blocks: [
+        bloco('hotel', 'Estalagem do Douro', { hotelName: 'Estalagem do Douro', roomType: 'Quarto com varanda', checkIn: '2027-06-10', checkOut: '2027-06-13', mealPlan: 'Café da manhã' }),
+        bloco('tour', 'Degustação de vinho do Porto', { location: 'Vila Nova de Gaia', date: '2027-06-11', duration: '2 horas' }),
+      ],
+    },
+    {
+      title: 'City tour histórico — Lisboa a pé',
+      type: 'servico',
+      priceCents: 15_000,
+      summary: '3 horas de caminhada com guia credenciado: Alfama, Castelo e Baixa.',
+      coverUrl: capa('photo-1555881400-74d7acaacd8b'),
+      groupId: null,
+      publicada: true,
+      position: 6,
+      blocks: [
+        bloco('tour', 'Lisboa histórica', { location: 'Alfama, Castelo de São Jorge e Baixa', duration: '3 horas', includes: 'Guia credenciado em português + ingressos do castelo' }),
+      ],
+    },
+    {
+      title: 'Pacote Buenos Aires — 4 noites com tango',
+      type: 'pacote',
+      priceCents: 470_000,
+      summary: 'Voo, hotel em Palermo, city tour e jantar-show de tango.',
+      coverUrl: capa('photo-1531968455001-5c5272a41129'),
+      groupId: null,
+      publicada: true,
+      position: 7,
+      blocks: [
+        bloco('flight', 'Voo GOL ida e volta', { airline: 'GOL', flightNumber: 'G3 7149', from: 'São Paulo (GRU)', to: 'Buenos Aires (EZE)', departure: '10 jul, 08:20', arrival: '10 jul, 11:45' }),
+        bloco('hotel', 'Hotel em Palermo', { hotelName: 'Palo Santo Hotel', roomType: 'Superior', checkIn: '2027-07-10', checkOut: '2027-07-14', mealPlan: 'Sem refeições' }),
+        bloco('tour', 'Noite de tango', { location: 'San Telmo', duration: '4 horas', includes: 'Jantar de 3 pratos + show' }),
+      ],
+    },
+    {
+      title: 'Seguro viagem Europa 60k',
+      type: 'servico',
+      priceCents: 9_800,
+      summary: 'Cobertura médica de €60.000, bagagem e cancelamento — válido para toda a Europa.',
+      coverUrl: capa('photo-1436491865332-7a61a109cc05'),
+      groupId: null,
+      publicada: true,
+      position: 8,
+      blocks: [
+        bloco('insurance', 'TAAC Europa', { insurer: 'TAAC Europa 60k', coverage: 'Cobertura médica €60.000 + bagagem USD 1.200' }),
+      ],
+    },
+    {
+      title: 'Hospedagem — Hotel Santa Maria, Fátima',
+      type: 'hospedagem',
+      priceCents: 168_000,
+      summary: 'A estalagem do grupo da peregrinação, reservável à parte para quem vai por conta.',
+      coverUrl: capa('photo-1555881400-74d7acaacd8b'),
+      groupId: null,
+      publicada: true,
+      position: 9,
+      blocks: [
+        bloco('hotel', 'Hotel Santa Maria', { hotelName: 'Hotel Santa Maria', roomType: 'Quarto duplo padrão', checkIn: '2027-05-13', checkOut: '2027-05-19', mealPlan: 'Café da manhã' }),
+      ],
+    },
+    {
+      title: 'Voo Recife × Noronha',
+      type: 'voo',
+      priceCents: 98_000,
+      summary: 'Trecho doméstico com vista da ilha na descida — 1h40 de voo.',
+      coverUrl: capa('photo-1585208798174-6cedd86e019a'),
+      groupId: null,
+      publicada: true,
+      position: 10,
+      blocks: [
+        bloco('flight', 'REC × FEN', { airline: 'Latam', flightNumber: 'LA 3610', from: 'Recife (REC)', to: 'Noronha (FEN)', departure: '14 mar, 09:10', arrival: '14 mar, 11:00' }),
+      ],
     },
   ];
 
@@ -1572,7 +1704,7 @@ async function semearVitrine(tx: TenantDb, tenantId: string): Promise<void> {
       priceCents: oferta.priceCents,
       summary: oferta.summary,
       coverUrl: oferta.coverUrl,
-      blocks: [],
+      blocks: oferta.blocks,
       publicToken: `seed-${oferta.position}-${uuidv7()}`,
       position: oferta.position,
       publishedAt: oferta.publicada ? new Date() : null,
