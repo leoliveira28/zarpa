@@ -13,6 +13,7 @@ import { AssinaturaBanner } from "./AssinaturaBanner";
 import { NovaPropostaSheet } from "./NovaPropostaSheet";
 import { ThemeToggle } from "./ThemeToggle";
 import {
+  ChevronDownIcon,
   ClientsIcon,
   FunnelIcon,
   MoneyIcon,
@@ -183,6 +184,82 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
 /* ------------------------------------------------------------------ lateral */
 
+/**
+ * Seções da lateral (pedido do PO, meta Vitrine): títulos expansíveis com os
+ * links dentro — organização por tema no lugar da pilha de links soltos.
+ * A seção que contém a página ativa nasce aberta e não fecha ao clicar nela.
+ */
+type ItemLateral = { href: string; label: string };
+
+const SECAO_COMERCIAL: ItemLateral[] = [
+  { href: "/grupos", label: "Grupos" },
+  { href: "/vitrine", label: "Vitrine" },
+];
+
+const SECAO_AGENCIA: ItemLateral[] = [
+  { href: "/equipe", label: "Equipe" },
+  { href: "/configuracoes", label: "Sua marca" },
+];
+
+const SECAO_CONTA: ItemLateral[] = [
+  { href: "/cobranca", label: "Assinatura" },
+  { href: "/integracoes", label: "Integrações" },
+];
+
+function SecaoLateral({
+  titulo,
+  itens,
+  activeHref,
+  padraoAberta = false,
+}: {
+  titulo: string;
+  itens: ItemLateral[];
+  activeHref: string | null;
+  /** Aberta por padrão mesmo sem página ativa dentro (a comercial, que é o dia a dia). */
+  padraoAberta?: boolean;
+}) {
+  const ativaDentro =
+    activeHref !== null && itens.some((item) => activeHref.startsWith(item.href));
+  const [aberta, setAberta] = React.useState(padraoAberta || ativaDentro);
+  const visivel = aberta || ativaDentro;
+
+  return (
+    <div className="border-b border-hairline last:border-b-0">
+      <button
+        type="button"
+        onClick={() => setAberta((atual) => !atual)}
+        aria-expanded={visivel}
+        className="flex min-h-9 w-full items-center justify-between rounded-md px-3 py-1.5 text-11 font-semibold uppercase tracking-wider text-subtle hover:text-ink"
+      >
+        {titulo}
+        <ChevronDownIcon
+          className={cn("size-3.5 transition-transform duration-150", visivel && "rotate-180")}
+        />
+      </button>
+      {visivel ? (
+        <div className="flex flex-col pb-1">
+          {itens.map((item) => {
+            const active = activeHref === item.href || activeHref?.startsWith(`${item.href}/`);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "flex min-h-9 items-center rounded-md px-3 pl-4 text-13",
+                  active ? "bg-accent-soft font-medium text-ink" : "text-muted hover:bg-surface-3 hover:text-ink",
+                )}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SideNav({ activeHref }: { activeHref: string | null }) {
   const transition = useTransitionPreset("snap");
   return (
@@ -219,45 +296,13 @@ function SideNav({ activeHref }: { activeHref: string | null }) {
         })}
       </nav>
 
-      <div className="mt-auto flex flex-col gap-3 border-t border-hairline p-3">
-        {/* Fase 3 — a Equipe é a primeira do grupo de gestão: quem entra nela
-            mexe em gente e assento, que é o que decide quanto se paga. */}
-        <Link
-          href="/equipe"
-          className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
-        >
-          Equipe
-        </Link>
-        <Link
-          href="/grupos"
-          className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
-        >
-          Grupos
-        </Link>
-        <Link
-          href="/vitrine"
-          className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
-        >
-          Vitrine
-        </Link>
-        <Link
-          href="/configuracoes"
-          className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
-        >
-          Sua marca
-        </Link>
-        <Link
-          href="/cobranca"
-          className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
-        >
-          Assinatura
-        </Link>
-        <Link
-          href="/integracoes"
-          className="rounded-md px-3 py-2 text-13 text-muted hover:bg-surface-3 hover:text-ink"
-        >
-          Integrações
-        </Link>
+      <div className="mt-auto flex flex-col border-t border-hairline p-3">
+        {/* Seções de gestão com TÍTULO e estado expansível (pedido do PO):
+            nada de links soltos empilhados — a lateral organiza por tema e
+            cada seção abre/fecha. A seção da página ATIVA nasce aberta. */}
+        <SecaoLateral titulo="Vendas e clientes" itens={SECAO_COMERCIAL} activeHref={activeHref} padraoAberta />
+        <SecaoLateral titulo="Minha agência" itens={SECAO_AGENCIA} activeHref={activeHref} />
+        <SecaoLateral titulo="Conta" itens={SECAO_CONTA} activeHref={activeHref} />
         {/*
          * Bancada de design, não tela de produto. `src/middleware.ts` já
          * redireciona a ROTA para /hoje em produção; sem esta guarda o link

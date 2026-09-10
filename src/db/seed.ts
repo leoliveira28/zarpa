@@ -1507,13 +1507,17 @@ async function semearVitrine(tx: TenantDb, tenantId: string): Promise<void> {
     });
   }
 
+  // Capas: URLs estáveis do Unsplash (CDN público) — o upload próprio é a via
+  // do produto (`enviarImagemDaProposta`); no seed vale referência externa.
+  const capa = (id: string) => `https://images.unsplash.com/${id}?auto=format&fit=crop&w=1200&q=70`;
+
   const ofertas = [
     {
       title: 'Fátima 2027 — Peregrinação (10 lugares)',
       type: 'pacote' as const,
       priceCents: 550_000,
       summary: '7 noites com voo, hospedagem com café, transfers e acompanhamento. Restam poucos lugares.',
-      coverUrl: null,
+      coverUrl: capa('photo-1555881400-74d7acaacd8b'),
       groupId: fatima!.id,
       publicada: true,
       position: 0,
@@ -1523,7 +1527,7 @@ async function semearVitrine(tx: TenantDb, tenantId: string): Promise<void> {
       type: 'pacote' as const,
       priceCents: 890_000,
       summary: 'Pousada pé na areia, traslados inclusos e o roteiro que a Marina levou em setembro.',
-      coverUrl: null,
+      coverUrl: capa('photo-1585208798174-6cedd86e019a'),
       groupId: null,
       publicada: true,
       position: 1,
@@ -1533,7 +1537,7 @@ async function semearVitrine(tx: TenantDb, tenantId: string): Promise<void> {
       type: 'voo' as const,
       priceCents: 412_000,
       summary: 'Voo direto GRU–LIS, bagagem de 23kg inclusa. Tarde para reservar sujeita a disponibilidade.',
-      coverUrl: null,
+      coverUrl: capa('photo-1436491865332-7a61a109cc05'),
       groupId: null,
       publicada: true,
       position: 2,
@@ -1543,7 +1547,7 @@ async function semearVitrine(tx: TenantDb, tenantId: string): Promise<void> {
       type: 'transfer' as const,
       priceCents: 28_000,
       summary: 'Carro executivo com motorista em português. Até 4 passageiros.',
-      coverUrl: null,
+      coverUrl: capa('photo-1549317661-bd32c8ce0db2'),
       groupId: null,
       publicada: true,
       position: 3,
@@ -1553,7 +1557,7 @@ async function semearVitrine(tx: TenantDb, tenantId: string): Promise<void> {
       type: 'pacote' as const,
       priceCents: 640_000,
       summary: 'Montagem para o Natal — abro as reservas em outubro.',
-      coverUrl: null,
+      coverUrl: capa('photo-1531968455001-5c5272a41129'),
       groupId: null,
       publicada: false,
       position: 4,

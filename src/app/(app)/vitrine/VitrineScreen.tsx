@@ -23,7 +23,7 @@ import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { SkeletonRow } from "@/components/ui/Skeleton";
 import { Input, Textarea } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
-import { CopyIcon, PlusIcon } from "@/components/app/icons";
+import { CopyIcon, DocumentIcon, PlusIcon } from "@/components/app/icons";
 import { KIND_LABEL, CONTENT_FIELDS } from "@/lib/ui/blockContent";
 import type { ContentField } from "@/lib/ui/blockContent";
 import { TIPO_LABEL, type OfertaTipo } from "@/lib/ui/ofertaTipo";
@@ -156,30 +156,51 @@ export function VitrineScreen() {
           }
         />
       ) : (
-        <ul className="flex flex-col">
+        <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
           {ofertas.map((oferta) => (
-            <li key={oferta.id} className="flex items-center gap-3 border-b border-line-subtle px-1 py-3 last:border-b-0">
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate text-15 font-medium text-ink">{oferta.title}</span>
-                <span className="truncate text-13 text-muted">
-                  {TIPO_LABEL[oferta.type]}
-                  {oferta.summary ? ` · ${oferta.summary}` : ""}
+            <li
+              key={oferta.id}
+              className="flex flex-col overflow-hidden rounded-lg border border-line bg-surface shadow-1"
+            >
+              <button
+                type="button"
+                onClick={() => setEditando(oferta.id)}
+                className="flex flex-1 cursor-pointer flex-col text-left"
+              >
+                {oferta.coverUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- capa da oferta, mesma via da página pública
+                  <img src={oferta.coverUrl} alt="" className="aspect-[16/9] w-full object-cover" />
+                ) : (
+                  <span className="grid aspect-[16/9] w-full place-items-center bg-surface-2">
+                    <DocumentIcon className="size-6 text-subtle" />
+                  </span>
+                )}
+                <span className="flex flex-1 flex-col gap-1.5 p-4">
+                  <span className="flex items-center gap-2">
+                    <span className="text-11 font-semibold uppercase tracking-wider text-subtle">
+                      {TIPO_LABEL[oferta.type]}
+                    </span>
+                    <Badge tone={oferta.publicada ? "ok" : "neutral"} dot size="sm">
+                      {oferta.publicada ? "Publicada" : "Rascunho"}
+                    </Badge>
+                  </span>
+                  <span className="text-15 font-medium leading-snug text-ink">{oferta.title}</span>
+                  {oferta.summary ? (
+                    <span className="line-clamp-2 text-13 leading-[1.5] text-muted">{oferta.summary}</span>
+                  ) : null}
+                  <span className="mt-auto pt-2">
+                    <Money cents={oferta.priceCents} size="20" reserveFor={50_000_000} />
+                  </span>
                 </span>
-              </span>
-              <Money cents={oferta.priceCents} size="15" reserveFor={50_000_000} />              <Badge tone={oferta.publicada ? "ok" : "neutral"} dot size="sm">
-                {oferta.publicada ? "Publicada" : "Rascunho"}
-              </Badge>
-              <div className="flex shrink-0 items-center gap-1">
+              </button>
+              <span className="flex items-center gap-1 border-t border-hairline p-2">
                 <Button variant="secondary" size="sm" onClick={() => void alternarPublicacao(oferta)}>
                   {oferta.publicada ? "Despublicar" : "Publicar"}
                 </Button>
                 <Button variant="secondary" size="sm" onClick={() => copiarLink(oferta.publicToken)}>
                   Copiar link
                 </Button>
-                <Button variant="secondary" size="sm" onClick={() => setEditando(oferta.id)}>
-                  Editar
-                </Button>
-              </div>
+              </span>
             </li>
           ))}
         </ul>
