@@ -35,6 +35,7 @@ mobile). Falta: modelo/template de proposta. • Ficha 360°, funil configuráve
 | **4. Corporativo (PJ)** | Conta PJ (empresa com N viajantes vinculados), centro de custo como atributo de venda + relatórios por centro, faturamento consolidado por empresa/período com boleto Asaas e baixa | O jogo do Monde, na nossa escala |
 | **5. Excursão/grupo leve** | Negócio com múltiplos compradores, lista de passageiros consolidada, resultado da saída | Validar demanda com usuários antes de investir |
 | **6. Por último (PO)** | Integrações reais (Wooba/Infotravel/Despegar) e NF-e | Adapter de cotação já existe (S12) |
+| **7. Vitrine** (fit novo, 2026-09-10) | Página pública do agente (`/a/[slug]`): catálogo de ofertas (pacote/voo/hospedagem/transfer/serviço) montadas com os blocos do construtor, com preço e interesse do cliente via Google — o site que o agente solo não tem | Plano completo em `docs/FIT7_VITRINE.md`; absorve a meta Grupos (oferta com lugares) |
 
 ## Não fazer
 
