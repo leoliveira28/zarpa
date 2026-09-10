@@ -360,3 +360,13 @@ export {
   type ArquivarCentroDeCustoInput,
   type ReabrirCentroDeCustoInput,
 } from './costCenters';
+export {
+  criarFatura,
+  listarFaturasDoCliente,
+  obterFatura,
+  emitirBoletoDaFatura,
+  type FaturaDoCliente,
+  type DetalheDaFaturaDoCliente,
+  type CriarFaturaInput,
+  type EmitirBoletoInput,
+} from './invoices';

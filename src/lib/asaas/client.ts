@@ -154,6 +154,57 @@ export async function criarClienteAsaas(
   return { asaasCustomerId: body.id };
 }
 
+// ---------------------------------------------------------------------------
+// Cobrança avulsa (Fase 4b) — o boleto da fatura consolidada de um cliente PJ da
+// agência. Diferente da assinatura (que cobra o PRÓPRIO agente), esta cobrança é
+// para o cliente DELE: entra o customer real do contato (criado com documento
+// decifrado com auditoria — ver `emitirBoletoDaFatura` em `src/server/invoices.ts`).
+// ---------------------------------------------------------------------------
+
+export type CriarCobrancaInput = {
+  /** Customer do Asaas (o cliente da agência, não a agência). */
+  customerId: string;
+  billingType: BillingType;
+  /** Valor em REAIS (float) — a convenção do Asaas; quem chama converte de cents. */
+  value: number;
+  /** `AAAA-MM-DD` do vencimento do boleto. */
+  dueDate: string;
+  /** Descrição que aparece no boleto (ex.: "Fatura 09/2026 — Alfa Turismo"). */
+  description?: string;
+};
+
+export type CriarCobrancaResult = {
+  asaasPaymentId: string;
+  /** Link do boleto (`bankSlipUrl`) — só para BOLETO. */
+  boletoUrl: string | null;
+};
+
+export async function criarCobrancaAsaas(
+  input: CriarCobrancaInput,
+): Promise<CriarCobrancaResult> {
+  if (!asaasConfigurado()) throw erroAsaasNaoConfigurado();
+
+  const body = await asaasFetch<{
+    id: string;
+    bankSlipUrl?: string | null;
+    bankSlipVerificationUrl?: string | null;
+  }>('/payments', {
+    method: 'POST',
+    body: JSON.stringify({
+      customer: input.customerId,
+      billingType: input.billingType,
+      value: input.value,
+      dueDate: input.dueDate,
+      description: input.description,
+    }),
+  });
+
+  return {
+    asaasPaymentId: body.id,
+    boletoUrl: body.bankSlipUrl ?? body.bankSlipVerificationUrl ?? null,
+  };
+}
+
 export async function criarAssinaturaAsaas(
   input: CriarAssinaturaInput,
 ): Promise<CriarAssinaturaResult> {

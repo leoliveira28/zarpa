@@ -615,10 +615,15 @@ describe('processarWebhookAsaas — idempotência e validação', () => {
     expect(r.processado).toBe(false)
   })
 
-  it('webhook sem subscription id no payload → processado: false', async () => {
+  it('webhook sem subscription id e sem fatura para o pagamento → processado: false', async () => {
+    // Fase 4b: sem subscription, o discovery agora passa pela `invoices` por
+    // `asaas_payment_id` (cobrança avulsa da fatura consolidada). Um payment id que
+    // não é nem assinatura nem fatura nossa continua inerte — o motivo mudou de
+    // "subscription ausente" para "fatura não encontrada", que é a mesma cortesia
+    // (200 na rota, nada a processar).
     const r = await processarWebhookAsaas({ event: 'PAYMENT_RECEIVED', payment: { id: 'pay-sem-sub' } })
     expect(r.processado).toBe(false)
-    expect(r.motivo).toMatch(/subscription/i)
+    expect(r.motivo).toMatch(/fatura/i)
   })
 })
 

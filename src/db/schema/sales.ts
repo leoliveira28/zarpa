@@ -17,6 +17,7 @@ import { deals } from './pipeline';
 import { user } from './auth';
 import { proposals, proposalOptions } from './proposals';
 import { costCenters } from './costCenters';
+import { invoices } from './invoices';
 
 /**
  * S9 — o dinheiro que já fechou: `sales` (a venda que nasce de uma proposta ACEITA) e
@@ -153,12 +154,20 @@ export const receivables = pgTable(
       .notNull()
       .default('pendente'),
     pagoEm: timestamp('pago_em', { withTimezone: true }),
+    /**
+     * Fatura que consolida esta parcela (Fase 4b, 0023) — nullable: parcela PF avulsa
+     * nunca terá fatura. A parcela mantém o VENCIMENTO dela; a fatura é o documento de
+     * cobrança consolidado. SET NULL: fatura apagada não some com o cronograma.
+     */
+    invoiceId: uuid('invoice_id').references(() => invoices.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index('receivables_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
     index('receivables_sale_id_idx').on(t.saleId),
+    // A fatura consolidada lê as parcelas dela por aqui (Fase 4b).
+    index('receivables_invoice_id_idx').on(t.invoiceId),
     // A tela que importa é "o que está em aberto e vence quando" — mesmo desenho de
     // `tasks_tenant_open_due_idx`: índice parcial que não paga por parcela já paga/cancelada.
     index('receivables_tenant_open_due_idx')

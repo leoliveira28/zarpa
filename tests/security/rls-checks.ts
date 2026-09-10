@@ -69,6 +69,13 @@ export const KNOWN_ESCAPE_HATCHES: { table: string; policy: string }[] = [
   // `withTenant` real depois. Mesma ressalva: GUC forjável por SQL arbitrário,
   // alcance mínimo. Ver docs/handoffs/teo-para-rafa.md.
   { table: 'public.subscriptions', policy: 'subscriptions_webhook_read' },
+  // Fase 4b — discovery do tenant no webhook da COBRANÇA AVULSA (`drizzle/0023_
+  // faturamento_consolidado.sql`). O boleto da fatura consolidada não tem subscription
+  // no payload; o webhook encontra a fatura pelo `asaas_payment_id` (uniqueIndex
+  // global) sob o MESMO GUC `app.webhook_context = 'on'` de `withWebhookContext`.
+  // FOR SELECT, alcance mínimo (id/tenant_id/status) — a baixa em `invoices`/
+  // `receivables` passa por `withTenant` real na sequência. Espelho da policy da 0010.
+  { table: 'public.invoices', policy: 'invoices_webhook_read' },
   // S3/S5 — acervo global da biblioteca (`drizzle/0003_construtor_de_proposta.sql`). O GUC
   // `app.platform_context` não é ligado por nenhum caminho do código hoje (sem tela de
   // administração no v1) — existe para o dia em que alguém precisar administrar o acervo

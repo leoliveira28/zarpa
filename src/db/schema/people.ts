@@ -66,6 +66,11 @@ export const contacts = pgTable(
     source: text('source', {
       enum: ['whatsapp', 'instagram', 'indicacao', 'site', 'evento', 'outro'],
     }),
+    /**
+     * Customer do Asaas deste contato, criado UMA vez na primeira emissão de boleto e
+     * cacheado (Fase 4b, 0023). É dado de integração, não PII — id do Asaas em claro.
+     */
+    asaasCustomerId: text('asaas_customer_id'),
     tags: text('tags').array().notNull().default(sql`'{}'::text[]`),
     notes: text('notes'),
 

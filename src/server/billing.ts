@@ -2,7 +2,7 @@
 
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { payments, plans, subscriptions } from '@/db/schema';
+import { payments, plans, subscriptions, invoices, receivables } from '@/db/schema';
 import { member } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { withWebhookContext } from '@/lib/tenant/withWebhookContext';
@@ -952,8 +952,49 @@ export async function processarWebhookAsaas(
   const asaasSubId =
     payload.payment?.subscription ?? payload.subscription?.id ?? null;
 
+  // Fase 4b — cobrança AVULSA (boleto da fatura consolidada): o payload NÃO traz
+  // subscription. O discovery do tenant é pelo `asaas_payment_id` na `invoices`
+  // (0023, policy `invoices_webhook_read` sob o MESMO GUC `app.webhook_context`).
   if (!asaasSubId) {
-    return { processado: false, motivo: 'subscription id ausente no payload' };
+    const asaasPaymentId = payload.payment?.id ?? null;
+    if (!asaasPaymentId) {
+      return { processado: false, motivo: 'subscription id ausente no payload' };
+    }
+
+    const fatura = await withWebhookContext(async (tx) => {
+      const [row] = await tx
+        .select({ id: invoices.id, tenantId: invoices.tenantId, status: invoices.status })
+        .from(invoices)
+        .where(eq(invoices.asaasPaymentId, asaasPaymentId))
+        .limit(1);
+      return row ?? null;
+    });
+    if (!fatura) {
+      // Cobrança avulsa que não é fatura nossa — ignora sem erro (mesma cortesia
+      // do ramo de assinatura: 200 na rota, o Asaas não tem o que consertar).
+      return { processado: false, motivo: 'fatura não encontrada para o pagamento' };
+    }
+
+    return withTenant(fatura.tenantId, async (tx) => {
+      if (evento === 'PAYMENT_RECEIVED' || evento === 'PAYMENT_CONFIRMED') {
+        // BAIXA AUTOMÁTICA: fatura → 'paga' e as parcelas consolidadas → 'pago'.
+        // Idempotente pelo próprio update: reenvio do evento reexecuta e nada muda
+        // (o uniqueIndex em `asaas_payment_id` garante que só existe esta fatura).
+        await tx
+          .update(invoices)
+          .set({ status: 'paga', pagoEm: new Date(), updatedAt: new Date() })
+          .where(eq(invoices.id, fatura.id));
+        await tx
+          .update(receivables)
+          .set({ status: 'pago', pagoEm: new Date(), updatedAt: new Date() })
+          .where(and(eq(receivables.invoiceId, fatura.id), eq(receivables.status, 'pendente')));
+        return { processado: true, motivo: `${evento} (fatura)` };
+      }
+      // OVERDUE/REFUNDED/DELETED de fatura: a baixa automática é só o RECEIVED/
+      // CONFIRMED — reabrir parcelas pagas por estorno é decisão de produto
+      // explícita (§6 do plano), não comportamento default do webhook.
+      return { processado: false, motivo: `evento de fatura não tratado: ${evento}` };
+    });
   }
 
   // Busca a assinatura pelo asaasSubscriptionId. O webhook não tem sessão, e

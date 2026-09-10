@@ -1,5 +1,58 @@
 # Nina — status
 
+## 2026-09-10 (noite) — Fase 4b: faturamento consolidado — fatura, boleto sandbox e baixa automática
+
+A última peça do critério de aceite da Fase 4 (`docs/FASE4_PJ.md` §7), backend
+completo + UI mínima na ficha da empresa. O fluxo inteiro agora fecha:
+**consolidar → boleto → webhook → baixa**.
+
+**Migration 0023** (`drizzle/0023_faturamento_consolidado.sql`, aplicada no dev
+e no teste — 33 tabelas): `invoices` (contato-empresa + período + soma
+FOTOGRAFADA + status + `asaas_payment_id` + `boleto_url`), `receivables.
+invoice_id` (nullable, SET NULL — a parcela mantém o vencimento dela),
+`contacts.asaas_customer_id` (customer criado UMA vez e cacheado). Dois
+índices únicos parciais carregam as invariantes: `asaas_payment_id` GLOBAL
+(idempotência do webhook) e fatura ABERTA única por contato/período-de
+(consolidar duas vezes é erro de clique). RLS de isolamento + policy
+`invoices_webhook_read` — espelho da 0010, MESMO GUC `'on'` (o guarda de RLS
+pegou a policy nova e ela entrou em `KNOWN_ESCAPE_HATCHES` com o porquê).
+
+**Serviço (`src/server/invoices.ts`):** `criarFatura` consolida só as parcelas
+PENDENTES do período (por VENCIMENTO, titular = o contato — mesma gramática do
+ranking; paga e fora do período ficam de fora), soma em transação e marca o
+vínculo — soma e conjunto de parcelas não se desencontram. `emitirBoletoDaFatura`
+decifra o documento COM auditoria (mesma action da ficha), recusa sem e-mail
+(ahead of time, em vez do erro do Asaas), cria/cacha o customer e chama a
+cobrança avulsa `criarCobrancaAsaas` (POST `/payments`, BOLETO — nova no
+client `src/lib/asaas/client.ts`). Idempotente: fatura com boleto emitido
+devolve o estado, não recobra — clique duplo não gera duas cobranças.
+
+**Webhook (`processarWebhookAsaas` estendido):** cobrança avulsa NÃO traz
+subscription no payload — o discovery do tenant agora passa pela fatura por
+`asaas_payment_id` sob o `withWebhookContext`. PAYMENT_RECEIVED/CONFIRMED →
+fatura 'paga' + parcelas consolidadas → 'pago'. OVERDUE/REFUNDED/DELETED de
+fatura ficam inertes de propósito: reabrir parcelas pagas por estorno é
+decisão de produto explícita (§6), não default de webhook. Um teste antigo
+(`cobranca.test.ts`) atualizado — o motivo mudou de "subscription ausente"
+para "fatura não encontrada", a mesma cortesia de 200.
+
+**UI (`FaturasCard` na ficha, só PJ):** lista (período · N parcelas · valor ·
+status · link do boleto) + rodapé de consolidação (De/Até default = mês
+corrente) + "Emitir boleto" por fatura aberta. Sandbox: `ASAAS_API_URL` já
+aponta para `https://sandbox.asaas.com/api/v3` por default — sem
+`ASAAS_API_KEY` no .env, a emissão devolve ASAAS_NAO_CONFIGURADO com a
+correção.
+
+**Números:** 3 testes novos (`tests/invoices/faturamento.test.ts` — Asaas
+mockado, banco/actions/webhook REAIS: consolidação seletiva, cache de
+customer, baixa idempotente); **666/666**; build limpo; zero problemas de
+lint meus (os 2 do ContatoScreen e os 2 de billing.ts são pré-existentes no
+HEAD, comprovado por stash).
+
+**Resta da 4b (para o rafa, anotado no handoff):** os placeholders do
+`trocarPlano` (§4.1 do plano — customer da ASSINATURA da agência em modo
+prod); e a baixa por estorno (REFUNDED reabrindo parcelas) se o produto pedir.
+
 ## 2026-09-10 (fim de tarde) — Importação aceita .xlsx (pedido antigo, fechado)
 
 O PO tentou importar planilha e "não funcionava": reproduzi no navegador com o

@@ -365,3 +365,22 @@ teste — a suíte global aplica sozinha):
    do `dealAgentId` — sem teste dedicado (a suíte de `tests/sales` cobre o
    caminho). Se quiser canário próprio, o molde está em
    `tests/contacts/pj-e-centros.test.ts`.
+
+## Fase 4b — restou para você (2026-09-10, noite)
+
+Faturamento consolidado no ar (`src/server/invoices.ts`, 0023 — aplicada no
+dev e no banco de teste): fatura consolidando parcelas do período, boleto
+avulso (`criarCobrancaAsaas` no client, sandbox por default) e webhook dando
+a baixa automática. Falta do plano (§4.1), é seu território:
+
+1. **Placeholders do `trocarPlano`** — o plano da Fase 4 mandou consertar
+   junto: o customer da ASSINATURA da agência em modo prod ainda sai com dado
+   placeholder. Meu caminho (customer criado uma vez + cacheado em
+   `contacts.asaas_customer_id`, documento decifrado com auditoria) é o molde.
+2. **Estorno (REFUNDED/DELETED de fatura)** — deixei INERTE de propósito
+   (reabrir parcelas pagas é decisão de produto). Se o PO pedir, o ramo está
+   marcado em `billing.ts` no bloco da cobrança avulsa.
+
+Nota de contrato: `listarFaturas`/`FaturaResumo` JÁ EXISTIAM em `billing.ts`
+(faturas da ASSINATURA da agência, S11) — minhas faturas de cliente exportam
+como `listarFaturasDoCliente`/`FaturaDoCliente` para os dois não colidirem.

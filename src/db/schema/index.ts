@@ -29,4 +29,5 @@ export * from './platform';
 export * from './imports';
 export * from './sales';
 export * from './costCenters';
+export * from './invoices';
 export * from './integrations';

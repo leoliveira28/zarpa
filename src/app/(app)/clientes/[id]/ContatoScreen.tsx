@@ -6,6 +6,10 @@ import { useRouter } from "next/navigation";
 import {
   arquivarContato,
   atualizarContato,
+  criarFatura,
+  emitirBoletoDaFatura,
+  listarFaturasDoCliente,
+  type FaturaDoCliente,
   atualizarViajante,
   concluirTarefa,
   criarViajante,
@@ -241,6 +245,7 @@ export function ContatoScreen({ contatoId }: { contatoId: string }) {
           <LembretesCard contatoId={contatoId} />
           <DadosCard contact={contact} contatoId={contatoId} onPatched={patch} />
           <DocumentoCard contact={contact} contatoId={contatoId} onPatched={patch} />
+          {contact.personType === "juridica" ? <FaturasCard contatoId={contatoId} /> : null}
           <PassageirosCard contatoId={contatoId} />
           <EncerramentoCard contact={contact} onPatched={patch} />
 
@@ -1965,6 +1970,174 @@ function EncerramentoCard({
           )
         }
       />
+    </Card>
+  );
+}
+
+/* -----------------------------------------------------------------------------
+   FaturasCard — o faturamento consolidado da empresa (Fase 4b)
+   -------------------------------------------------------------------------
+   O fluxo do §7 do plano, na ficha da empresa: consolidar o mês (as parcelas
+   PENDENTES do período viram UMA fatura), emitir o boleto (Asaas sandbox em
+   dev) e ler a baixa automática — o webhook paga a fatura e as parcelas.
+   Lista primeiro, consolidação no rodapé: o histórico é o que mais se lê.
+   ------------------------------------------------------------------------- */
+
+function FaturasCard({ contatoId }: { contatoId: string }) {
+  const toast = useToast();
+  const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
+  const [faturas, setFaturas] = React.useState<FaturaDoCliente[]>([]);
+  const [erro, setErro] = React.useState<{ mensagem: string; correcao?: string } | null>(null);
+  const [reloadToken, setReloadToken] = React.useState(0);
+
+  // Consolidação — período default: o mês corrente UTC (o mês que a agente quer
+  // é quase sempre "este").
+  const hoje = new Date().toISOString().slice(0, 10);
+  const [de, setDe] = React.useState(`${hoje.slice(0, 7)}-01`);
+  const [ate, setAte] = React.useState(hoje);
+  const [consolidando, setConsolidando] = React.useState(false);
+  const [emitindoId, setEmitindoId] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let active = true;
+    void listarFaturasDoCliente({ contactId: contatoId }).then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setStatus("error");
+        setErro({ mensagem: result.mensagem, correcao: result.correcao });
+        return;
+      }
+      setFaturas(result.data);
+      setStatus("ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, [contatoId, reloadToken]);
+
+  async function consolidar() {
+    setConsolidando(true);
+    setErro(null);
+    const result = await criarFatura({ contactId: contatoId, de, ate });
+    setConsolidando(false);
+    if (!result.ok) {
+      setErro({ mensagem: result.mensagem, correcao: result.correcao });
+      return;
+    }
+    setFaturas((atual) => [result.data, ...atual]);
+    toast.show({ title: `Fatura consolidada: ${result.data.totalParcelas} parcela(s)`, tone: "ok" });
+  }
+
+  async function emitirBoleto(fatura: FaturaDoCliente) {
+    setEmitindoId(fatura.id);
+    setErro(null);
+    const result = await emitirBoletoDaFatura({ faturaId: fatura.id });
+    setEmitindoId(null);
+    if (!result.ok) {
+      setErro({ mensagem: result.mensagem, correcao: result.correcao });
+      return;
+    }
+    setFaturas((atual) => atual.map((f) => (f.id === fatura.id ? result.data : f)));
+    if (result.data.boletoUrl) {
+      window.open(result.data.boletoUrl, "_blank", "noopener");
+    }
+  }
+
+  if (status === "loading") {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Faturas</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <SkeletonRow />
+        </CardBody>
+      </Card>
+    );
+  }
+  if (status === "error") {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Faturas</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <FieldError>{erro?.mensagem ?? "Não consegui carregar as faturas."}</FieldError>
+        </CardBody>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Faturas</CardTitle>
+      </CardHeader>
+      <CardBody>
+        {faturas.length === 0 ? (
+          <p className="text-15 text-muted">
+            Nenhuma fatura ainda. Consolide as parcelas pendentes de um período abaixo —
+            a fatura vira um boleto para mandar para a empresa.
+          </p>
+        ) : (
+          <ul>
+            {faturas.map((fatura) => (
+              <li key={fatura.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 py-2.5">
+                <span className="min-w-0 flex-1 text-15 text-ink">
+                  {fatura.periodoDe.slice(0, 7)} · {fatura.totalParcelas} parcela(s)
+                </span>
+                <Money cents={fatura.valorCents} size="15" />
+                {fatura.status === "paga" ? (
+                  <Badge tone="ok">Paga</Badge>
+                ) : fatura.boletoEmitido ? (
+                  <Badge tone="neutral">Boleto emitido</Badge>
+                ) : null}
+                {fatura.status === "aberta" && !fatura.boletoEmitido ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={emitindoId === fatura.id}
+                    onClick={() => void emitirBoleto(fatura)}
+                  >
+                    Emitir boleto
+                  </Button>
+                ) : null}
+                {fatura.boletoUrl ? (
+                  <a
+                    href={fatura.boletoUrl}
+                    target="_blank"
+                    rel="noopener"
+                    className="min-h-9 text-13 font-medium text-accent underline underline-offset-2"
+                  >
+                    Ver boleto
+                  </a>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+        {erro ? (
+          <div className="mt-2">
+            <FieldError>{erro.mensagem}</FieldError>
+            {erro.correcao ? <p className="text-13 text-muted">{erro.correcao}</p> : null}
+          </div>
+        ) : null}
+      </CardBody>
+      <CardFooter>
+        <div className="flex w-full flex-wrap items-end gap-2">
+          <Field className="flex-1">
+            <Label>De</Label>
+            <Input type="date" value={de} onChange={(e) => setDe(e.target.value)} />
+          </Field>
+          <Field className="flex-1">
+            <Label>Até</Label>
+            <Input type="date" value={ate} onChange={(e) => setAte(e.target.value)} />
+          </Field>
+          <Button variant="secondary" size="sm" loading={consolidando} onClick={() => void consolidar()}>
+            Consolidar período
+          </Button>
+        </div>
+      </CardFooter>
     </Card>
   );
 }
