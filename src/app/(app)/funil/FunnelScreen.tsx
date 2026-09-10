@@ -1065,6 +1065,12 @@ function CardBody({
         {hideSignal ? null : <Signal deal={deal} />}
       </div>
 
+      {/* Meta Grupos (6b) — o chip do grupo, MESMA linha quieta do vendedor:
+          texto, não cor (nada ali se clica; a ficha é que leva ao grupo). */}
+      {deal.grupoTitle ? (
+        <p className="mt-1.5 truncate text-13 text-muted">{deal.grupoTitle}</p>
+      ) : null}
+
       {mostrarVendedor ? (
         <p className="mt-1.5 flex min-w-0 items-center gap-1.5 text-13 text-muted">
           {deal.agentName ? (

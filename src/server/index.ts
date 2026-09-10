@@ -398,3 +398,9 @@ export {
   type OfertaResumo,
   type BlocoDeOferta,
 } from './offers';
+export {
+  grupoDoNegocio,
+  parcelasDoGrupo,
+  resumoDosGrupos,
+  type ParcelasDoGrupo,
+} from './groups';

@@ -65,6 +65,7 @@ import {
 } from "@/components/app/ClientesDoNegocio";
 import { NovaPropostaSheet } from "@/components/app/NovaPropostaSheet";
 import { ResultadoViagemCard } from "@/components/app/ResultadoViagemCard";
+import { GrupoChip } from "@/components/app/GrupoChip";
 import { ChevronRightIcon, DownloadIcon, PlusIcon } from "@/components/app/icons";
 import { Rule } from "@/components/plates";
 import { TRAVELER_KIND_LABELS } from "../../clientes/shared";
@@ -495,6 +496,7 @@ export function NegocioScreen({ dealId }: { dealId: string }) {
           ) : null}
 
           <ViagemCard negocio={negocio} dealId={negocio.id} onPatched={patch} />
+          <GrupoChip dealId={negocio.id} />
           <ClientesCard negocio={negocio} onRecarregar={retry} />
           <PassageirosCard negocio={negocio} />
           <PropostaCard negocio={negocio} />

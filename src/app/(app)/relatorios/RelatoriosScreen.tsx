@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/Table";
 import { MoneyHubTabs } from "@/components/app/MoneyHubTabs";
 import { CentrosDeCusto } from "./CentrosDeCusto";
+import { GruposRelatorio } from "./GruposRelatorio";
 import { RankingClientes } from "./RankingClientes";
 import { ResultadoDasViagens } from "./ResultadoDasViagens";
 import {
@@ -63,7 +64,7 @@ import { COMISSAO_STATUS_LABEL, COMISSAO_STATUS_TONE } from "../vendas/shared";
    ========================================================================== */
 
 type Status = "loading" | "ready" | "error";
-type Aba = "resumo" | "clientes" | "centros";
+type Aba = "resumo" | "clientes" | "centros" | "grupos";
 
 export function RelatoriosScreen({
   periodoParam,
@@ -75,7 +76,9 @@ export function RelatoriosScreen({
   // Aba na URL; qualquer coisa que não seja uma aba conhecida é o resumo — link
   // sem `aba` e link torto caem no relatório de sempre.
   const aba: Aba =
-    abaParam === "clientes" || abaParam === "centros" ? abaParam : "resumo";
+    abaParam === "clientes" || abaParam === "centros" || abaParam === "grupos"
+      ? abaParam
+      : "resumo";
   const parsed = React.useMemo(() => parseParamPeriodo(periodoParam), [periodoParam]);
   const periodoInput: PeriodoInput | undefined = parsed.ok ? parsed.input : undefined;
   // A chave de efeito é o parâmetro cru: trocou a URL, relê.
@@ -132,6 +135,8 @@ export function RelatoriosScreen({
         <RankingClientes periodoParam={periodoParam} />
       ) : aba === "centros" ? (
         <CentrosDeCusto periodoParam={periodoParam} />
+      ) : aba === "grupos" ? (
+        <GruposRelatorio />
       ) : (
         <PainelResumo
           status={status}
@@ -522,6 +527,7 @@ const ABAS = [
     rotulo: "Centros de custo",
     href: "/relatorios?aba=centros",
   },
+  { valor: "grupos", rotulo: "Grupos", href: "/relatorios?aba=grupos" },
 ] as const;
 
 function SubAbas({ aba, periodoParam }: { aba: Aba; periodoParam?: string }) {

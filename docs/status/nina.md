@@ -1,5 +1,34 @@
 # Nina — status
 
+## 2026-09-11 (2ª) — Rodada 6b dos Grupos: a lente sobre o dinheiro (fechando a 6b que ficou na fila)
+
+O PO lembrou: a 6b tinha ficado para trás quando a Vitrine entrou. Fechada.
+
+**Chip do grupo no funil e na ficha** — `grupoDoNegocio` (leitura por
+`group_members.deal_id`); a listagem do funil ganhou leftJoin em
+`group_members`→`groups` e o card mostra o título do grupo numa linha quieta
+(mesma gramática da linha do vendedor — texto, nunca cor, nada ali se clica).
+Na ficha, o card "Grupo" com link para a ficha do grupo. Negócio fora de
+grupo não ganha linha nenhuma.
+
+**Parcelas da reserva** — `parcelasDoGrupo` LÊ as vendas/parcelas dos negócios
+membros (pago/a pagar; sem cronograma, o compromisso é o valor bruto menos o
+que entrou). O parcelamento continua sendo o de sempre na venda (5a: juros
+editáveis + etiqueta de comprador) — o grupo não grava dinheiro nenhum, é
+lente.
+
+**Sub-aba Grupos em Relatórios** (a quarta) — por grupo: lugares ocupados ×
+total, receita PREVISTA (soma das vendas dos membros) × RECEBIDA (parcelas
+pagas), margem por lugar. Sem período de propósito: a saída é o recorte dela.
+O nome do grupo é o único clique (→ ficha do grupo).
+
+**Números:** 3 testes novos (chip + null fora de grupo; lente acompanhando o
+cronograma com juros; resumo com margem 600−400−250−250=1.500/lugar);
+**699/699**; build limpo; lint zerado nos meus.
+
+**Fila:** 7b (interesse com Google — aguarda credencial OAuth do PO ou ok no
+fallback nome+WhatsApp) e 7c (origem da oferta nos Relatórios).
+
 ## 2026-09-11 — Rodada 7a da Vitrine: o catálogo público do agente
 
 Ok do PO no Fit 7 (`docs/FIT7_VITRINE.md`) virou rodada. O agente solo agora

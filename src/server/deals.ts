@@ -8,6 +8,8 @@ import {
   costCenters,
   dealContacts,
   deals,
+  groupMembers,
+  groups,
   member,
   pipelineStages,
   user,
@@ -363,6 +365,11 @@ export type NegocioDoFunil = {
    * (Fase 5: a coluna Perdidos está no quadro; o motivo é o que o card diz).
    */
   lostReason: string | null;
+  /**
+   * Meta Grupos (6b) — o grupo do qual este negócio é reserva (`group_members.deal_id`),
+   * para o chip no card do funil. `null` na viagem de sempre.
+   */
+  grupoTitle: string | null;
 };
 
 /**
@@ -406,12 +413,16 @@ export async function listarNegociosDoFunil(): Promise<ServiceResult<NegocioDoFu
             agentName: user.name,
             ultimaAtividadeEm: ultimaAtividadeSql(),
             lostReason: deals.lostReason,
+            grupoTitle: groups.title,
           })
           .from(deals)
           .innerJoin(contacts, eq(contacts.id, deals.contactId))
           .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
           // LEFT: negócio sem vendedor definido (dado antigo) continua no quadro.
           .leftJoin(user, eq(user.id, deals.agentId))
+          // Meta Grupos (6b): o chip do grupo no card — negócio fora de grupo não ganha linha.
+          .leftJoin(groupMembers, eq(groupMembers.dealId, deals.id))
+          .leftJoin(groups, eq(groups.id, groupMembers.groupId))
           // Fase 5 (pedido do PO): PERDIDOS voltam ao quadro — a coluna `is_lost`
           // (0016) agora aparece no fim do funil com os negócios dela, e a agente vê
           // a saída tanto quanto a entrada. Continua sendo SEMÂNTICA, não literal:
@@ -444,6 +455,7 @@ export async function listarNegociosDoFunil(): Promise<ServiceResult<NegocioDoFu
             agora,
           ),
           lostReason: linha.lostReason,
+          grupoTitle: linha.grupoTitle,
         }));
       },
       { scope: escopo },
@@ -862,6 +874,8 @@ export async function criarNegocio(
         diasParado: 0,
         // Negócio recém-criado: nunca nasce perdido (regra do criarNegocio).
         lostReason: null,
+        // E não nasce em grupo — entrar no grupo é outra ação (6a).
+        grupoTitle: null,
       };
     });
   });

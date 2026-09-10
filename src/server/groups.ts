@@ -2,7 +2,7 @@
 
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { contacts, deals, groupMembers, groups } from '@/db/schema';
+import { contacts, deals, groupMembers, groups, receivables, sales } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
@@ -495,4 +495,215 @@ async function obterGrupoInterno(
     margemPorLugarCents: margemPorLugar(grupo),
     members,
   } as GrupoDetalhe;
+}
+
+// ---------------------------------------------------------------------------
+// Fase 6b — o grupo como lente sobre o dinheiro que JÁ existe: o chip na
+// ficha/funil e as parcelas dos negócios membros. Zero escrita nova — o
+// dinheiro mora em `sales`/`receivables`; aqui é só leitura com a lente.
+// ---------------------------------------------------------------------------
+
+/** O grupo de um negócio (para o chip na ficha e no card do funil). */
+export async function grupoDoNegocio(
+  dealId: string,
+): Promise<ServiceResult<{ id: string; title: string; seats: number } | null>> {
+  return comoResultado(async () => {
+    const { tenantId } = await requireAuthContext();
+
+    return withTenant(tenantId, async (tx) => {
+      const [linha] = await tx
+        .select({
+          id: groups.id,
+          title: groups.title,
+          seats: groupMembers.seats,
+        })
+        .from(groupMembers)
+        .innerJoin(groups, eq(groups.id, groupMembers.groupId))
+        .where(and(eq(groupMembers.tenantId, tenantId), eq(groupMembers.dealId, dealId)))
+        .limit(1);
+      return linha ?? null;
+    });
+  });
+}
+
+export type ParcelasDoGrupo = {
+  members: Array<{
+    contactId: string;
+    contactName: string;
+    dealId: string | null;
+    dealTitle: string | null;
+    /** A reserva em dinheiro: soma das parcelas dos negócios membros (null sem negócio). */
+    totalCents: number | null;
+    pagoCents: number;
+    aPagarCents: number;
+    parcelas: number;
+  }>;
+  /** Sem negócio vinculado não há venda, logo não há parcela — a linha é a leitura honesta. */
+  semNegocio: Array<{ contactId: string; contactName: string; seats: number }>;
+};
+
+/**
+ * As parcelas DA RESERVA (Fase 6b): para cada membro com negócio, a soma das
+ * parcelas da(s) venda(s) daquele negócio — pago/a pagar. O parcelamento é o
+ * de sempre (o da venda, com juros editáveis e etiqueta de comprador da 5a);
+ * o grupo apenas LÊ. Venda sem parcelas geradas ainda conta o valor bruto
+ * como a pagar — reserva fechada é compromisso, mesmo sem cronograma.
+ */
+export async function parcelasDoGrupo(
+  groupId: string,
+): Promise<ServiceResult<ParcelasDoGrupo>> {
+  return comoResultado(async () => {
+    const { tenantId } = await requireAuthContext();
+
+    return withTenant(tenantId, async (tx) => {
+      const membros = await tx
+        .select({
+          contactId: groupMembers.contactId,
+          contactName: contacts.name,
+          dealId: groupMembers.dealId,
+          dealTitle: deals.title,
+          seats: groupMembers.seats,
+        })
+        .from(groupMembers)
+        .innerJoin(contacts, eq(contacts.id, groupMembers.contactId))
+        .leftJoin(deals, eq(deals.id, groupMembers.dealId))
+        .where(and(eq(groupMembers.tenantId, tenantId), eq(groupMembers.groupId, groupId)))
+        .orderBy(asc(groupMembers.createdAt));
+
+      const members: ParcelasDoGrupo['members'] = [];
+      const semNegocio: ParcelasDoGrupo['semNegocio'] = [];
+
+      for (const membro of membros) {
+        if (!membro.dealId) {
+          semNegocio.push({ contactId: membro.contactId, contactName: membro.contactName, seats: membro.seats });
+          continue;
+        }
+
+        const [venda] = await tx
+          .select({ id: sales.id, valorBrutoCents: sales.valorBrutoCents })
+          .from(sales)
+          .where(eq(sales.dealId, membro.dealId))
+          .orderBy(desc(sales.createdAt))
+          .limit(1);
+
+        if (!venda) {
+          // Negócio sem venda: a reserva existe, o dinheiro ainda não.
+          members.push({
+            contactId: membro.contactId,
+            contactName: membro.contactName,
+            dealId: membro.dealId,
+            dealTitle: membro.dealTitle,
+            totalCents: null,
+            pagoCents: 0,
+            aPagarCents: 0,
+            parcelas: 0,
+          });
+          continue;
+        }
+
+        const parcelas = await tx
+          .select({ status: receivables.status, valorCents: receivables.valorCents })
+          .from(receivables)
+          .where(eq(receivables.saleId, venda.id));
+
+        const vivas = parcelas.filter((p) => p.status !== 'cancelado');
+        const pagoCents = vivas.filter((p) => p.status === 'pago').reduce((t, p) => t + p.valorCents, 0);
+        const aPagarCents = vivas
+          .filter((p) => p.status === 'pendente' || p.status === 'atrasado')
+          .reduce((t, p) => t + p.valorCents, 0);
+
+        members.push({
+          contactId: membro.contactId,
+          contactName: membro.contactName,
+          dealId: membro.dealId,
+          dealTitle: membro.dealTitle,
+          totalCents: venda.valorBrutoCents,
+          pagoCents,
+          // Sem cronograma, o compromisso é o valor bruto menos o que entrou.
+          aPagarCents: vivas.length > 0 ? aPagarCents : Math.max(venda.valorBrutoCents - pagoCents, 0),
+          parcelas: vivas.length,
+        });
+      }
+
+      return { members, semNegocio };
+    });
+  });
+}
+
+/**
+ * O resumo de TODOS os grupos do tenant para a sub-aba de Relatórios (6b):
+ * lugares, receita prevista (vendas dos negócios membros) e realizada (parcelas
+ * pagas), margem por lugar do pacote. Mesma lente: nada aqui grava dinheiro.
+ */
+export async function resumoDosGrupos(): Promise<
+  ServiceResult<
+    Array<{
+      id: string;
+      title: string;
+      status: GrupoStatus;
+      totalSeats: number;
+      lugaresOcupados: number;
+      pricePerSeatCents: number;
+      margemPorLugarCents: number;
+      receitaPrevistaCents: number;
+      receitaRealizadaCents: number;
+      totalMembros: number;
+    }>
+  >
+> {
+  return comoResultado(async () => {
+    const { tenantId } = await requireAuthContext();
+
+    return withTenant(tenantId, async (tx) => {
+      const linhas = await tx
+        .select(COLUNAS_GRUPO)
+        .from(groups)
+        .where(eq(groups.tenantId, tenantId))
+        .orderBy(desc(groups.createdAt))
+        .limit(100);
+
+      return Promise.all(
+        linhas.map(async (grupo) => {
+          const membros = await tx
+            .select({ dealId: groupMembers.dealId, seats: groupMembers.seats })
+            .from(groupMembers)
+            .where(and(eq(groupMembers.tenantId, tenantId), eq(groupMembers.groupId, grupo.id)));
+
+          const dealIds = membros.map((m) => m.dealId).filter((id): id is string => id !== null);
+
+          let prevista = 0;
+          let realizada = 0;
+          for (const dealId of dealIds) {
+            const vendas = await tx
+              .select({ id: sales.id, valorBrutoCents: sales.valorBrutoCents })
+              .from(sales)
+              .where(eq(sales.dealId, dealId));
+            for (const venda of vendas) {
+              prevista += venda.valorBrutoCents;
+              const [pago] = await tx
+                .select({ total: sql<number>`coalesce(sum(${receivables.valorCents}), 0)::int` })
+                .from(receivables)
+                .where(and(eq(receivables.saleId, venda.id), eq(receivables.status, 'pago')));
+              realizada += pago?.total ?? 0;
+            }
+          }
+
+          const lugaresOcupados = membros.reduce((total, m) => total + m.seats, 0);
+
+          return {
+            id: grupo.id,
+            title: grupo.title,
+            status: grupo.status,
+            totalSeats: grupo.totalSeats,
+            lugaresOcupados,
+            pricePerSeatCents: grupo.pricePerSeatCents,
+            margemPorLugarCents: margemPorLugar(grupo),
+            receitaPrevistaCents: prevista,
+            receitaRealizadaCents: realizada,
+            totalMembros: membros.length,
+          };
+        }),
+      );
+    });
+  });
 }

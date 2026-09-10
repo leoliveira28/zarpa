@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { contacts, deals, tenants, user } from '@/db/schema'
+import { contacts, deals, proposals, sales, tenants, user } from '@/db/schema'
 import { withTenant } from '@/lib/tenant/withTenant'
 
 const authCtx = vi.hoisted(() => ({
@@ -32,6 +32,9 @@ const {
   atualizarGrupo,
   adicionarMembroAoGrupo,
   removerMembroDoGrupo,
+  grupoDoNegocio,
+  parcelasDoGrupo,
+  resumoDosGrupos,
 } = await import('@/server/groups')
 
 type Fixture = { tenantId: string; userId: string }
@@ -212,5 +215,164 @@ describe('grupos (rodada 6a)', () => {
 
     const detalhe = await obterGrupo(grupoAlheio.data.id)
     expect(detalhe.ok).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Rodada 6b — a lente sobre o dinheiro: chip do negócio, parcelas da reserva,
+// resumo de todos os grupos.
+// ---------------------------------------------------------------------------
+
+describe('grupos — rodada 6b (lente sobre o dinheiro)', () => {
+  it('chip: grupoDoNegocio devolve o grupo e os lugares; negócio fora de grupo é null', async () => {
+    const tenant = await seedTenant('chip')
+    entrarComo(tenant)
+
+    const grupo = await criarGrupo({ title: 'Chapada', totalSeats: 8 })
+    expect(grupo.ok).toBe(true)
+    if (!grupo.ok) return
+
+    const ids = await withTenant(tenant.tenantId, async (tx) => {
+      const [c] = await tx.insert(contacts).values({ tenantId: tenant.tenantId, name: 'Rui' }).returning({ id: contacts.id })
+      const [d] = await tx
+        .insert(deals)
+        .values({ tenantId: tenant.tenantId, contactId: c!.id, title: 'Serra — Rui' })
+        .returning({ id: deals.id })
+      return { contatoId: c!.id, dealId: d!.id }
+    })
+
+    await adicionarMembroAoGrupo({ groupId: grupo.data.id, contactId: ids.contatoId, dealId: ids.dealId, seats: 3 })
+
+    const chip = await grupoDoNegocio(ids.dealId)
+    expect(chip.ok).toBe(true)
+    if (!chip.ok) return
+    expect(chip.data?.title).toBe('Chapada')
+    expect(chip.data?.seats).toBe(3)
+
+    // Negócio de fora: null — a viagem de sempre não ganha chip.
+    const [fora] = await withTenant(tenant.tenantId, async (tx) => {
+      const [c] = await tx.insert(contacts).values({ tenantId: tenant.tenantId, name: 'Fora' }).returning({ id: contacts.id })
+      const [d] = await tx
+        .insert(deals)
+        .values({ tenantId: tenant.tenantId, contactId: c!.id, title: 'Viagem solta' })
+        .returning({ id: deals.id })
+      return [d]
+    })
+    const semGrupo = await grupoDoNegocio(fora!.id)
+    expect(semGrupo.ok).toBe(true)
+    if (!semGrupo.ok) return
+    expect(semGrupo.data).toBeNull()
+  })
+
+  it('parcelas da reserva: lê as vendas/parcelas dos negócios membros — e o grupo não grava dinheiro', async () => {
+    const tenant = await seedTenant('parcelas')
+    entrarComo(tenant)
+
+    const grupo = await criarGrupo({ title: 'Lençóis', totalSeats: 6, pricePerSeatCents: 800_000 })
+    expect(grupo.ok).toBe(true)
+    if (!grupo.ok) return
+
+    const ids = await withTenant(tenant.tenantId, async (tx) => {
+      const [c] = await tx.insert(contacts).values({ tenantId: tenant.tenantId, name: 'Lena' }).returning({ id: contacts.id })
+      const [d] = await tx
+        .insert(deals)
+        .values({ tenantId: tenant.tenantId, contactId: c!.id, title: 'Lençóis — Lena', stage: 'ganho' })
+        .returning({ id: deals.id })
+      const [p] = await tx
+        .insert(proposals)
+        .values({ tenantId: tenant.tenantId, dealId: d!.id, publicToken: randomUUID(), title: "Proposta Lena" })
+        .returning({ id: proposals.id })
+      const [v] = await tx
+        .insert(sales)
+        .values({ tenantId: tenant.tenantId, dealId: d!.id, proposalId: p!.id, valorBrutoCents: 800_000 })
+        .returning({ id: sales.id })
+      return { contatoId: c!.id, dealId: d!.id, vendaId: v!.id }
+    })
+
+    await adicionarMembroAoGrupo({ groupId: grupo.data.id, contactId: ids.contatoId, dealId: ids.dealId, seats: 2 })
+
+    // Sem parcelas geradas: o compromisso é o valor bruto inteiro em "a pagar".
+    const antes = await parcelasDoGrupo(grupo.data.id)
+    expect(antes.ok).toBe(true)
+    if (!antes.ok) return
+    expect(antes.data.members).toHaveLength(1)
+    expect(antes.data.members[0]?.totalCents).toBe(800_000)
+    expect(antes.data.members[0]?.aPagarCents).toBe(800_000)
+    expect(antes.data.members[0]?.pagoCents).toBe(0)
+
+    // Meia paga — a lente acompanha o cronograma da venda (com juros editáveis da 5a).
+    const { receivables } = await import('@/db/schema')
+    await withTenant(tenant.tenantId, async (tx) => {
+      await tx.insert(receivables).values([
+        { tenantId: tenant.tenantId, saleId: ids.vendaId, venceEm: '2027-01-10', valorCents: 400_000, status: 'pago', pagoEm: new Date() },
+        { tenantId: tenant.tenantId, saleId: ids.vendaId, venceEm: '2027-02-10', valorCents: 450_000, status: 'pendente' },
+      ])
+    })
+
+    const depois = await parcelasDoGrupo(grupo.data.id)
+    expect(depois.ok).toBe(true)
+    if (!depois.ok) return
+    expect(depois.data.members[0]?.pagoCents).toBe(400_000)
+    expect(depois.data.members[0]?.aPagarCents).toBe(450_000)
+    expect(depois.data.members[0]?.parcelas).toBe(2)
+  })
+
+  it('resumo dos grupos: lugares, prevista × realizada e margem por lugar', async () => {
+    const tenant = await seedTenant('resumo')
+    entrarComo(tenant)
+
+    const grupo = await criarGrupo({
+      title: 'Jericoacoara',
+      totalSeats: 12,
+      pricePerSeatCents: 600_000,
+      costPerSeatCents: 400_000,
+      commissionPerSeatCents: 25_000,
+      serviceFeePerSeatCents: 25_000,
+    })
+    expect(grupo.ok).toBe(true)
+    if (!grupo.ok) return
+
+    const ids = await withTenant(tenant.tenantId, async (tx) => {
+      const [c] = await tx.insert(contacts).values({ tenantId: tenant.tenantId, name: 'Nara' }).returning({ id: contacts.id })
+      const [d] = await tx
+        .insert(deals)
+        .values({ tenantId: tenant.tenantId, contactId: c!.id, title: 'Jerí — Nara', stage: 'ganho' })
+        .returning({ id: deals.id })
+      const [p] = await tx
+        .insert(proposals)
+        .values({ tenantId: tenant.tenantId, dealId: d!.id, publicToken: randomUUID(), title: "Proposta Nara" })
+        .returning({ id: proposals.id })
+      const [v] = await tx
+        .insert(sales)
+        .values({ tenantId: tenant.tenantId, dealId: d!.id, proposalId: p!.id, valorBrutoCents: 600_000 })
+        .returning({ id: sales.id })
+      return { contatoId: c!.id, dealId: d!.id, vendaId: v!.id }
+    })
+
+    await adicionarMembroAoGrupo({ groupId: grupo.data.id, contactId: ids.contatoId, dealId: ids.dealId, seats: 2 })
+    const { receivables } = await import('@/db/schema')
+    await withTenant(tenant.tenantId, async (tx) => {
+      await tx.insert(receivables).values({
+        tenantId: tenant.tenantId,
+        saleId: ids.vendaId,
+        venceEm: '2027-03-10',
+        valorCents: 300_000,
+        status: 'pago',
+        pagoEm: new Date(),
+      })
+    })
+
+    const resumo = await resumoDosGrupos()
+    expect(resumo.ok).toBe(true)
+    if (!resumo.ok) return
+    const linha = resumo.data.find((g) => g.id === grupo.data.id)
+    expect(linha).toBeDefined()
+    expect(linha?.lugaresOcupados).toBe(2)
+    expect(linha?.totalSeats).toBe(12)
+    // Margem por lugar: 600 − 400 − 250 − 250 = 150.000 (R$ 1.500).
+    expect(linha?.margemPorLugarCents).toBe(150_000)
+    expect(linha?.receitaPrevistaCents).toBe(600_000)
+    expect(linha?.receitaRealizadaCents).toBe(300_000)
+    expect(linha?.totalMembros).toBe(1)
   })
 })
