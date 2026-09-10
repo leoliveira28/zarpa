@@ -1,6 +1,6 @@
 import { and, asc, eq, gte, inArray, lt } from 'drizzle-orm';
 import { z } from 'zod';
-import { contacts, deals, receivables, sales, travelers } from '@/db/schema';
+import { contacts, costCenters, deals, receivables, sales, travelers } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
@@ -148,10 +148,12 @@ export async function csvVendasDoPeriodo(
         cliente: contacts.name,
         destino: deals.destination,
         titulo: deals.title,
+        centroDeCusto: costCenters.label,
       })
       .from(sales)
       .innerJoin(deals, eq(deals.id, sales.dealId))
       .innerJoin(contacts, eq(contacts.id, deals.contactId))
+      .leftJoin(costCenters, eq(costCenters.id, sales.costCenterId))
       .where(and(gte(sales.createdAt, periodo.inicio), lt(sales.createdAt, periodo.fimExclusivo)))
       .orderBy(asc(sales.createdAt));
 
@@ -191,7 +193,7 @@ export async function csvVendasDoPeriodo(
         ? `vendas-${periodo.de}.csv`
         : `vendas-${periodo.de}_a_${periodo.ate}.csv`,
       [
-        ['Data', 'Cliente', 'Viagem', 'Valor', 'Comissão', 'Status da comissão', 'Parcelas'],
+        ['Data', 'Cliente', 'Viagem', 'Valor', 'Comissão', 'Status da comissão', 'Parcelas', 'Centro de custo'],
         ...linhas.map((l) => {
           const parcela = resumoParcelas.get(l.vendaId);
           return [
@@ -202,6 +204,7 @@ export async function csvVendasDoPeriodo(
             centavosParaReaisCsv(l.comissaoPrevistaCents),
             STATUS_ROTULO[l.comissaoStatus],
             parcela ? `${parcela.pagas}/${parcela.total} pagas` : '—',
+            l.centroDeCusto ?? '—',
           ];
         }),
       ],

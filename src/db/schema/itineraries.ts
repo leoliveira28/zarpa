@@ -14,8 +14,9 @@ import { proposals } from './proposals';
  * `SECURITY DEFINER` `public.roteiro_publica(token)` (`drizzle/0013_roteiro_publico.sql`).
  *
  * A regra central: **o roteiro é FOTOGRAFIA do fechado.** Editar a proposta depois NÃO
- * muda o roteiro já gerado — `blocks_snapshot`/`brand_snapshot`/`client_name`/datas são
- * copiados no momento do `gerarRoteiro` (`src/server/itineraries.ts`), não referenciados.
+ * muda o roteiro já gerado —
+ * `blocks_snapshot`/`brand_snapshot`/`client_name`/`clientes`/datas são copiados no
+ * momento do `gerarRoteiro` (`src/server/itineraries.ts`), não referenciados.
  * Por isso a leitura pública NÃO faz join com `proposals`/`proposal_blocks`/`contacts`/
  * `tenants`: tudo sai das colunas desta tabela, e o que não está aqui não vaza.
  *
@@ -67,6 +68,18 @@ export const itineraries = pgTable(
      * FORA de propósito (regra 4 do CLAUDE.md, scanner reprova qualquer um deles).
      */
     clientName: text('client_name').notNull(),
+    /**
+     * Lista de NOMES de TODOS os clientes do negócio, congelada na geração (0021) —
+     * complemento do `client_name` singular desde que um negócio passou a ter vários
+     * clientes (0020): a mesma viagem do casal não pode dizer "Preparado para Ana" na
+     * proposta e "Preparado para Ana" no roteiro. MESMA POLÍTICA da proposta: titular
+     * primeiro (`principal DESC`), depois a ordem de entrada (`created_at ASC`). É
+     * FOTOGRAFIA — mudar a lista do negócio depois de gerar não muda o roteiro já
+     * entregue (mesmo racional do `client_name`). Só nomes: a explicitação acontece na
+     * geração (`gerarRoteiro` copia `c.name`), então telefone/e-mail/documento de
+     * principal ou secundário não têm caminho para cá nem para o payload público.
+     */
+    clientes: jsonb('clientes').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
 
     /** Datas da viagem, fotografadas do negócio no momento da geração. */
     departureOn: date('departure_on'),
@@ -102,6 +115,7 @@ export const itineraries = pgTable(
       sql`${t.returnOn} is null or ${t.departureOn} is null or ${t.returnOn} >= ${t.departureOn}`,
     ),
     check('itineraries_blocks_is_array_check', sql`jsonb_typeof(${t.blocksSnapshot}) = 'array'`),
+    check('itineraries_clientes_is_array_check', sql`jsonb_typeof(${t.clientes}) = 'array'`),
   ],
 );
 

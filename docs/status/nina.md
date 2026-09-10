@@ -1,5 +1,66 @@
 # Nina — status
 
+## 2026-09-10 (tarde) — Fase 4a: PJ no contato + centro de custo
+
+O ok do PO no plano (`docs/FASE4_PJ.md`) virou código na mesma sessão. Duas
+peças que viajam juntas e não se tocam: **empresa é um contato PJ** e
+**centro de custo é a etiqueta do setor que paga**.
+
+**PJ — zero tabela nova.** `contacts.person_type` (`'fisica'` default |
+`'juridica'`), CNPJ na MESMA coluna `document_encrypted` e no MESMO índice
+cego — `blindIndexFor` normaliza por dígitos, então 14 deduplicam pela mesma
+máquina que 11 (provado em teste: `04.252.011/0001-10` e `04252011000110`
+colidem no CONFLITO). A validação virou `validarDocumentoPorTipo`
+(`cpfValido` × `cnpjValido`, `src/server/normalize.ts`); no PATCH de
+documento, o tipo efetivo é lido de dentro do `withTenant` — ler fora seria
+ignorar o FORCE RLS. A busca da ficha aceita documento inteiro de 11 OU 14
+dígitos (`pareceDocumento`). `.optional()` no zod de propósito: `.default()`
+tornaria o campo obrigatório no tipo de saída e quebraria todo chamador que
+cria contato sem saber do PJ.
+
+**UI do PJ:** seletor "Tipo de cliente" no card Dados da ficha (mesmo
+contrato do VendedorField: commit no change, retorno reconcilia, erro do
+servidor devolve o select) — o TIPO governa o resto: "Razão social" no lugar
+do "Nome", "CNPJ" com placeholder próprio, nascimento nem nasce para PJ.
+Criar/atualizar contato valida na entrada com o campo culpado; a importação
+de planilha AINDA é PF-only (furo no handoff).
+
+**Centro de custo — molde `pipeline_stages` à risca.** Tabela `cost_centers`
+(label, position, archived_at; rótulo único ENTRE ATIVOS, case-insensitive),
+serviço espelhando `pipelineStages.ts` (gate de dunning, arquivar/reabrir —
+DELETE não existe; FK RESTRICT em deals e sales é a rede por baixo). É
+atributo do deal — **atribuir NÃO é dono-only** (classificar a viagem num
+setor é trabalho de quem vende; reatribuir vendedor é que é de dono) — e
+FOTOGRAFADO na venda na conversão, mesma mecânica do `agent_id`. Nullable
+não é tolerância: viagem PF não tem centro de custo e nunca terá.
+
+**Superfícies:** select "Centro de custo" no card Viagem da ficha (uma
+leitura no mount; lista vazia não bloqueia a ficha — atribuir é opcional),
+gestão da lista em `/configuracoes` (criar + arquivar com desfazer de 8s que
+REABRE de verdade), 3ª sub-aba em Relatórios ("Centros de custo", o Map do
+ranking com outra chave; "Sem centro de custo" é linha de verdade e mora por
+ÚLTIMO — residual, não categoria), e coluna "Centro de custo" no CSV de
+vendas (o contador recebe a classificação; `—` quando não tem).
+
+**Migration 0022** (`drizzle/0022_pj_e_centro_de_custo.sql`, aplicada no dev
+— 32 tabelas, RLS íntegro): RLS ENABLE+FORCE + policy simétrica na tabela
+nova NA MESMA migration, `person_type` com CHECK e índice parcial PJ,
+verificação final que FALLA ALTO se algum contato existente nascesse
+jurídico. Backfill: nenhum — não há verdade antiga a preservar.
+
+**Números:** `tsc --noEmit` limpo (regra da casa: testes também — o build
+pegou 3 no arquivo de teste novo depois de eu achar que tinha acabado).
+`npm test`: **36 arquivos / 654 testes** (11 novos no
+`tests/contacts/pj-e-centros.test.ts`); 1 teste existente atualizado
+(`exportacoes.test.ts` — o cabeçalho do CSV mudou de contrato, de propósito).
+`npm run build` limpo; eslint zerado nos 5 arquivos novos. A fotografia na
+conversão não tem teste dedicado — o caminho da conversão é coberto pela
+suíte de `tests/sales`, que passou com a coluna nova no INSERT.
+
+**Furos para o rafa:** `docs/handoffs/nina-para-rafa.md` (importação PF-only,
+flip de tipo não retrovalida documento armazenado, `obterDocumentoDoContato`
+devolve `cpf` para CNPJ também).
+
 ## 2026-09-10 (2ª) — O símbolo da marca nas superfícies públicas (pedido do PO)
 
 A Vela de Papel entrou na única superfície que ela tem a direito de ocupar

@@ -50,6 +50,42 @@ export function formatarCpf(value: string): string {
 }
 
 /**
+ * Validação de CNPJ pelos dígitos verificadores — o mesmo módulo 11 do CPF, com pesos
+ * diferentes e Dois dígitos. Aceita o formato que vier (`04.252.011/0001-10`,
+ * `04252011000110`): quem normaliza é `apenasDigitos`.
+ *
+ * Mesma justificativa do CPF: recusar na entrada é recusar com motivo; aceitar CNPJ
+ * inválido é competir por unicidade no índice cego com uma empresa que não existe.
+ */
+export function cnpjValido(value: string): boolean {
+  const digits = apenasDigitos(value);
+  if (digits.length !== 14) return false;
+  // CNPJ com todos os dígitos iguais passa no módulo 11 e não é de ninguém.
+  if (/^(\d)\1{13}$/.test(digits)) return false;
+
+  // Pesos da receita: a primeira roda usa 5..2 + 9..2; a segunda, 6..2 + 9..2.
+  for (const [tamanho, pesos] of [
+    [12, [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]],
+    [13, [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]],
+  ] as const) {
+    let soma = 0;
+    for (let i = 0; i < tamanho; i += 1) {
+      soma += Number(digits[i]) * pesos[i]!;
+    }
+    const resto = soma % 11;
+    const digitoEsperado = resto < 2 ? 0 : 11 - resto;
+    if (digitoEsperado !== Number(digits[tamanho])) return false;
+  }
+  return true;
+}
+
+export function formatarCnpj(value: string): string {
+  const d = apenasDigitos(value);
+  if (d.length !== 14) return value;
+  return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+}
+
+/**
  * Telefone brasileiro em forma comparável: só dígitos, sem o `55` do país e sem o zero de
  * operadora. `(11) 98888-7777`, `+55 11 98888 7777` e `011988887777` viram `11988887777`.
  */

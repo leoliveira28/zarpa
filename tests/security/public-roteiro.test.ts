@@ -131,13 +131,15 @@ describe('contrato do roteiro público', () => {
     ).toBe(true)
   })
 
-  it('token válido devolve EXATAMENTE título/cliente/datas/blocos/marca — nada além disso', async () => {
+  it('token válido devolve EXATAMENTE título/clientes/cliente/datas/blocos/marca — nada além disso', async () => {
     const payload = await payloadPublico()
 
-    // Whitelist de chaves em profundidade — não "não vi nada estranho".
+    // Whitelist de chaves em profundidade — não "não vi nada estranho". 0021: a roteiro
+    // ganha `clientes` (lista de NOMES congelada na geração, mesma política da proposta
+    // pública de 0020 — mudança da Rafa, declarada em docs/status/rafa.md).
     expect(Object.keys(payload).sort()).toEqual(['blocks', 'brand', 'roteiro'])
     expect(Object.keys(payload.roteiro).sort()).toEqual(
-      ['clientName', 'createdAt', 'currency', 'departureOn', 'returnOn', 'title'],
+      ['clientName', 'clientes', 'createdAt', 'currency', 'departureOn', 'returnOn', 'title'],
     )
     expect(Object.keys(payload.brand).sort()).toEqual(
       ['instagram', 'logoUrl', 'name', 'primaryColor', 'secondaryColor', 'whatsappLink'],

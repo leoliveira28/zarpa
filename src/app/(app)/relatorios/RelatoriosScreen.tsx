@@ -26,6 +26,7 @@ import {
   TR,
 } from "@/components/ui/Table";
 import { MoneyHubTabs } from "@/components/app/MoneyHubTabs";
+import { CentrosDeCusto } from "./CentrosDeCusto";
 import { RankingClientes } from "./RankingClientes";
 import { ResultadoDasViagens } from "./ResultadoDasViagens";
 import {
@@ -62,7 +63,7 @@ import { COMISSAO_STATUS_LABEL, COMISSAO_STATUS_TONE } from "../vendas/shared";
    ========================================================================== */
 
 type Status = "loading" | "ready" | "error";
-type Aba = "resumo" | "clientes";
+type Aba = "resumo" | "clientes" | "centros";
 
 export function RelatoriosScreen({
   periodoParam,
@@ -71,9 +72,10 @@ export function RelatoriosScreen({
   periodoParam?: string;
   abaParam?: string;
 }) {
-  // Aba na URL; qualquer coisa que não seja "clientes" é o resumo — link
+  // Aba na URL; qualquer coisa que não seja uma aba conhecida é o resumo — link
   // sem `aba` e link torto caem no relatório de sempre.
-  const aba: Aba = abaParam === "clientes" ? "clientes" : "resumo";
+  const aba: Aba =
+    abaParam === "clientes" || abaParam === "centros" ? abaParam : "resumo";
   const parsed = React.useMemo(() => parseParamPeriodo(periodoParam), [periodoParam]);
   const periodoInput: PeriodoInput | undefined = parsed.ok ? parsed.input : undefined;
   // A chave de efeito é o parâmetro cru: trocou a URL, relê.
@@ -128,6 +130,8 @@ export function RelatoriosScreen({
 
       {aba === "clientes" ? (
         <RankingClientes periodoParam={periodoParam} />
+      ) : aba === "centros" ? (
+        <CentrosDeCusto periodoParam={periodoParam} />
       ) : (
         <PainelResumo
           status={status}
@@ -513,6 +517,11 @@ function Tile({
 const ABAS = [
   { valor: "resumo", rotulo: "Resumo", href: "/relatorios" },
   { valor: "clientes", rotulo: "Clientes", href: "/relatorios?aba=clientes" },
+  {
+    valor: "centros",
+    rotulo: "Centros de custo",
+    href: "/relatorios?aba=centros",
+  },
 ] as const;
 
 function SubAbas({ aba, periodoParam }: { aba: Aba; periodoParam?: string }) {

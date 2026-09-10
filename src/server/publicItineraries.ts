@@ -27,8 +27,15 @@ import type { BlocoDoRoteiro } from './itineraries';
 
 export type RoteiroPublicoMeta = {
   title: string;
-  /** Nome do cliente, congelado na geração — o ÚNICO dado de contato que sai público. */
+  /** Nome do cliente TITULAR, congelado na geração — mantido por compatibilidade. */
   clientName: string;
+  /**
+   * Lista de nomes de TODOS os clientes, congelada na geração (0021) — a mesma política
+   * da proposta pública (0020): titular primeiro. O `/r/` mostra "Preparado para Ana e
+   * Carlos" como a `/p/` já mostra. Só nomes, nunca telefone/e-mail/documento (a fonte
+   * é a coluna `itineraries.clientes`, que só contém nomes por construção).
+   */
+  clientes: string[];
   currency: string;
   /** `AAAA-MM-DD` (string JSON), ou `null`. */
   departureOn: string | null;

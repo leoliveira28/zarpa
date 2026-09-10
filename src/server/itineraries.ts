@@ -1,10 +1,11 @@
 'use server';
 
 import { randomBytes } from 'node:crypto';
-import { and, desc, eq, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   contacts,
+  dealContacts,
   deals,
   itineraries,
   pipelineStages,
@@ -428,6 +429,18 @@ export async function gerarRoteiro(dealId: string): Promise<ServiceResult<Roteir
         .where(eq(tenants.id, tenantId))
         .limit(1);
 
+      // Nomes de TODOS os clientes do negócio, congelados na MESMA política da proposta
+      // (0020): titular primeiro, depois a ordem em que cada cliente entrou. É
+      // FOTOGRAFIA — adicionar/remover cliente do negócio depois de gerar não muda o
+      // roteiro que já foi pelo WhatsApp (mesmo racional do `clientName` ao lado). Só
+      // nomes: a lista explícita da query é a proteção de coluna (0021).
+      const linhasClientes = await tx
+        .select({ nome: contacts.name })
+        .from(dealContacts)
+        .innerJoin(contacts, eq(contacts.id, dealContacts.contactId))
+        .where(eq(dealContacts.dealId, dealId))
+        .orderBy(desc(dealContacts.principal), asc(dealContacts.createdAt));
+
       const nova: NewItinerary = {
         tenantId,
         dealId,
@@ -436,6 +449,7 @@ export async function gerarRoteiro(dealId: string): Promise<ServiceResult<Roteir
         title: proposta.title,
         currency: proposta.currency,
         clientName: negocio.contactName,
+        clientes: linhasClientes.map((linha) => linha.nome),
         departureOn: negocio.departureOn,
         returnOn: negocio.returnOn,
         blocksSnapshot: blocos,

@@ -49,6 +49,7 @@ const {
   adicionarClienteAoNegocio,
   removerClienteDoNegocio,
   criarNegocio,
+  listarClientesDoNegocio,
   listarNegociosDoFunil,
   obterNegocio,
 } = await import('@/server/deals')
@@ -397,5 +398,58 @@ describe('isolamento — negócio/contato de outro tenant não são alcançávei
     const listaA = await lerLista(A.tenantId, dealA)
     expect(listaA).toHaveLength(1)
     expect(listaA[0]).toMatchObject({ contactId: anaA, principal: true })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5) Leitura leve (0021) — listarClientesDoNegocio
+// ---------------------------------------------------------------------------
+
+describe('listarClientesDoNegocio — a lista sem carregar o negócio inteiro', () => {
+  it('devolve a MESMA lista da ficha, na MESMA ordem, sem gate de dunning', async () => {
+    const fixture = await seedTenant('leve')
+    criados.push(fixture.tenantId)
+    const ana = await seedContato(fixture.tenantId, { name: 'Ana QA', phone: '+5511999990001' })
+    const carlos = await seedContato(fixture.tenantId, { name: 'Carlos QA', whatsapp: '+5511999990099' })
+    const beatriz = await seedContato(fixture.tenantId, { name: 'Beatriz QA' })
+    const dealId = await seedNegocio(fixture, ana)
+    entrarComo(fixture)
+    await adicionarClienteAoNegocio({ negocioId: dealId, contatoId: carlos })
+    await adicionarClienteAoNegocio({ negocioId: dealId, contatoId: beatriz })
+
+    // Conta bloqueada NÃO recusa leitura — a régua do gate é só para escrita.
+    await plantarAssinatura(fixture.tenantId, 'past_due')
+
+    const lista = await listarClientesDoNegocio(dealId)
+    expect(lista.ok, !lista.ok ? lista.mensagem : '').toBe(true)
+    if (!lista.ok) return
+
+    expect(lista.data.dealId).toBe(dealId)
+    expect(lista.data.clientes.map((c) => c.contactId)).toEqual([ana, carlos, beatriz])
+    expect(lista.data.clientes.map((c) => c.principal)).toEqual([true, false, false])
+    // Telefone cru, mesma regra da ficha.
+    expect(lista.data.clientes[1]?.telefone).toBe('+5511999990099')
+  })
+
+  it('negócio de outro tenant → NAO_ENCONTRADO; id malformado → DADOS_INVALIDOS', async () => {
+    const A = await seedTenant('leve-a')
+    const B = await seedTenant('leve-b')
+    criados.push(A.tenantId, B.tenantId)
+    const anaA = await seedContato(A.tenantId, { name: 'Ana de A' })
+    const dealA = await seedNegocio(A, anaA)
+
+    entrarComo(B)
+    const alheio = await listarClientesDoNegocio(dealA)
+    expect(alheio.ok).toBe(false)
+    if (!alheio.ok) {
+      expect(alheio.code).toBe('NAO_ENCONTRADO')
+      // A mensagem não confirma existência de recurso fora da conta.
+      expect(alheio.mensagem).not.toContain(dealA)
+    }
+
+    entrarComo(A)
+    const malformado = await listarClientesDoNegocio('nao-e-uuid')
+    expect(malformado.ok).toBe(false)
+    if (!malformado.ok) expect(malformado.code).toBe('DADOS_INVALIDOS')
   })
 })

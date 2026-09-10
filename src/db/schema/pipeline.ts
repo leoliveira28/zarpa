@@ -19,6 +19,7 @@ import { tenants } from './tenants';
 import { contacts } from './people';
 import { user } from './auth';
 import { proposals } from './proposals';
+import { costCenters } from './costCenters';
 
 /**
  * O funil: `deals` (oportunidades), `tasks` (o follow-up que o agente esquece e perde a
@@ -48,6 +49,14 @@ export const deals = pgTable(
      * §4 do doc — o filtro mora nas queries, nunca em policy.
      */
     agentId: text('agent_id').references(() => user.id, { onDelete: 'restrict' }),
+    /**
+     * Centro de custo (Fase 4a, `drizzle/0022_pj_e_centro_de_custo.sql`) — atributo do
+     * deal, nullable: viagem PF não tem centro de custo e nunca terá. É FOTOGRAFADO na
+     * venda na conversão (`sales.cost_center_id`), mesma mecânica do `agent_id` acima.
+     */
+    costCenterId: uuid('cost_center_id').references(() => costCenters.id, {
+      onDelete: 'restrict',
+    }),
     title: text('title').notNull(),
     destination: text('destination'),
     stage: text('stage', {
@@ -100,6 +109,8 @@ export const deals = pgTable(
     // FK (RESTRICT varre por aqui) e a listagem por vendedor (quebra do §7, escopo own).
     index('deals_agent_id_idx').on(t.agentId),
     index('deals_tenant_agent_idx').on(t.tenantId, t.agentId),
+    // FK (RESTRICT) e o relatório "Centros de custo" (Fase 4a).
+    index('deals_cost_center_id_idx').on(t.costCenterId),
     check(
       'deals_stage_check',
       sql`${t.stage} in ('novo', 'cotando', 'proposta_enviada', 'negociando', 'ganho', 'perdido')`,

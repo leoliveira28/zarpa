@@ -13,13 +13,15 @@
  *     fechado por padrão sem contexto, e as invariantes de BANCO da composição
  *     (PK composta recusa duplicado; partial unique recusa segundo principal).
  *
- *  2. O vazamento na pública (`public.proposta_publica`, emendada na 0020): fixture de
- *     CASAL com canários de telefone/e-mail plantados nos DOIS contatos, e a resposta
- *     varrida inteira — a chave nova `clientes` só pode carregar NOMES, principal
- *     primeiro. Prova também que o `set_config('app.tenant_id', ..., true)` que a função
- *     faz por dentro NÃO vaza para a sessão do chamador (local à transação de um único
- *     statement): depois de chamar a função, a sessão ainda vê ZERO linhas de
- *     `deal_contacts`.
+ *  2. O vazamento nas públicas (`proposta_publica` emendada na 0020, `roteiro_publica`
+ *     emendada na 0021): fixture de CASAL com canários de telefone/e-mail plantados nos
+ *     DOIS contatos, e a resposta varrida inteira — a chave nova `clientes` só pode
+ *     carregar NOMES, principal primeiro. No roteiro, prova também a FOTOGRAFIA: cliente
+ *     adicionado à lista DEPOIS de o roteiro ter sido gerado não muda o payload (a
+ *     função lê a coluna congelada, nunca join com `deal_contacts`). E prova que o
+ *     `set_config('app.tenant_id', ..., true)` que a proposta pública faz por dentro NÃO
+ *     vaza para a sessão do chamador (local à transação de um único statement): depois de
+ *     chamar a função, a sessão ainda vê ZERO linhas de `deal_contacts`.
  *
  * O que NÃO está aqui: o caminho das actions (`tests/deals/clientes.test.ts`) e a
  * varredura genérica de rotinas públicas (`public-proposal.test.ts` do Téo, que continua
@@ -246,22 +248,32 @@ describe('invariantes no banco — duplicado e segundo principal recusados pelo 
 // 4) A pública — a lista de clientes é SÓ nome, e o contexto de tenant morre no statement
 // ---------------------------------------------------------------------------
 
-/** Token conhecido da proposta-casal fixture deste arquivo (mesma razão do token fixo
+/** Tokens conhecidos das fixtures-casal deste arquivo (mesma razão do token fixo
  * de `public-proposal.test.ts`: a sonda precisa exercitar UMA linha de verdade). */
 const FIXTURE_CASAL_TOKEN = 'rafa-fixture-casal-002000000000000000000'
+const FIXTURE_CASAL_TOKEN_ROTEIRO = 'rafa-fixture-roteiro-0021000000000000000'
 
 let casalPronto = false
 
+/** Identidade da fixture-casal, capturada na sementeira — os testes precisam do tenant
+ * para abrir contexto (`withTenant`) e do deal para mexer na lista; achar por slug seria
+ * frágil se sobrassem tenants de rodadas antigas cuja limpeza falhou. */
+let casalTenantId = ''
+let casalDealId = ''
+
 /**
- * Proposta ENVIADA de um casal, com canários de telefone/e-mail plantados nos DOIS
- * contatos (principal e secundário). Se a função emendada começar a devolver qualquer
- * coluna além de `contacts.name`, o scanner pega — não um assert campo a campo que só
- * acha o que eu já imaginei.
+ * Proposta ENVIADA e ROTEIRO gerado de um casal, com canários de telefone/e-mail
+ * plantados nos DOIS contatos (principal e secundário). Se a função emendada começar a
+ * devolver qualquer coluna além de `contacts.name`, o scanner pega — não um assert
+ * campo a campo que só acha o que eu já imaginei. O roteiro congela `clientes` do MESMO
+ * jeito que o `gerarRoteiro` real congela (agregação de `deal_contacts`, titular
+ * primeiro) — a fixture exercita a coluna de snapshot, não um join.
  */
 async function seedCasalComProposta(): Promise<void> {
   if (casalPronto) return
 
   const tenantId = randomUUID()
+  let dealId = ''
   await withTenant(sql, tenantId, async (tx) => {
     await tx.unsafe(
       `insert into tenants (id, name, slug) values ($1, $2, $3) on conflict do nothing`,
@@ -290,6 +302,7 @@ async function seedCasalComProposta(): Promise<void> {
       `insert into deals (tenant_id, contact_id, title, stage) values ($1, $2, 'Lua de mel fixture', 'novo') returning id`,
       [tenantId, ana[0]!.id],
     )
+    dealId = deal[0]!.id
     // Principal primeiro; o secundário entra DEPOIS (created_at explícito para a ordem
     // da lista não depender do relógio).
     await tx.unsafe(
@@ -302,13 +315,25 @@ async function seedCasalComProposta(): Promise<void> {
        values ($1, $2, $3, false, now() - interval '1 day')`,
       [tenantId, deal[0]!.id, carlos[0]!.id],
     )
-    await tx.unsafe(
+    const proposta = await tx.unsafe<{ id: string }[]>(
       `insert into proposals (tenant_id, deal_id, public_token, title, status, sent_at, brand_snapshot)
-       values ($1, $2, $3, 'Proposta do casal fixture', 'sent', now(), '{}'::jsonb)`,
+       values ($1, $2, $3, 'Proposta do casal fixture', 'sent', now(), '{}'::jsonb) returning id`,
       [tenantId, deal[0]!.id, FIXTURE_CASAL_TOKEN],
+    )
+    // 0021: o roteiro do casal, com `clientes` CONGELADA da mesma fonte e na mesma
+    // ordem do `gerarRoteiro` real — agregação explícita de `deal_contacts`, só nome.
+    await tx.unsafe(
+      `insert into itineraries (tenant_id, deal_id, proposal_id, public_token, title, client_name, clientes)
+       values ($1, $2, $3, $4, 'Roteiro do casal fixture', 'Ana Fixture do Casal',
+               (select coalesce(jsonb_agg(c.name order by dc.principal desc, dc.created_at asc), '[]'::jsonb)
+                from deal_contacts dc join contacts c on c.id = dc.contact_id
+                where dc.deal_id = $2))`,
+      [tenantId, deal[0]!.id, proposta[0]!.id, FIXTURE_CASAL_TOKEN_ROTEIRO],
     )
   })
 
+  casalTenantId = tenantId
+  casalDealId = dealId
   casalPronto = true
 }
 
@@ -356,5 +381,75 @@ describe('proposta pública — a lista de clientes carrega NOMES e nada mais', 
     } finally {
       sessao.release()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5) 0021 — o roteiro público: a lista congelada é NOME e é FOTOGRAFIA
+// ---------------------------------------------------------------------------
+
+type PayloadComRoteiro = { payload: { roteiro?: { clientes?: unknown } } }
+
+describe('roteiro público — a lista de clientes sai da coluna congelada, não de um join', () => {
+  it('payload.roteiro.clientes = [principal, secundário] na ordem, sem canário em lugar nenhum', async () => {
+    await seedCasalComProposta()
+
+    // Sem contexto nenhum: é o chamador anônimo real da `/r/[token]`.
+    const rows = await sql<PayloadComRoteiro[]>`
+      select payload from public.roteiro_publica(${FIXTURE_CASAL_TOKEN_ROTEIRO})
+    `
+    const payload = rows[0]?.payload
+    expect(payload, 'a fixture do roteiro não resolveu — o teste ficou vago').toBeDefined()
+
+    // Mesma política da proposta (0020): titular primeiro, depois a ordem de entrada.
+    expect(payload!.roteiro!.clientes).toEqual(['Ana Fixture do Casal', 'Carlos Fixture do Casal'])
+
+    // Varredura inteira do payload — nome de campo proibido, padrão no valor e canário
+    // plantado nos DOIS contatos.
+    const leaks = scanPayload(payload, CANARIES)
+    expect(leaks, `vazou:\n${formatLeaks(leaks)}`).toEqual([])
+
+    const texto = JSON.stringify(rows)
+    expect(texto).not.toContain(CANARIES.telefone)
+    expect(texto).not.toContain(CANARIES.email)
+  })
+
+  it('cliente adicionado DEPOIS de gerar não aparece — o roteiro é fotografia, não vista', async () => {
+    await seedCasalComProposta()
+
+    // Um terceiro cliente entra na lista DO NEGÓCIO depois da geração — com canários
+    // próprios, para o caso de a função começar a fazer join com `deal_contacts`.
+    const terceiroEmail = `beatriz.${CANARIES.email}`
+    const tenantId = casalTenantId
+    const dealId = casalDealId
+    expect(tenantId, 'fixture do casal não rodou').toBeTruthy()
+
+    await withTenant(sql, tenantId, async (tx) => {
+      const beatriz = await tx.unsafe<{ id: string }[]>(
+        `insert into contacts (tenant_id, name, email, phone, whatsapp)
+         values ($1, 'Beatriz Fixture do Casal', $2, $3, $3) returning id`,
+        [tenantId, terceiroEmail, CANARIES.telefone],
+      )
+      await tx.unsafe(
+        `insert into deal_contacts (tenant_id, deal_id, contact_id, principal, created_at)
+         values ($1, $2, $3, false, now())`,
+        [tenantId, dealId, beatriz[0]!.id],
+      )
+    })
+
+    // O payload do roteiro continua com DOIS nomes — a leitura pública lê
+    // `itineraries.clientes` (congelada na geração), NUNCA `deal_contacts`.
+    const rows = await sql<PayloadComRoteiro[]>`
+      select payload from public.roteiro_publica(${FIXTURE_CASAL_TOKEN_ROTEIRO})
+    `
+    expect(rows[0]!.payload.roteiro!.clientes).toEqual([
+      'Ana Fixture do Casal',
+      'Carlos Fixture do Casal',
+    ])
+
+    const leaks = scanPayload(rows[0]!.payload, CANARIES)
+    expect(leaks, `vazou:\n${formatLeaks(leaks)}`).toEqual([])
+    expect(JSON.stringify(rows)).not.toContain('Beatriz Fixture do Casal')
+    expect(JSON.stringify(rows)).not.toContain(terceiroEmail)
   })
 })

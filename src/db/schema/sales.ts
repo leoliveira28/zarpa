@@ -16,6 +16,7 @@ import { tenants } from './tenants';
 import { deals } from './pipeline';
 import { user } from './auth';
 import { proposals, proposalOptions } from './proposals';
+import { costCenters } from './costCenters';
 
 /**
  * S9 — o dinheiro que já fechou: `sales` (a venda que nasce de uma proposta ACEITA) e
@@ -51,6 +52,15 @@ export const sales = pgTable(
      * na conversão e o relatório por vendedor soma por aqui.
      */
     agentId: text('agent_id').references(() => user.id, { onDelete: 'restrict' }),
+    /**
+     * Centro de custo — HERDADO do deal na conversão (Fase 4a, `drizzle/0022_pj_e_centro_de_custo.sql`),
+     * mesma mecânica do `agent_id` acima: fotografia, não espelho ao vivo. Nullable:
+     * viagem PF não tem centro de custo e nunca terá. O relatório "Centros de custo"
+     * soma por aqui.
+     */
+    costCenterId: uuid('cost_center_id').references(() => costCenters.id, {
+      onDelete: 'restrict',
+    }),
     /** RESTRICT pelo mesmo motivo — a venda é o registro contábil, sobrevive à proposta. */
     proposalId: uuid('proposal_id')
       .notNull()
@@ -101,6 +111,8 @@ export const sales = pgTable(
     // FK (RESTRICT) e a quebra por vendedor do Resumo do período.
     index('sales_agent_id_idx').on(t.agentId),
     index('sales_tenant_agent_idx').on(t.tenantId, t.agentId),
+    // FK e o relatório "Centros de custo" (Fase 4a).
+    index('sales_cost_center_id_idx').on(t.costCenterId),
     // Uma proposta aceita vira NO MÁXIMO uma venda — o banco garante idempotência da
     // conversão, não a sorte de `converterPropostaEmVenda` nunca ser chamada duas vezes.
     uniqueIndex('sales_proposal_id_key').on(t.proposalId),

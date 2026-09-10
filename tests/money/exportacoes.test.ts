@@ -210,7 +210,7 @@ describe('csvVendasDoPeriodo', () => {
     expect(nomeArquivo).toBe(`vendas-${primeiroDia}_a_${ultimoDia}.csv`)
     expect(conteudo.charCodeAt(0)).toBe(0xfeff)
     const linhas = conteudo.slice(1).replace(/\r\n$/, '').split('\r\n')
-    expect(linhas[0]).toBe('Data;Cliente;Viagem;Valor;Comissão;Status da comissão;Parcelas')
+    expect(linhas[0]).toBe('Data;Cliente;Viagem;Valor;Comissão;Status da comissão;Parcelas;Centro de custo')
     expect(linhas[1]).toContain('Diana Prado')
     expect(linhas[1]).toContain('Nova York')
     expect(linhas[1]).toContain('8.000,00')

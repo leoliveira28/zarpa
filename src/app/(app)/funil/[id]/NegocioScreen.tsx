@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   atualizarNegocio,
+  listarCentrosDeCusto,
   listarEquipe,
   listarEstagios,
   listarPropostas,
@@ -12,6 +13,7 @@ import {
   moverEstagioDoNegocio,
   obterNegocio,
   type AtividadeDoNegocio,
+  type CentroDeCusto,
   type EquipeResumo,
   type EstagioDoFunil,
   type NegocioDetalhe,
@@ -630,6 +632,7 @@ function ViagemCard({
             é decisão dele (o guard está no servidor e o erro DADOS_INVALIDOS
             de lá é a verdade, não este sumiço). */}
         <VendedorField negocio={negocio} dealId={dealId} onPatched={onPatched} />
+        <CentroDeCustoField negocio={negocio} dealId={dealId} onPatched={onPatched} />
       </CardBody>
     </Card>
   );
@@ -802,6 +805,137 @@ function VendedorField({
 /** Primeiro nome para frases — registro, não chamada formal. */
 function primeiroNomeDe(nome: string): string {
   return nome.trim().split(/\s+/)[0] ?? nome;
+}
+
+/* -----------------------------------------------------------------------------
+   CentroDeCustoField — para que setor do cliente é a viagem (Fase 4a)
+   -------------------------------------------------------------------------
+   Diferente do VendedorField acima, ATRIBUIR não é só do dono: classificar a
+   viagem num setor é trabalho do dia a dia de quem vende. Uma leitura no
+   mount (`listarCentrosDeCusto`), commit no change, retorno reconciliado —
+   o mesmo contrato do campo ao lado. `null` é estado de verdade: viagem PF
+   não tem centro de custo e nunca terá.
+   ------------------------------------------------------------------------- */
+
+/** Valor sentinela do select — Radix não aceita `value=""` num item. */
+const SEM_CENTRO = "sem-centro";
+
+function CentroDeCustoField({
+  negocio,
+  dealId,
+  onPatched,
+}: {
+  negocio: NegocioDetalhe;
+  dealId: string;
+  onPatched: (patch: Partial<NegocioDetalhe>) => void;
+}) {
+  const toast = useToast();
+
+  const [status, setStatus] = React.useState<"loading" | "pronto">("loading");
+  const [centros, setCentros] = React.useState<CentroDeCusto[]>([]);
+  const [valor, setValor] = React.useState<string>(negocio.costCenterId ?? SEM_CENTRO);
+  const [state, setState] = React.useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [erro, setErro] = React.useState<{ mensagem: string; correcao?: string } | null>(null);
+
+  React.useEffect(() => {
+    let active = true;
+    void listarCentrosDeCusto().then((result) => {
+      if (!active) return;
+      if (result.ok) setCentros(result.data);
+      // Lista vazia ou indisponível: o campo nasce igual — só com "Sem centro
+      // de custo". Atribuir é opcional; indisponibilidade não bloqueia a ficha.
+      setStatus("pronto");
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  /** Grava a atribuição. `anunciar` é falso no caminho do DESFAZER — mesmo
+      critério do VendedorField. */
+  async function salvar(proximo: string, anunciar: boolean) {
+    const anterior = valor;
+    setValor(proximo);
+    setState("saving");
+    setErro(null);
+    const result = await atualizarNegocio(dealId, {
+      costCenterId: proximo === SEM_CENTRO ? null : proximo,
+    });
+    if (!result.ok) {
+      setValor(anterior);
+      setState("error");
+      setErro({ mensagem: result.mensagem, correcao: result.correcao });
+      return;
+    }
+    setState("saved");
+    onPatched({
+      costCenterId: result.data.costCenterId,
+      costCenterLabel: result.data.costCenterLabel,
+    });
+    if (!anunciar) return;
+    const nome = centros.find((c) => c.id === result.data.costCenterId)?.label;
+    toast.undo(
+      result.data.costCenterId === null
+        ? "Centro de custo removido da viagem"
+        : `Centro de custo: ${nome ?? result.data.costCenterLabel ?? "atualizado"}`,
+      () => void salvar(anterior, false),
+      { tone: "ok" },
+    );
+  }
+
+  if (status === "loading") {
+    return (
+      <Field className="mt-4" aria-busy="true">
+        <div className="flex items-baseline justify-between gap-2">
+          <Label>Centro de custo</Label>
+        </div>
+        <Skeleton className="h-9 w-full rounded-sm" />
+      </Field>
+    );
+  }
+
+  return (
+    <Field invalid={state === "error"} className="mt-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <Label>Centro de custo</Label>
+        <SavedMark state={state} />
+      </div>
+      <Select
+        value={valor}
+        onValueChange={(proximo) => void salvar(proximo, true)}
+      >
+        <SelectTrigger
+          aria-invalid={state === "error" || undefined}
+          aria-label="Centro de custo da viagem"
+        >
+          <SelectValue placeholder="Escolher centro de custo" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={SEM_CENTRO}>Sem centro de custo</SelectItem>
+          {centros.map((centro) => (
+            <SelectItem key={centro.id} value={centro.id}>
+              {centro.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {state === "error" && erro ? (
+        <FieldError
+          action={
+            <button
+              type="button"
+              className="font-medium text-danger underline underline-offset-2"
+              onClick={() => void salvar(valor, true)}
+            >
+              {erro.correcao ?? "Tentar de novo"}
+            </button>
+          }
+        >
+          {erro.mensagem}
+        </FieldError>
+      ) : null}
+    </Field>
+  );
 }
 
 /** Campo de texto com salvamento automático no blur — igual ao de `ContatoScreen`/`VendaScreen`. */

@@ -202,6 +202,9 @@ export async function converterPropostaEmVenda(
           acceptedOptionId: proposals.acceptedOptionId,
           // Fase 3 (§5): a atribuição É do deal — a venda herda na conversão.
           dealAgentId: deals.agentId,
+          // Fase 4a: o centro de custo TAMBÉM é do deal — fotografia na conversão,
+          // mesma mecânica do vendedor acima.
+          dealCostCenterId: deals.costCenterId,
         })
         .from(proposals)
         .innerJoin(deals, eq(deals.id, proposals.dealId))
@@ -255,6 +258,7 @@ export async function converterPropostaEmVenda(
           proposalOptionId: opcao.id,
           fornecedor: dados.fornecedor?.trim() || null,
           agentId: proposta.dealAgentId,
+          costCenterId: proposta.dealCostCenterId,
           valorBrutoCents: opcao.priceCents,
           custoCents: opcao.costCents,
           comissaoPrevistaCents: opcao.commissionCents,

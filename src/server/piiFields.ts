@@ -79,6 +79,24 @@ export function pareceCpf(termo: string): boolean {
 }
 
 /**
+ * Um termo de busca "parece documento"? CPF (11) OU CNPJ (14), com ou sem pontuação.
+ *
+ * A coluna `contacts.document` passou a guardar os dois (Fase 4a: empresa é contato PJ
+ * com CNPJ na MESMA coluna cifrada, mesmo índice cego — `BlindIndexValue` normaliza por
+ * dígitos, então 11 e 14 deduplicam pela mesma máquina). A busca inteira não pode
+ * perguntar só "é CPF?" e cegar para CNPJ.
+ */
+export function pareceDocumento(termo: string): boolean {
+  return pareceCpf(termo) || pareceCnpj(termo);
+}
+
+/** Um termo de busca "parece CNPJ"? 14 dígitos, com ou sem pontuação (`00.000.000/0000-00`). */
+export function pareceCnpj(termo: string): boolean {
+  const d = apenasDigitos(termo);
+  return d.length === 14 && /^[\d./\-\s]+$/.test(termo.trim());
+}
+
+/**
  * Data de nascimento: cifrada inteira + dia/mês em claro para o alerta de aniversário.
  * Aceita `14/03/1979` e `1979-03-14`; qualquer outra coisa vira nulo nos dois campos, e
  * NUNCA vira "data cifrada sem aniversário" (que seria um contato invisível para o cron).

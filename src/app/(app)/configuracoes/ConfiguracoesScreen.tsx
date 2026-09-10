@@ -2,6 +2,13 @@
 
 import * as React from "react";
 import { atualizarMarca, enviarImagemDaProposta, obterTenantAtual } from "@/server";
+import {
+  arquivarCentroDeCusto,
+  criarCentroDeCusto,
+  listarCentrosDeCusto,
+  reabrirCentroDeCusto,
+  type CentroDeCusto,
+} from "@/server";
 import type { ServiceResult } from "@/server";
 import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
 import { Assinatura } from "@/components/public/Assinatura";
@@ -189,6 +196,10 @@ export function ConfiguracoesScreen() {
           </div>
         </CardBody>
       </Card>
+
+      {/* Centros de custo — a lista do tenant (Fase 4a). A classificação que
+          a ficha da viagem usa ("para que setor do cliente é esta viagem"). */}
+      <CardCentrosDeCusto />
 
       {/* A prova, no rodapé e SEM MOLDURA — como o cliente encontra, no mesmo
           papel, com o mesmo fio. Estado local: digitação vira colofão. */}
@@ -425,5 +436,166 @@ function TelaSkeleton() {
         <SkeletonText lines={4} />
       </Card>
     </div>
+  );
+}
+
+/* -----------------------------------------------------------------------------
+   Centros de custo — a lista do tenant (Fase 4a, `cost_centers`/0022)
+   -------------------------------------------------------------------------
+   Lista PLANA: não é por empresa, não tem hierarquia, não tem rateio (§6 do
+   plano). A ficha da viagem consome esta lista no select "Centro de custo" e
+   o relatório soma por ela. Arquivar é destrutivo leve → desfazer de 8s que
+   REABRE de verdade (`reabrirCentroDeCusto`) — o desfazer é uma ação que
+   existe, não uma promessa de UI. Sem apagar: centro de custo com venda
+   atribuída é histórico financeiro, e a FK RESTRICT é a rede por baixo.
+   ------------------------------------------------------------------------- */
+
+function CardCentrosDeCusto() {
+  const toast = useToast();
+  const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
+  const [centros, setCentros] = React.useState<CentroDeCusto[]>([]);
+  const [novo, setNovo] = React.useState("");
+  const [criando, setCriando] = React.useState(false);
+  const [erro, setErro] = React.useState<{ mensagem: string; correcao?: string } | null>(null);
+
+  React.useEffect(() => {
+    let active = true;
+    void listarCentrosDeCusto().then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setStatus("error");
+        setErro({ mensagem: result.mensagem, correcao: result.correcao });
+        return;
+      }
+      setCentros(result.data);
+      setStatus("ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function criar() {
+    const label = novo.trim();
+    if (!label) return;
+    setCriando(true);
+    setErro(null);
+    const result = await criarCentroDeCusto({ label });
+    setCriando(false);
+    if (!result.ok) {
+      setErro({ mensagem: result.mensagem, correcao: result.correcao });
+      return;
+    }
+    setCentros((atual) => [...atual, result.data]);
+    setNovo("");
+  }
+
+  async function arquivar(centro: CentroDeCusto) {
+    const anterior = centros;
+    setCentros((atual) => atual.filter((c) => c.id !== centro.id));
+    const result = await arquivarCentroDeCusto({ id: centro.id });
+    if (!result.ok) {
+      setCentros(anterior);
+      setErro({ mensagem: result.mensagem, correcao: result.correcao });
+      return;
+    }
+    toast.undo(`Centro de custo “${centro.label}” arquivado`, () => {
+      void reabrirCentroDeCusto({ id: centro.id }).then((reabriu) => {
+        if (reabriu.ok) {
+          setCentros((atual) =>
+            atual.some((c) => c.id === centro.id) ? atual : [...atual, reabriu.data],
+          );
+        }
+      });
+    }, { tone: "ok" });
+  }
+
+  if (status === "loading") return <TelaSkeleton />;
+  if (status === "error") {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Centros de custo</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <FieldError
+            action={
+              <button
+                type="button"
+                className="font-medium text-danger underline underline-offset-2"
+                onClick={() => window.location.reload()}
+              >
+                {erro?.correcao ?? "Tentar de novo"}
+              </button>
+            }
+          >
+            {erro?.mensagem ?? "Não consegui carregar a lista."}
+          </FieldError>
+        </CardBody>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Centros de custo</CardTitle>
+      </CardHeader>
+      <CardBody>
+        <p className="text-13 leading-[1.5] text-muted">
+          Para classificar a viagem de um cliente empresarial por setor — diretoria, marketing.
+          Aparece na ficha da viagem e no relatório por centro de custo.
+        </p>
+
+        {centros.length === 0 ? (
+          <p className="mt-4 text-15 text-muted">
+            Nenhum centro de custo ainda. As viagens ficam sem classificação até você criar o
+            primeiro.
+          </p>
+        ) : (
+          <ul className="mt-2">
+            {centros.map((centro) => (
+              <li key={centro.id} className="flex items-center justify-between gap-3 py-2.5">
+                <span className="min-w-0 flex-1 truncate text-15 text-ink">{centro.label}</span>
+                <span className="text-13 tabular-nums text-muted">
+                  {centro.totalNegocios === 1
+                    ? "1 viagem"
+                    : `${centro.totalNegocios} viagens`}
+                </span>
+                <button
+                  type="button"
+                  className="min-h-9 text-13 font-medium text-muted underline underline-offset-2 hover:text-ink"
+                  onClick={() => void arquivar(centro)}
+                >
+                  Arquivar
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+      <CardFooter>
+        <div className="flex w-full items-center gap-2">
+          <Input
+            value={novo}
+            onChange={(event) => setNovo(event.target.value)}
+            placeholder="Novo centro de custo"
+            aria-label="Novo centro de custo"
+            className="flex-1"
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void criar();
+            }}
+          />
+          <Button variant="secondary" size="sm" loading={criando} onClick={() => void criar()}>
+            Criar
+          </Button>
+        </div>
+        {erro && status === "ready" ? (
+          <div className="mt-2">
+            <FieldError>{erro.mensagem}</FieldError>
+          </div>
+        ) : null}
+      </CardFooter>
+    </Card>
   );
 }

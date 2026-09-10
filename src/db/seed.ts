@@ -39,7 +39,7 @@
  * quiser sem sujar.
  */
 
-import { eq, inArray } from 'drizzle-orm';
+import { asc, desc, eq, inArray } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
 import { unsafeSqlWithoutTenant as sqlSemTenant } from './client';
 import { withTenant, type TenantDb } from '../lib/tenant/withTenant';
@@ -536,6 +536,17 @@ async function gerarRoteiroSeed(
 ): Promise<void> {
   const blocos = await fotografarBlocos(tx, propostaId, opcaoAceitaId);
 
+  // 0021: a lista de clientes é FOTOGRAFIA igual ao client_name — congelada da mesma
+  // fonte e na mesma ordem do `gerarRoteiro` real (titular primeiro, depois a ordem de
+  // entrada). O seed semeia direto na tabela, então congela aqui para o roteiro de
+  // demonstração nascer fiel ao que a action gravaria.
+  const linhasClientes = await tx
+    .select({ nome: contacts.name })
+    .from(dealContacts)
+    .innerJoin(contacts, eq(contacts.id, dealContacts.contactId))
+    .where(eq(dealContacts.dealId, dealId))
+    .orderBy(desc(dealContacts.principal), asc(dealContacts.createdAt));
+
   await tx.insert(itineraries).values({
     tenantId,
     dealId,
@@ -544,6 +555,7 @@ async function gerarRoteiroSeed(
     title: propostaTitulo, // o roteiro real congela o título da proposta aceita
     currency: 'BRL',
     clientName,
+    clientes: linhasClientes.map((linha) => linha.nome),
     departureOn,
     returnOn,
     blocksSnapshot: blocos,

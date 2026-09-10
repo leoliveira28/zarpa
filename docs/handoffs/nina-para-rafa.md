@@ -326,3 +326,42 @@ aqui sem cerimônia.
 3. **`src/lib/config.ts` nasceu** (obrigado) — `src/lib/ui/brand.ts` já
    reexporta o `APP_NAME` de lá, como o comentário do config pedia. Nenhuma
    tela importa a string crua.
+
+---
+
+# Rodada Fase 4a — PJ no contato + centro de custo (2026-09-10, tarde)
+
+Contrato novo no ar (`docs/FASE4_PJ.md`, 0022 já aplicada no dev e no banco de
+teste — a suíte global aplica sozinha):
+
+- **`contacts.person_type`** (`'fisica'` default | `'juridica'`) em
+  `ContatoResumo`/`ContatoDetalhe`/`ContatoInput`. CNPJ na MESMA coluna
+  `document` + mesmo índice cego; validação por tipo em `contacts.ts`
+  (`validarDocumentoPorTipo`). `deals.cost_center_id`/`sales.cost_center_id`
+  (nullable; fotografia na conversão) + `cost_centers` com serviço novo
+  (`src/server/costCenters.ts`, reexportado no barril).
+- `NegocioDetalhe` ganhou `costCenterId`/`costCenterLabel` (par resolvido no
+  servidor, mesmo shape do vendedor); `criarNegocio`/`atualizarNegocio` aceitam
+  `costCenterId` (nullable). `vendasPorCentroDeCusto` em `ranking.ts`.
+- CSV de vendas: coluna nova "Centro de custo" no fim (`—` quando nulo) — o
+  teste do cabeçalho foi atualizado por mim.
+
+## Furos (nenhum bloqueia; nenhum consertei por fronteira)
+
+1. **Importação de planilha continua PF-only.** `src/server/imports.ts` valida
+   por `cpfValido` e grava sem `person_type`. Quando a planilha ganhar coluna
+   de CNPJ, a régua é `pareceDocumento`/`cnpjValido` + `personType:
+   'juridica'` no insert — a dedupe pelo índice cego já funciona para 14
+   dígitos, nada a migrar no banco.
+2. **Flip de tipo não retrovalida documento armazenado.** Trocar PF→PJ com CPF
+   gravado passa (decisão consciente: retrovalidar exigiria decifrar documento
+   numa leitura sem pedido explícito). A ficha mostra o campo CPF sob a régua
+   CNPJ — o próximo save conserta. Se preferir recusar o flip enquanto houver
+   documento do tipo errado, é uma leitura a mais em `atualizarContato`.
+3. **`obterDocumentoDoContato` devolve `{ cpf, nascimento }`** — para PJ o
+   `cpf` é o CNPJ cru. Renomear o campo para `documento` quebraria o chamador
+   atual (só a ficha) — deixei para você decidir a forma.
+4. **`converterPropostaEmVenda` fotografou `cost_center_id`** no mesmo select
+   do `dealAgentId` — sem teste dedicado (a suíte de `tests/sales` cobre o
+   caminho). Se quiser canário próprio, o molde está em
+   `tests/contacts/pj-e-centros.test.ts`.

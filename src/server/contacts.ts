@@ -2,15 +2,21 @@
 
 import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { contacts, deals, itineraries, pipelineStages, proposals } from '@/db/schema';
+import { contacts, dealContacts, deals, itineraries, pipelineStages, proposals } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { maskDocument } from '@/lib/crypto';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
 import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
-import { cpfValido, normalizarTelefone } from './normalize';
-import { camposDocumentoDoContato, camposNascimento, hashesDeBusca, pareceCpf } from './piiFields';
+import { cnpjValido, cpfValido, normalizarTelefone } from './normalize';
+import {
+  camposDocumentoDoContato,
+  camposNascimento,
+  hashesDeBusca,
+  pareceCpf,
+  pareceDocumento,
+} from './piiFields';
 
 /**
  * Serviço de contatos — o padrão que todo serviço deste projeto segue.
@@ -29,6 +35,11 @@ import { camposDocumentoDoContato, camposNascimento, hashesDeBusca, pareceCpf } 
 
 const contatoInput = z.object({
   name: z.string().trim().min(2, 'Nome precisa de pelo menos 2 letras').max(160),
+  /**
+   * Física (padrão) ou jurídica — a empresa (Fase 4a). Não é campo de texto livre:
+   * o TIPO decide a régua do `document` (CPF 11 dígitos × CNPJ 14).
+   */
+  personType: z.enum(['fisica', 'juridica']).optional(),
   email: z.email('E-mail inválido').max(200).optional().or(z.literal('')),
   phone: z.string().trim().max(32).optional().or(z.literal('')),
   whatsapp: z.string().trim().max(32).optional().or(z.literal('')),
@@ -52,6 +63,8 @@ export type ContatoPatch = Partial<ContatoInput>;
 export type ContatoResumo = {
   id: string;
   name: string;
+  /** `fisica` (cliente de sempre) ou `juridica` — a empresa que paga (Fase 4a). */
+  personType: 'fisica' | 'juridica';
   email: string | null;
   phone: string | null;
   whatsapp: string | null;
@@ -81,6 +94,7 @@ export type FiltroContatos = {
 const COLUNAS_RESUMO = {
   id: contacts.id,
   name: contacts.name,
+  personType: contacts.personType,
   email: contacts.email,
   phone: contacts.phone,
   whatsapp: contacts.whatsapp,
@@ -94,6 +108,34 @@ const COLUNAS_RESUMO = {
 function vazioParaNulo(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+/**
+ * A régua do documento depende do TIPO do contato (Fase 4a): PF valida por `cpfValido`,
+ * PJ por `cnpjValido`. Um CPF numa empresa (ou um CNPJ numa pessoa) recusa na entrada —
+ * documento inválido compete por unicidade no índice cego com alguém que existe de
+ * verdade, e a recusa com o campo culpado é a mensageria da casa.
+ */
+function validarDocumentoPorTipo(
+  personType: 'fisica' | 'juridica',
+  documento: string | null,
+): void {
+  if (!documento) return;
+  if (personType === 'juridica') {
+    if (!cnpjValido(documento)) {
+      throw new ServiceError('DADOS_INVALIDOS', 'Esse CNPJ não é válido.', {
+        campo: 'document',
+        correcao: 'Conferir o CNPJ (14 dígitos)',
+      });
+    }
+    return;
+  }
+  if (!cpfValido(documento)) {
+    throw new ServiceError('DADOS_INVALIDOS', 'Esse CPF não é válido.', {
+      campo: 'document',
+      correcao: 'Conferir o CPF',
+    });
+  }
 }
 
 function validar(input: unknown, parcial: boolean): ContatoInput {
@@ -149,9 +191,10 @@ export async function listarContatos(
           );
         }
 
-        // CPF: só entra na busca quando o termo é um CPF inteiro. Índice cego compara
-        // igualdade exata — não existe "CPF que começa com", e é bom que não exista.
-        if (pareceCpf(busca)) {
+        // Documento: só entra na busca quando o termo é um documento inteiro — CPF (11)
+        // ou CNPJ (14, Fase 4a). Índice cego compara igualdade exata — não existe "CPF
+        // que começa com", e é bom que não exista.
+        if (pareceDocumento(busca)) {
           const candidatos = hashesDeBusca('contacts.document', tenantId, busca);
           if (candidatos.length > 0) {
             alternativas.push(inArray(contacts.documentHash, candidatos));
@@ -258,12 +301,11 @@ export async function criarContato(input: ContatoInput): Promise<ServiceResult<C
     const dados = validar(input, false);
 
     const documento = vazioParaNulo(dados.document);
-    if (documento && !cpfValido(documento)) {
-      throw new ServiceError('DADOS_INVALIDOS', 'Esse CPF não é válido.', {
-        campo: 'document',
-        correcao: 'Conferir o CPF',
-      });
-    }
+    // Ausente = pessoa física: o contato de sempre não muda de forma porque a Fase 4a
+    // existe. `.optional()` no zod de propósito — `.default()` viraria campo OBRIGATÓRIO
+    // no tipo de saída e quebraria todo chamador que cria contato sem saber do PJ.
+    const personType = dados.personType ?? 'fisica';
+    validarDocumentoPorTipo(personType, documento);
 
     const email = vazioParaNulo(dados.email)?.toLowerCase() ?? null;
     const campos = camposDocumentoDoContato(tenantId, documento);
@@ -302,10 +344,14 @@ export async function criarContato(input: ContatoInput): Promise<ServiceResult<C
           .where(eq(contacts.documentHash, campos.documentHash))
           .limit(1);
         if (existente.length > 0) {
-          throw new ServiceError('CONFLITO', 'Você já tem um contato com esse CPF.', {
-            campo: 'document',
-            correcao: 'Abrir o contato existente',
-          });
+          throw new ServiceError(
+            'CONFLITO',
+            `Você já tem um contato com esse ${personType === 'juridica' ? 'CNPJ' : 'CPF'}.`,
+            {
+              campo: 'document',
+              correcao: 'Abrir o contato existente',
+            },
+          );
         }
       }
 
@@ -315,6 +361,7 @@ export async function criarContato(input: ContatoInput): Promise<ServiceResult<C
           // tenant_id escrito aqui, a partir da sessão. Nunca do input.
           tenantId,
           name: dados.name,
+          personType,
           email,
           phone: vazioParaNulo(dados.phone),
           whatsapp: vazioParaNulo(dados.whatsapp) ?? vazioParaNulo(dados.phone),
@@ -353,6 +400,8 @@ export async function atualizarContato(
 
     const valores: Record<string, unknown> = { updatedAt: new Date() };
     const mudou: string[] = [];
+    /** Documento do patch aguardando validação por tipo (dentro do `withTenant`). */
+    let documentoParaValidar: string | null | undefined;
 
     if (dados.name !== undefined) {
       valores.name = dados.name;
@@ -393,14 +442,16 @@ export async function atualizarContato(
       Object.assign(valores, nascimento);
       mudou.push('birthDate');
     }
+    if (dados.personType !== undefined) {
+      valores.personType = dados.personType;
+      mudou.push('personType');
+    }
     if (dados.document !== undefined) {
       const documento = vazioParaNulo(dados.document);
-      if (documento && !cpfValido(documento)) {
-        throw new ServiceError('DADOS_INVALIDOS', 'Esse CPF não é válido.', {
-          campo: 'document',
-          correcao: 'Conferir o CPF',
-        });
-      }
+      // A validação por tipo fica para DENTRO do `withTenant`: quando o patch traz só o
+      // documento, o tipo efetivo é o que está no banco — e lê-lo sem o GUC do tenant
+      // seria ignorar o RLS (FORCE recusa, com razão).
+      documentoParaValidar = documento;
       // As três colunas (cifra, hash, key_id) sempre juntas — ver `piiFields.ts`.
       Object.assign(valores, camposDocumentoDoContato(tenantId, documento));
       mudou.push('document');
@@ -413,6 +464,18 @@ export async function atualizarContato(
     return withTenant(tenantId, async (tx) => {
       // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
       await exigirContaAtiva(tx, tenantId);
+      if (documentoParaValidar !== undefined) {
+        let tipo = dados.personType;
+        if (!tipo) {
+          const [atual] = await tx
+            .select({ personType: contacts.personType })
+            .from(contacts)
+            .where(eq(contacts.id, contatoId))
+            .limit(1);
+          tipo = atual?.personType;
+        }
+        validarDocumentoPorTipo(tipo ?? 'fisica', documentoParaValidar);
+      }
       const linhas = await tx
         .update(contacts)
         .set(valores)
@@ -694,7 +757,23 @@ export type HistoricoDoContato = {
  * Fuso: "hoje" é a data UTC — MESMA convenção de `viagens.ts`/`dashboard.ts`
  * (`departure_on`/`return_on` são `date` sem fuso; diferença máxima de 3h,
  * aceita e documentada lá).
+ *
+ * Participação (0021, furo da nina): o contato entra no histórico como TITULAR
+ * (`deals.contact_id`) OU como cliente adicional (`deal_contacts`, 0020) — a viagem do
+ * casal aparece na ficha 360° dos DOIS, e os totais (comprado, comissão, viagens)
+ * incluem o negócio nos dois lados. Decisão consciente: para o SECUNDÁRIO, o valor do
+ * negócio aparece inteiro (não rateado) — a ficha responde "o que este cliente já
+ * fez com a agência", e a viagem do casal é dele também; ratear inventaria uma
+ * política de divisão que o produto não pediu. Nomes de coluna LITERAIS no `exists`
+ * (`deals.id` sem alias) porque `deals` nunca é apelidado nas três queries.
  */
+/** Predicado comum às três queries do histórico (mesmo sentido, três fontes). */
+const doTitularOuDaLista = (contatoId: string) =>
+  or(
+    eq(deals.contactId, contatoId),
+    sql`exists (select 1 from deal_contacts dc where dc.deal_id = deals.id and dc.contact_id = ${contatoId})`,
+  );
+
 export async function obterHistoricoDoContato(
   contatoId: string,
 ): Promise<ServiceResult<HistoricoDoContato>> {
@@ -721,7 +800,7 @@ export async function obterHistoricoDoContato(
         })
         .from(deals)
         .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
-        .where(eq(deals.contactId, contatoId))
+        .where(doTitularOuDaLista(contatoId))
         .orderBy(desc(deals.createdAt))
         .limit(100);
 
@@ -742,7 +821,7 @@ export async function obterHistoricoDoContato(
         })
         .from(proposals)
         .innerJoin(deals, eq(deals.id, proposals.dealId))
-        .where(eq(deals.contactId, contatoId))
+        .where(doTitularOuDaLista(contatoId))
         .orderBy(desc(proposals.createdAt))
         .limit(100);
 
@@ -758,7 +837,7 @@ export async function obterHistoricoDoContato(
         })
         .from(itineraries)
         .innerJoin(deals, eq(deals.id, itineraries.dealId))
-        .where(eq(deals.contactId, contatoId))
+        .where(doTitularOuDaLista(contatoId))
         .orderBy(desc(itineraries.createdAt))
         .limit(100);
 

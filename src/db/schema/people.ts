@@ -31,6 +31,17 @@ export const contacts = pgTable(
       .notNull()
       .references(() => tenants.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
+    /**
+     * Pessoa física (cliente de sempre) ou jurídica — a EMPRESA que paga (Fase 4a,
+     * `drizzle/0022_pj_e_centro_de_custo.sql`). A empresa é UM contato: `name` guarda a
+     * razão social e `document` o CNPJ (mesma coluna cifrada, mesmo índice cego — 14
+     * dígitos deduplicam pela mesma máquina). Os FUNCIONÁRIOS que viajam continuam
+     * sendo `travelers` do contato-empresa, e uma viagem da empresa é um deal cujo
+     * titular é ela. PJ não é auth: a organization é a agência, nunca o cliente.
+     */
+    personType: text('person_type', { enum: ['fisica', 'juridica'] })
+      .notNull()
+      .default('fisica'),
     email: text('email'),
     phone: text('phone'),
     whatsapp: text('whatsapp'),
@@ -66,6 +77,7 @@ export const contacts = pgTable(
     index('contacts_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
     index('contacts_tenant_name_idx').on(t.tenantId, sql`lower(${t.name})`),
     index('contacts_tenant_phone_idx').on(t.tenantId, t.phone),
+    index('contacts_tenant_person_type_idx').on(t.tenantId, t.personType),
     uniqueIndex('contacts_tenant_email_key')
       .on(t.tenantId, sql`lower(${t.email})`)
       .where(sql`${t.email} is not null`),
@@ -78,6 +90,10 @@ export const contacts = pgTable(
     check(
       'contacts_source_check',
       sql`${t.source} is null or ${t.source} in ('whatsapp', 'instagram', 'indicacao', 'site', 'evento', 'outro')`,
+    ),
+    check(
+      'contacts_person_type_check',
+      sql`${t.personType} in ('fisica', 'juridica')`,
     ),
     check(
       'contacts_birth_month_day_check',

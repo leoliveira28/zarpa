@@ -2,7 +2,7 @@
 
 import { and, desc, eq, gte, lt } from 'drizzle-orm';
 import { z } from 'zod';
-import { contacts, deals, pipelineStages, sales } from '@/db/schema';
+import { contacts, costCenters, deals, pipelineStages, sales } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
@@ -120,6 +120,96 @@ export async function rankingDeClientes(
             a.nome.localeCompare(b.nome, 'pt-BR'),
         )
         .slice(0, limite);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Vendas por centro de custo (Fase 4a) — a terceira leitura do mesmo mapa:
+// quem mais comprou (Clientes), quanto rendeu por vendedor (Resumo) e AGORA
+// para que setor do cliente a agência vendeu. Mesma janela de
+// `sales.created_at`, mesma gramática de período, soma em JavaScript.
+// ---------------------------------------------------------------------------
+
+export type LinhaPorCentroDeCusto = {
+  /** `null` = vendas de negócio sem centro de custo (viagem PF — a maioria). */
+  centroId: string | null;
+  /** Rótulo resolvido no servidor; `null` quando a linha é "Sem centro de custo". */
+  nome: string | null;
+  totalVendidoCents: number;
+  viagens: number;
+};
+
+export async function vendasPorCentroDeCusto(
+  filtro?: z.infer<typeof rankingInput>,
+): Promise<ServiceResult<LinhaPorCentroDeCusto[]>> {
+  return comoResultado(async () => {
+    const { tenantId } = await requireAuthContext();
+
+    const parsed = rankingInput.safeParse(filtro ?? {});
+    if (!parsed.success) {
+      const primeiro = parsed.error.issues[0];
+      throw new ServiceError('DADOS_INVALIDOS', primeiro?.message ?? 'Dados inválidos', {
+        campo: primeiro?.path.join('.'),
+        correcao: 'Corrigir o filtro e tentar de novo',
+      });
+    }
+
+    const periodo: Periodo = resolverPeriodo(new Date(), {
+      mes: parsed.data.mes as string | undefined,
+      de: parsed.data.de,
+      ate: parsed.data.ate,
+    });
+
+    return withTenant(tenantId, async (tx) => {
+      const linhas = await tx
+        .select({
+          centroId: sales.costCenterId,
+          nome: costCenters.label,
+          dealId: sales.dealId,
+          valorBrutoCents: sales.valorBrutoCents,
+        })
+        .from(sales)
+        .innerJoin(deals, eq(deals.id, sales.dealId))
+        .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
+        .leftJoin(costCenters, eq(costCenters.id, sales.costCenterId))
+        .where(
+          and(
+            gte(sales.createdAt, periodo.inicio),
+            lt(sales.createdAt, periodo.fimExclusivo),
+            eq(pipelineStages.isWon, true),
+          ),
+        )
+        .orderBy(desc(sales.createdAt));
+
+      // Mesma agregação em memória do ranking de clientes — chave diferente.
+      const porCentro = new Map<string, { nome: string | null; total: number; viagens: Set<string> }>();
+      for (const linha of linhas) {
+        const chave = linha.centroId ?? '';
+        let entrada = porCentro.get(chave);
+        if (!entrada) {
+          entrada = { nome: linha.nome, total: 0, viagens: new Set<string>() };
+          porCentro.set(chave, entrada);
+        }
+        entrada.total += linha.valorBrutoCents;
+        entrada.viagens.add(linha.dealId);
+      }
+
+      // Nomeado primeiro (por total); "Sem centro de custo" por último — é a linha
+      // residual, não uma categoria que se classifica.
+      return [...porCentro.entries()]
+        .map(([chave, entrada]) => ({
+          centroId: chave === '' ? null : chave,
+          nome: entrada.nome,
+          totalVendidoCents: entrada.total,
+          viagens: entrada.viagens.size,
+        }))
+        .sort(
+          (a, b) =>
+            Number(b.centroId !== null) - Number(a.centroId !== null) ||
+            b.totalVendidoCents - a.totalVendidoCents ||
+            (a.nome ?? '').localeCompare(b.nome ?? '', 'pt-BR'),
+        );
     });
   });
 }

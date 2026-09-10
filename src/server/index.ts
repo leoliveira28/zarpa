@@ -164,6 +164,9 @@ export {
   // handoff para a Nina: os editores de proposta e de negócio chamam estas duas actions.
   adicionarClienteAoNegocio,
   removerClienteDoNegocio,
+  // 0021 — leitura LEVE da mesma lista: o editor reconcilia sem carregar o negócio
+  // inteiro (`obterNegocio`).
+  listarClientesDoNegocio,
   listarNegociosParados,
   obterResumoDoPipeline,
   type DealStage,
@@ -341,5 +344,19 @@ export {
 } from './resultado';
 export {
   rankingDeClientes,
+  vendasPorCentroDeCusto,
   type LinhaDoRanking,
+  type LinhaPorCentroDeCusto,
 } from './ranking';
+export {
+  listarCentrosDeCusto,
+  criarCentroDeCusto,
+  renomearCentroDeCusto,
+  arquivarCentroDeCusto,
+  reabrirCentroDeCusto,
+  type CentroDeCusto,
+  type CriarCentroDeCustoInput,
+  type RenomearCentroDeCustoInput,
+  type ArquivarCentroDeCustoInput,
+  type ReabrirCentroDeCustoInput,
+} from './costCenters';

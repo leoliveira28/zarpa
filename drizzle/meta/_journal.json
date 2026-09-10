@@ -148,6 +148,20 @@
       "when": 1759104000000,
       "tag": "0020_negocio_varios_clientes",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1759190400000,
+      "tag": "0021_roteiro_varios_clientes",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1759276800000,
+      "tag": "0022_pj_e_centro_de_custo",
+      "breakpoints": true
     }
   ]
 }

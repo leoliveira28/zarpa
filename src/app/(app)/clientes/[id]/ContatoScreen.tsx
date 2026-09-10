@@ -747,6 +747,81 @@ function RoteiroRow({ roteiro }: { roteiro: RoteiroDoContato }) {
    Dados
    ========================================================================== */
 
+/* -----------------------------------------------------------------------------
+   TipoDeClienteField — pessoa física ou empresa (Fase 4a)
+   -------------------------------------------------------------------------
+   O TIPO decide a régua do resto da ficha: rótulo do nome (Nome × Razão
+   social), documento (CPF × CNPJ) e se nasce nascimento. Commit no change
+   (select não tem blur útil), mesmo contrato do VendedorField da ficha de
+   negócio: o erro do servidor devolve o select, o retorno reconcilia o pai.
+   ------------------------------------------------------------------------- */
+
+function TipoDeClienteField({
+  contact,
+  contatoId,
+  onPatched,
+}: {
+  contact: ContatoDetalhe;
+  contatoId: string;
+  onPatched: (patch: Partial<ContatoDetalhe>) => void;
+}) {
+  const [valor, setValor] = React.useState(contact.personType);
+  const [state, setState] = React.useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [erro, setErro] = React.useState<{ mensagem: string; correcao?: string } | null>(null);
+
+  async function salvar(proximo: "fisica" | "juridica") {
+    const anterior = valor;
+    setValor(proximo);
+    setState("saving");
+    setErro(null);
+    const result = await atualizarContato(contatoId, { personType: proximo });
+    if (!result.ok) {
+      setValor(anterior);
+      setState("error");
+      setErro({ mensagem: result.mensagem, correcao: result.correcao });
+      return;
+    }
+    setState("saved");
+    onPatched({ personType: result.data.personType });
+  }
+
+  return (
+    <Field invalid={state === "error"} className="mb-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <Label>Tipo de cliente</Label>
+        <SavedMark state={state} />
+      </div>
+      <Select
+        value={valor}
+        onValueChange={(proximo) => void salvar(proximo as "fisica" | "juridica")}
+      >
+        <SelectTrigger aria-invalid={state === "error" || undefined} aria-label="Tipo de cliente">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="fisica">Pessoa física</SelectItem>
+          <SelectItem value="juridica">Empresa (PJ)</SelectItem>
+        </SelectContent>
+      </Select>
+      {state === "error" && erro ? (
+        <FieldError
+          action={
+            <button
+              type="button"
+              className="font-medium text-danger underline underline-offset-2"
+              onClick={() => void salvar(valor)}
+            >
+              Tentar de novo
+            </button>
+          }
+        >
+          {erro.mensagem}
+        </FieldError>
+      ) : null}
+    </Field>
+  );
+}
+
 function DadosCard({
   contact,
   contatoId,
@@ -756,15 +831,22 @@ function DadosCard({
   contatoId: string;
   onPatched: (patch: Partial<ContatoDetalhe>) => void;
 }) {
+  const isPJ = contact.personType === "juridica";
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Dados</CardTitle>
       </CardHeader>
       <CardBody>
+        <TipoDeClienteField
+          contact={contact}
+          contatoId={contatoId}
+          onPatched={onPatched}
+        />
         <div className="grid gap-4 sm:grid-cols-2">
           <TextAutoField
-            label="Nome"
+            label={isPJ ? "Razão social" : "Nome"}
             initialValue={contact.name}
             onSave={async (value) => {
               const result = await atualizarContato(contatoId, { name: value });
@@ -1053,7 +1135,12 @@ function DocumentoCard({
   const [revealing, setRevealing] = React.useState(false);
   const [revealError, setRevealError] = React.useState<string | null>(null);
 
-  const hasSomething = contact.temDocumento || contact.aniversario !== null;
+  // Fase 4a — a empresa tem CNPJ e não tem nascimento: o campo nem nasce para PJ.
+  const isPJ = contact.personType === "juridica";
+  const documentoRotulo = isPJ ? "CNPJ" : "CPF";
+  const documentoPlaceholder = isPJ ? "00.000.000/0000-00" : "000.000.000-00";
+
+  const hasSomething = contact.temDocumento || (!isPJ && contact.aniversario !== null);
 
   async function reveal() {
     setRevealing(true);
@@ -1073,12 +1160,13 @@ function DocumentoCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Documento e nascimento</CardTitle>
+        <CardTitle>{isPJ ? "CNPJ" : "Documento e nascimento"}</CardTitle>
       </CardHeader>
       <CardBody>
         <p className="text-13 text-muted">
-          CPF e data de nascimento ficam cifrados. Abrir aqui grava quem viu, no registro de
-          auditoria — é por isso que a tela não mostra os dois de cara.
+          {isPJ
+            ? "O CNPJ fica cifrado. Abrir aqui grava quem viu, no registro de auditoria — é por isso que a tela não mostra de cara."
+            : "CPF e data de nascimento ficam cifrados. Abrir aqui grava quem viu, no registro de auditoria — é por isso que a tela não mostra os dois de cara."}
         </p>
 
         {revealError ? (
@@ -1100,45 +1188,51 @@ function DocumentoCard({
         {revealed ? (
           <div className="grid gap-4 sm:grid-cols-2">
             <TextAutoField
-              label="CPF"
+              label={documentoRotulo}
               optional
               initialValue={revealed.cpf}
               inputMode="numeric"
-              placeholder="000.000.000-00"
+              placeholder={documentoPlaceholder}
               onSave={async (value) => {
                 const result = await atualizarContato(contatoId, { document: value });
                 if (result.ok) onPatched({ temDocumento: value.trim().length > 0 });
                 return result;
               }}
             />
-            <BirthDateAutoField
-              initialValue={revealed.nascimento}
-              onSave={async (value) => {
-                const result = await atualizarContato(contatoId, { birthDate: value });
-                if (result.ok) {
-                  onPatched({
-                    aniversario: value ? isoToMonthDay(value) : null,
-                  });
-                }
-                return result;
-              }}
-            />
+            {isPJ ? null : (
+              <BirthDateAutoField
+                initialValue={revealed.nascimento}
+                onSave={async (value) => {
+                  const result = await atualizarContato(contatoId, { birthDate: value });
+                  if (result.ok) {
+                    onPatched({
+                      aniversario: value ? isoToMonthDay(value) : null,
+                    });
+                  }
+                  return result;
+                }}
+              />
+            )}
           </div>
         ) : (
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
             <span className="flex items-center gap-1.5 text-15 text-ink">
-              {contact.temDocumento ? "CPF cadastrado" : "CPF não cadastrado"}
+              {contact.temDocumento
+                ? `${documentoRotulo} cadastrado`
+                : `${documentoRotulo} não cadastrado`}
             </span>
-            <span className="flex items-center gap-1.5 text-15 text-ink">
-              {contact.aniversario ? (
-                <>
-                  <CakeIcon className="size-4 text-muted" />
-                  Aniversário: {formatMonthDay(contact.aniversario)}
-                </>
-              ) : (
-                "Nascimento não informado"
-              )}
-            </span>
+            {isPJ ? null : (
+              <span className="flex items-center gap-1.5 text-15 text-ink">
+                {contact.aniversario ? (
+                  <>
+                    <CakeIcon className="size-4 text-muted" />
+                    Aniversário: {formatMonthDay(contact.aniversario)}
+                  </>
+                ) : (
+                  "Nascimento não informado"
+                )}
+              </span>
+            )}
             <Button
               variant="secondary"
               size="sm"

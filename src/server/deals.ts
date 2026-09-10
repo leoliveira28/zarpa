@@ -1,10 +1,11 @@
 'use server';
 
-import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   activities,
   contacts,
+  costCenters,
   dealContacts,
   deals,
   member,
@@ -678,6 +679,11 @@ const criarNegocioInput = z.object({
    * "Novo contato" (o `legacyStage: 'novo'`), que é o comportamento de sempre.
    */
   stageId: z.uuid('Escolha uma coluna do funil').optional(),
+  /**
+   * Fase 4a — centro de custo no nascimento (opcional: viagem PF nasce sem, e sem é o
+   * normal). Validado contra a lista do tenant dentro da transação.
+   */
+  costCenterId: z.uuid('Centro de custo inválido').optional(),
 });
 
 export type CriarNegocioInput = z.infer<typeof criarNegocioInput>;
@@ -734,6 +740,31 @@ export async function criarNegocio(
         dados.stageId ? { stageId: dados.stageId } : 'novo',
       );
 
+      // Fase 4a — centro de custo informado tem que existir ATIVO no tenant. Arquivado
+      // não recebe negócio novo: aceitar seria o seletor da ficha mostrar um morto.
+      let centroDeCustoId: string | null = null;
+      if (dados.costCenterId) {
+        const [centro] = await tx
+          .select({ id: costCenters.id })
+          .from(costCenters)
+          .where(
+            and(
+              eq(costCenters.id, dados.costCenterId),
+              eq(costCenters.tenantId, tenantId),
+              isNull(costCenters.archivedAt),
+            ),
+          )
+          .limit(1);
+        if (!centro) {
+          throw new ServiceError(
+            'DADOS_INVALIDOS',
+            'Esse centro de custo não existe (ou está arquivado).',
+            { campo: 'costCenterId', correcao: 'Escolher outro centro de custo' },
+          );
+        }
+        centroDeCustoId = centro.id;
+      }
+
       if (alvo.isWon || alvo.isLost) {
         throw new ServiceError('CONFLITO', 'Um negócio não nasce fechado.', {
           campo: 'stageId',
@@ -751,6 +782,7 @@ export async function criarNegocio(
           // Fase 3 (§5): o default é QUEM CRIOU. Reatribuir é outra ação — dono via
           // `atualizarNegocio` —, nunca este INSERT adivinhando.
           agentId: userId,
+          costCenterId: centroDeCustoId,
           title: dados.title,
           destination: dados.destination?.trim() || null,
           currency: dados.currency?.toUpperCase() ?? 'BRL',
@@ -870,6 +902,13 @@ export type NegocioDetalhe = {
    */
   agentId: string | null;
   agentName: string | null;
+  /**
+   * Fase 4a — centro de custo do negócio, MESMO shape do vendedor acima (id + rótulo
+   * resolvidos no servidor; a ficha nunca monta o par sozinha). `null`/`null` = viagem
+   * sem centro de custo, o estado legítimo da maioria.
+   */
+  costCenterId: string | null;
+  costCenterLabel: string | null;
   createdAt: Date;
   updatedAt: Date;
   /** Mais recente primeiro. */
@@ -917,6 +956,9 @@ async function buscarNegocioDetalhe(tx: TenantDb, dealId: string): Promise<Negoc
       // reconcilia o select de vendedor na hora, com o valor recém-gravado.
       agentId: deals.agentId,
       agentName: user.name,
+      // Fase 4a: o MESMO LEFT JOIN do vendedor — a ficha lê o par (id, rótulo) pronto.
+      costCenterId: deals.costCenterId,
+      costCenterLabel: costCenters.label,
       createdAt: deals.createdAt,
       updatedAt: deals.updatedAt,
     })
@@ -924,6 +966,7 @@ async function buscarNegocioDetalhe(tx: TenantDb, dealId: string): Promise<Negoc
     .innerJoin(contacts, eq(contacts.id, deals.contactId))
     .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
     .leftJoin(user, eq(user.id, deals.agentId))
+    .leftJoin(costCenters, eq(costCenters.id, deals.costCenterId))
     .where(eq(deals.id, dealId))
     .limit(1);
 
@@ -992,6 +1035,12 @@ const atualizarNegocioInput = z.object({
    * validado contra o `member` do tenant — não existe reatribuir para estranho.
    */
   agentId: z.uuid('Agente inválido.').nullable().optional(),
+  /**
+   * Fase 4a — centro de custo da viagem. Diferente do vendedor, ATRIBUIR não é só do
+   * dono: classificar a viagem num setor é trabalho do dia a dia de quem vende. `null`
+   * limpa (viagem PF não tem e nunca terá).
+   */
+  costCenterId: z.uuid('Centro de custo inválido.').nullable().optional(),
 });
 
 export type NegocioPatch = z.infer<typeof atualizarNegocioInput>;
@@ -1124,6 +1173,32 @@ export async function atualizarNegocio(
         }
         valores.agentId = dados.agentId;
         mudou.push('agentId');
+      }
+      if (dados.costCenterId !== undefined) {
+        if (dados.costCenterId !== null) {
+          // Mesma guarda do `criarNegocio`: tem que ser da casa e estar ativo — arquivado
+          // recebe negócio que já o usa, mas não recebe um novo.
+          const [centro] = await tx
+            .select({ id: costCenters.id })
+            .from(costCenters)
+            .where(
+              and(
+                eq(costCenters.id, dados.costCenterId),
+                eq(costCenters.tenantId, tenantId),
+                isNull(costCenters.archivedAt),
+              ),
+            )
+            .limit(1);
+          if (!centro) {
+            throw new ServiceError(
+              'DADOS_INVALIDOS',
+              'Esse centro de custo não existe (ou está arquivado).',
+              { campo: 'costCenterId', correcao: 'Escolher outro centro de custo' },
+            );
+          }
+        }
+        valores.costCenterId = dados.costCenterId;
+        mudou.push('costCenterId');
       }
 
       if (mudou.length === 0) {
@@ -1425,6 +1500,48 @@ export async function removerClienteDoNegocio(
       });
 
       return { dealId: negocioId, clientes: await listaClientesDoNegocio(tx, negocioId) };
+    });
+  });
+}
+
+/**
+ * Leitura LEVE da lista de clientes de um negócio (0021, furo da nina): o editor de
+ * proposta precisa reconciliar a lista a cada adição/remoção e NÃO precisa do negócio
+ * inteiro (`obterNegocio` carrega funil, opções, blocos e datas para isso). É a mesma
+ * `listaClientesDoNegocio` que a ficha usa — a ordem vem de lá, e é a MESMA da chave
+ * `clientes` da função pública.
+ *
+ * LEITURA — sem gate de dunning (mesmo desenho de `obterNegocio`). Negócio de outro
+ * tenant é `NAO_ENCONTRADO` com a mesma mensagem de sempre — a policy transforma
+ * "existe em outro lugar" em "não existe".
+ */
+export async function listarClientesDoNegocio(
+  dealId: string,
+): Promise<ServiceResult<ClientesDoNegocio>> {
+  return comoResultado(async () => {
+    const { tenantId } = await requireAuthContext();
+    const parsed = z.uuid('Negócio inválido.').safeParse(dealId);
+    if (!parsed.success) {
+      throw new ServiceError('DADOS_INVALIDOS', 'Negócio inválido.', {
+        campo: 'negocioId',
+        correcao: 'Abrir o negócio de novo',
+      });
+    }
+
+    return withTenant(tenantId, async (tx) => {
+      const [negocio] = await tx
+        .select({ id: deals.id })
+        .from(deals)
+        .where(eq(deals.id, dealId))
+        .limit(1);
+
+      if (!negocio) {
+        throw new ServiceError('NAO_ENCONTRADO', 'Esse negócio não existe mais.', {
+          correcao: 'Voltar para o funil',
+        });
+      }
+
+      return { dealId, clientes: await listaClientesDoNegocio(tx, dealId) };
     });
   });
 }
