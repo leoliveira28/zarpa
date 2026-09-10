@@ -1,5 +1,108 @@
 # Status — Rafa (backend / plataforma)
 
+## 2026-09-09 (fim de noite) — um negócio, vários clientes (0020)
+
+**Veredito: PRONTO.** `npx tsc --noEmit`: zero erros (`tsc_exit=0`). Suíte **629/629**
+(34 arquivos; +17 testes nos 2 arquivos novos). `npm run db:migrate` aplicando limpa
+(**31 tabelas**, todas com RLS habilitado E forçado); `npm run db:seed` rodou 3x
+(idempotente, contagens de sanidade batendo). **Nada commitado** — ordem do
+coordenador. Sem browser (PO testa).
+
+### Pronto
+
+1. **`drizzle/0020_negocio_varios_clientes.sql`** (idx 20): `deal_contacts` com PK
+   COMPOSTA `(deal_id, contact_id)` (a própria PK é o unique que recusa duplicado),
+   FKs `tenants` CASCADE / `deals` CASCADE / `contacts` RESTRICT, `principal`
+   boolean, `created_at` timestamptz, índice na FK `contact_id` e partial unique
+   `deal_contacts_deal_principal_key` — **um principal por negócio é garantia de
+   BANCO, não de aplicação**. RLS ENABLE+FORCE + policy `deal_contacts_isolation`
+   (USING e WITH CHECK padrão da casa) na MESMA migration. Backfill: uma linha
+   principal por deal existente (DO block padrão da 0016, `ON CONFLICT DO NOTHING`)
+   + verificação que RAISE se algum deal ficou sem principal.
+2. **`proposta_publica` emendada** (CREATE OR REPLACE, corpo da 0017 preservado
+   byte a byte exceto a chave nova): payload ganha `clientes` — `jsonb_agg` de
+   `contacts.name` e SÓ nome, `ORDER BY principal DESC, created_at ASC` (principal
+   primeiro). REVOKE/GRANT reemitidos.
+3. **Actions** (`src/server/deals.ts`, seção 4c): `adicionarClienteAoNegocio` /
+   `removerClienteDoNegocio` — zod antes da transação, gate de dunning como PRIMEIRA
+   linha do `withTenant`, recusas com code certo (duplicado/principal = CONFLITO,
+   ausente = NAO_ENCONTRADO), corrida de clique duplo capturada no 23505 e traduzida
+   para o MESMO CONFLITO, auditoria `deal.contact_added`/`deal.contact_removed`
+   (só ids, nunca nome/telefone). Retorno `ClientesDoNegocio` com a lista já
+   atualizada. `NegocioDetalhe.clientes` (principal primeiro, telefone CRU de
+   `whatsapp ?? phone` — o link `wa.me` segue sendo trabalho de `waMeLink()` no
+   cliente), `NegocioDoFunil.clientesSecundarios` (subquery `count(*)::int` — o
+   `::int` é obrigatório, `count` volta string pelo driver). `criarNegocio` planta a
+   linha principal (invariante mantida para negócio novo).
+4. **Seed**: casal Ana e Carlos no tenant A (negócio "Bariloche", proposta enviada
+   com 2 visitas, follow-up agendado) e Cecília e Jorge no tenant B ("Bonito",
+   enviada com 1 visita) — os dois com a linha secundária gravada, para o PO testar
+   "Preparado para" e a escolha de destinatário no WhatsApp. `criarNegocio` do seed
+   planta a principal em TODO negócio semeado; contagem de sanidade ganhou
+   `linhasDeClientes` (A: 11 negócios/12 linhas, B: 4/5 — bateu).
+5. **Testes (2 arquivos, 17 testes)**: `tests/deals/clientes.test.ts` (caminho
+   feliz com ordem e telefone cru, duplicado, principal intocável nos dois sentidos
+   com a linha provada no banco, gate `past_due` sem escrever nada, isolamento
+   NAO_ENCONTRADO) e `tests/security/deal-contacts-rls.test.ts` (catálogo
+   ENABLE+FORCE, policy ÚNICA com USING/WITH CHECK, SELECT cruzado zero linhas,
+   INSERT cruzado 42501, fechado sem contexto, invariantes do banco, e a pública
+   com canários nos DOIS contatos: nomes na ordem, scan vazio, JSON bruto sem
+   telefone/e-mail, e o GUC da função provado morto após o statement via conexão
+   reservada em autocommit).
+
+### Decisões que tomei sozinha
+
+1. **Contexto de tenant DENTRO da `proposta_publica`** em vez de policy nova: a
+   função resolve `v_tenant_id` junto do guard e faz
+   `PERFORM set_config('app.tenant_id', v_tenant_id::text, true)` antes de ler os
+   nomes. Motivo: com FORCE RLS, SECURITY DEFINER sozinho veria ZERO linhas de
+   `deal_contacts` (FORCE vale para o dono) — e a alternativa era criar policy
+   permissiva nova por tabela, que entraria na allowlist de escape hatches do Téo
+   (`tests/security/rls-checks.ts`, arquivo dele). `is_local=true` morre com o
+   statement do chamador (autocommit), e há TESTE provando a pós-condição
+   (`deal-contacts-rls.test.ts`, "morre com o statement"). Zero GUC novo, zero
+   policy nova — a auditoria de RLS do Téo passa intocada.
+2. **PK composta em vez de `id` + unique**: a chave real da relação É o par
+   `(deal_id, contact_id)`; coluna `id` não tem consumidor nenhum. O "add cliente"
+   do editor nunca precisou de id de linha.
+3. **Sem `activities` para add/remove de cliente**: o enum de `activities.type` não
+   tem valor que caiba ("contact_added" fabricaria nota na timeline sem semântica de
+   timeline), e o `audit_log` é o rastro de verdade. Se o PO quiser a linha na
+   timeline, vira valor novo de enum (migration) — registrado como pendência dele.
+4. **Telefone CRU no `ClienteDoNegocio`**, sem formatar: sanitizar no servidor
+   criaria segunda regra de formato; `waMeLink()` já é a regra (mesma doutrina dos
+   cards do funil).
+5. **Testes da feature moram em `tests/`** (fronteira do Téo) porque o coordenador
+   atribuiu os testes desta feature a mim. Não alterei NENHUM arquivo de teste dele:
+   `rls-checks.ts` e `public-proposal.test.ts` intocados e verdes.
+
+### Riscos
+
+1. **`seedTenantRows` do Téo agora semeia `deal_contacts`** (a varredura acha
+   qualquer tabela com `tenant_id`). Confirmei pelo mecanismo (`topoSortByForeignKeys`
+   resolve as duas FKs NOT NULL) e a suíte completa passou — mas se um dia ele mudar
+   a fábrica de linhas, é a tabela nova que quebra primeiro.
+2. **`payload.clientes` é chave OBRIGATÓRIA desde a 0020.** Cache de payload antigo
+   não existe (a função roda a cada leitura), mas quem consumir `PropostaPublica`
+   de um payload recebido por JSON antigo vai ver `clientes` undefined — só afeta
+   dev local com dado pré-0020, não produção (não existe produção ainda).
+3. **Trocar titular continua impossível de propósito** (`deals.contact_id`
+   imutável). Se o PO pedir "a Ana que virou a titular", é rodada nova com decisão
+   de auditoria/venda — não é bug desta.
+
+### O que precisa dos outros
+
+- **Nina**: §15 do handoff (`docs/handoffs/rafa-para-nina.md`) tem os shapes exatos —
+  add/remover cliente nos dois editores, "Preparado para Ana e Carlos" no `/p/[slug]`
+  e no roteiro, card "Ana +2", menu de destinatário no WhatsApp quando houver >1
+  cliente com telefone.
+- **PO**: (a) add/remove de cliente aparece na timeline do negócio? Hoje só em
+  `audit_log`; (b) troca de titular (item 3 de Riscos) entra em alguma rodada?
+- **Téo**: nada a fazer — nenhuma allowlist mudou. Fica o aviso do risco 1 sobre o
+  seed sintético da tabela nova.
+
+---
+
 ## 2026-09-09 (noite) — micro-rodada: os 2 furos de contrato da rodada da Nina
 
 **Veredito: PRONTO.** `npx tsc --noEmit`: zero erros no repositório. Suíte **606/606**

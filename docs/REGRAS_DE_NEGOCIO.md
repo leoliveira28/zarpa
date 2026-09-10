@@ -69,7 +69,11 @@ chave sem migração.
 
 ### Negócio (`deals`) — a oportunidade de venda
 
-Um negócio nasce de um contato e representa **uma viagem em negociação**. Estágios:
+Um negócio nasce de um ou mais contatos — casal, família ou amigos dividindo a
+mesma viagem (N:N em `deal_contacts`; o contato de criação é o cliente
+**principal**, fixo; secundários se adicionam e removem; relatórios e ranking
+contam pelo principal para não vender a mesma viagem duas vezes) — e representa
+**uma viagem em negociação**. Estágios:
 `novo → cotando → proposta_enviada → negociando → ganho` ou `perdido`. `perdido` não é
 uma coluna do funil visual (kanban de 5 colunas) — é uma saída, e **o motivo da perda é
 obrigatório** para registrar (decisão de produto travada: perder venda sem registrar por

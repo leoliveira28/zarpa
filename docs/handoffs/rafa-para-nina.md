@@ -820,3 +820,114 @@ type QuebraPorVendedor =
   o tenant antigo. O caso dominante (convidado sem conta) está inteiro via signup. O PO
   precisa decidir entre bloquear convite a quem já tem conta ou trocar de tenant no
   aceite — está no meu handoff para ele.
+
+## 15. Um negócio, vários clientes — "Preparado para Ana e Carlos" (2026-09-09)
+
+Casal, família, amigos: a viagem tem dois CPFs na cabine e um orçamento só. A fonte de
+verdade agora é a N:N `deal_contacts` (`drizzle/0020_negocio_varios_clientes.sql`), e o
+"adicionar cliente" dos SEUS dois editores (proposta e negócio) grava nela via as duas
+actions novas abaixo. Nada de estado local na tela — a lista vem do servidor.
+
+### 15.1 O principal continua sendo o principal
+
+- `deals.contact_id` segue sendo o cliente TITULAR — **imutável nesta rodada**. Relatório,
+  ranking e ficha continuam lendo por ele.
+- A linha principal em `deal_contacts` é o ESPELHO dele (`principal: true`), plantada por
+  `criarNegocio` e garantida no banco por partial unique. Você não cria nem edita essa
+  linha na mão — ela existe para a lista ser completa e ordenável.
+- Secundário entra e sai quando quiser. **Trocar o titular não existe** — se o PO pedir,
+  é outra rodada (auditoria, venda e proposta amarram no titular).
+
+### 15.2 As duas actions (são as MESMAS para os dois editores)
+
+```ts
+import { adicionarClienteAoNegocio, removerClienteDoNegocio } from '@/server'
+
+// ServiceResult<ClientesDoNegocio>
+const r = await adicionarClienteAoNegocio({ negocioId: dealId, contatoId })
+// ServiceResult<ClientesDoNegocio>
+const r2 = await removerClienteDoNegocio({ negocioId: dealId, contatoId })
+
+export type ClientesDoNegocio = {
+  dealId: string
+  /** Lista JÁ ATUALIZADA — reconcile o estado local com ela, sem reconsultar. */
+  clientes: ClienteDoNegocio[]
+}
+
+export type ClienteDoNegocio = {
+  contactId: string
+  nome: string
+  /**
+   * Valor CRU de `whatsapp ?? phone` — SEM formatação, SEM link. Monte o link com
+   * `waMeLink(telefone)` (src/lib/ui/whatsapp.ts) no clique, como nos cards do funil.
+   * `null` em contato sem telefone nenhum.
+   */
+  telefone: string | null
+  principal: boolean
+}
+```
+
+Recusas, com a mensagem e o `correcao` já prontos (toque no ServiceError, não reescreva):
+
+| Caso | code | Mensagem |
+|---|---|---|
+| Contato já está na lista | `CONFLITO` | "Esse contato já está neste negócio." (correção "Fechar") |
+| Contato É o titular | `CONFLITO` | "Esse contato já é o cliente principal deste negócio." |
+| Remover o titular | `CONFLITO` | "O cliente principal não sai da lista. Edite o negócio para trocar o titular." |
+| Não está na lista | `NAO_ENCONTRADO` | "Esse contato não está neste negócio." (correção "Recarregar a lista") |
+| Negócio/contato de outro tenant ou apagado | `NAO_ENCONTRADO` | igual às outras actions de negócio |
+| Conta em dunning | `ASSINATURA_INATIVA` | o gate de sempre (§10/§12) — recusa ANTES de escrever |
+
+Clique duplo é seguro: duas chamadas simultâneas viram um CONFLITO, não um 500 (a PK do
+par recusa, e o servidor traduz).
+
+### 15.3 Onde a lista aparece (shapes já no ar)
+
+- **Ficha do negócio** — `NegocioDetalhe.clientes: ClienteDoNegocio[]`, principal
+  PRIMEIRO, secundários na ordem de entrada. É daqui que o editor de negócio monta a
+  lista com os botões de remover (nunca remova o `principal: true` — o servidor recusa,
+  mas o botão nem deveria existir para ele).
+- **Card do funil** — `NegocioDoFunil.clientesSecundarios: number` (0 = como hoje).
+  O card mostra "Ana +2"; o nome continua sendo `contactName`.
+- **`obterNegocio` / `atualizarNegocio`** — o retorno completo já traz `clientes`
+  (mesma leitura compartilhada), então o autosave da ficha reconcilia de graça.
+
+### 15.4 Proposta pública — "Preparado para Ana e Carlos"
+
+`PropostaPublica` (`@/server`, `publicProposals.ts`) ganhou uma chave OBRIGATÓRIA:
+
+```ts
+export type PropostaPublica = {
+  proposal: PropostaPublicaMeta
+  brand: PropostaPublicaBrand
+  options: PropostaPublicaOpcao[]
+  blocks: PropostaPublicaBloco[]
+  clientes: string[]   // NOMES, principal primeiro, depois ordem de entrada
+}
+```
+
+- `/p/[slug]` e o roteiro renderizam "Preparado para Ana e Carlos" com essa lista
+  (`clientes.join(' e ')` cobre o caso de 1, 2 e 3+ — para 3+, "Ana, Carlos e Débora" se
+  você quiser caprichar; com 1 nome, só o nome).
+- **Nela não há telefone, e-mail nem documento — de cliente algum.** O teste de
+  vazamento (`tests/security/deal-contacts-rls.test.ts`) planta canários nos DOIS
+  contatos da fixture e varre o payload inteiro. Se um dia aparecer um e-mail ali, a
+  suíte fica vermelha antes do cliente ver.
+- `PropostaPublica.clientes` é OBRIGATÓRIA no tipo: proposta de cliente único sai com
+  `['Ana']` (a função pública sempre devolve a chave, desde a 0020).
+
+### 15.5 WhatsApp com casal — escolher o destinatário
+
+Se `NegocioDetalhe.clientes` tiver MAIS de um cliente COM telefone, o envio por
+WhatsApp vira ESCOLHA de destinatário: um item por cliente com telefone (nome + número
+via `waMeLink`), o principal em primeiro. Com só um telefone, comportamento de hoje,
+sem novo passo. Sugestão mínima viável: um pequeno menu Radix (`DropdownMenu`) no
+ponto onde hoje abre o `wa.me` direto — aparece SÓ quando há mais de um destinatário.
+
+### 15.6 O que NÃO existe (para não procurar)
+
+- `clientes` no card do funil — lá é só o NÚMERO (`clientesSecundarios`); a lista
+  completa é na ficha.
+- Troca de titular, "cliente principal do secundário", divisão de valores por cliente,
+  convidar cliente por e-mail/telefone direto do editor — fora desta rodada.
+- Escolha de destinatário gravada no servidor: é decisão de tela, por envio.
