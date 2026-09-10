@@ -183,6 +183,13 @@
       "when": 1759536000000,
       "tag": "0025_grupos",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1759622400000,
+      "tag": "0026_ofertas",
+      "breakpoints": true
     }
   ]
 }

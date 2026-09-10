@@ -76,6 +76,13 @@ export const KNOWN_ESCAPE_HATCHES: { table: string; policy: string }[] = [
   // FOR SELECT, alcance mínimo (id/tenant_id/status) — a baixa em `invoices`/
   // `receivables` passa por `withTenant` real na sequência. Espelho da policy da 0010.
   { table: 'public.invoices', policy: 'invoices_webhook_read' },
+  // Fit 7 — a vitrine conta lugares restantes da oferta-grupo dentro das funções
+  // DEFINER `vitrine_publica`/`oferta_publica` (0026): groups/group_members são FORCE
+  // RLS e a página pública não tem sessão. GUC só ligado dentro das funções; o payload
+  // leva a CONTAGEM, nunca linha de grupo nem nome de membro.
+  { table: 'public.offers', policy: 'offers_public_read' },
+  { table: 'public.groups', policy: 'groups_public_read' },
+  { table: 'public.group_members', policy: 'group_members_public_read' },
   // S3/S5 — acervo global da biblioteca (`drizzle/0003_construtor_de_proposta.sql`). O GUC
   // `app.platform_context` não é ligado por nenhum caminho do código hoje (sem tela de
   // administração no v1) — existe para o dia em que alguém precisar administrar o acervo

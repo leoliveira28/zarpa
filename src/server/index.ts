@@ -387,3 +387,14 @@ export {
   type AtualizarGrupoInput,
   type MembroInput,
 } from './groups';
+export {
+  criarOferta,
+  listarOfertas,
+  obterOferta,
+  atualizarOferta,
+  publicarOferta,
+  reordenarOfertas,
+  urlDaVitrine,
+  type OfertaResumo,
+  type BlocoDeOferta,
+} from './offers';

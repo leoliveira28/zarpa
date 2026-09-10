@@ -1,5 +1,53 @@
 # Nina — status
 
+## 2026-09-11 — Rodada 7a da Vitrine: o catálogo público do agente
+
+Ok do PO no Fit 7 (`docs/FIT7_VITRINE.md`) virou rodada. O agente solo agora
+tem a página pública dele: monta as ofertas com os MESMOS blocos do construtor
+de proposta, publica, e divulga UM link.
+
+**Migration 0026** (`drizzle/0026_ofertas.sql`, aplicada no dev e no teste —
+36 tabelas): `offers` (título, tipo pacote/voo/hospedagem/transfer/serviço,
+preço fotografia, `blocks` snapshot do documento INTEIRO — mesma forma de
+`proposal_templates.blocks` —, `public_token` opaco global, ordem manual,
+`group_id` nullable SET NULL: **a oferta pode SER um grupo com lugares**).
+`published_at`/`unpublished_at` são o interruptor, semântica no serviço.
+
+**LEITURA PÚBLICA — as três lições da função SQL (todas de teste):**
+1. **FORCE RLS alcança a função DEFINER**: `tenants` é FORCE RLS e a vitrine
+   resolve o tenant POR SLUG sem sessão — a função liga o MESMO GUC
+   `app.auth_context` da porta `tenants_auth_service` (0000), alcance mínimo.
+2. **`groups`/`group_members` idem**: o "restam N" da oferta-grupo precisa ler
+   a ocupação — policies `groups_public_read`/`group_members_public_read`
+   sob o GUC de contexto público, e o payload leva a CONTAGEM, nunca linha
+   nem nome. Todas registradas em `KNOWN_ESCAPE_HATCHES` com o porquê — o
+   guarda de RLS pegou as três (offers, groups, group_members).
+3. **drizzle-kit não reaplica função**: migration que muda função precisa de
+   OR REPLACE (a 0026 já foi escrita assim) — no dev, reapliquei à mão.
+
+**Serviço (`src/server/offers.ts`):** CRUD do documento inteiro (autosave
+idempotente), publicar/despublicar, reordenar, token público de 128 bits.
+Leitura pública SÓ pelas funções DEFINER — nenhuma action lê sem tenant.
+
+**UI:** `/vitrine` (lista com o link da página na cabeça para copiar,
+publicar/despublicar de um toque) + editor em sheet com os blocos
+(kind/título/campos de conteúdo via `CONTENT_FIELDS` — o MESMO vocabulário do
+construtor). Públicas: `/a/[slug]` (catálogo em cards com preço — o layout
+dos players verificado no plano) e `/a/[slug]/o/[token]` (hero, preço com UMA
+régua, blocos via `PublicBlockSection`, CTA "Tenho interesse" via WhatsApp da
+agência — o interesse com Google é a 7b; despublicada responde "não
+disponível" + link do catálogo, nunca 404 seco).
+
+**Números:** 4 testes novos (`tests/offers/vitrine.test.ts` — cria/atualiza o
+documento, publicar↔despublicar muda a leitura na hora, oferta-grupo com
+"restam N" da ocupação, isolamento: catálogo por slug, token cruzado
+invisível, e a varredura crua SEM GUC vendo ZERO linhas); **696/696**; build
+limpo; lint zerado nos meus.
+
+**7b (próxima):** interesse com Google SEM sessão (identidade verificada →
+contato + tag → Interessados → funil); depende da credencial OAuth do PO —
+sem ela, sai com fallback nome+WhatsApp.
+
 ## 2026-09-10 (fim da noite) — Rodada 6a dos Grupos: o pacote com lugares
 
 Ok do PO na meta (`docs/GRUPOS_META.md`) virou rodada. O grupo é agora o
