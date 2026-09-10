@@ -197,7 +197,10 @@ export function ImportWizard() {
               </span>
               <span>{preview.totalLinhas} linhas</span>
               <span>
-                lido como {preview.encoding} · separador &ldquo;{preview.delimitador}&rdquo;
+                lido como {preview.formato}
+                {preview.encoding && preview.delimitador
+                  ? ` · encoding ${preview.encoding} · separador “${preview.delimitador}”`
+                  : null}
               </span>
             </div>
           </Card>
@@ -396,14 +399,14 @@ function Dropzone({ onFile, busy }: { onFile: (file: File) => void; busy: boolea
       <div>
         <p className="text-15 font-medium text-ink">Toque para escolher a planilha</p>
         <p className="mt-1 text-13 text-muted">
-          .csv exportado do Excel, Google Sheets ou Otoos — vírgula ou ponto e vírgula, tanto
-          faz
+          .csv ou .xlsx exportado do Excel, Google Sheets ou Otoos — no CSV, vírgula ou
+          ponto e vírgula, tanto faz
         </p>
       </div>
       <input
         ref={inputRef}
         type="file"
-        accept=".csv,text/csv"
+        accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         className="sr-only"
         disabled={busy}
         onChange={(event) => {

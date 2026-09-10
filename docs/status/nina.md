@@ -1,5 +1,40 @@
 # Nina — status
 
+## 2026-09-10 (fim de tarde) — Importação aceita .xlsx (pedido antigo, fechado)
+
+O PO tentou importar planilha e "não funcionava": reproduzi no navegador com o
+usuário dev e o CSV ia de ponta a ponta (2 criados) — o bloqueio era a recusa
+de propósito do `.xlsx`, registrada desde o cabeçalho de `imports.ts` como
+"falta biblioteca de parsing". Fechado assim:
+
+**Leitor mínimo próprio (`src/server/xlsx.ts`), SEM SheetJS.** A distribuição
+`xlsx` do npm parou na 0.18.5 (CVEs de prototype pollution consertadas só na
+0.20.x, que a SheetJS não publica no npm) — dependência por URL avulsa não é
+caminho nesta casa. Um `.xlsx` é um ZIP de XML (ECMA-376): `fflate` deszipa
+(dependência agora DIRETA; já vivia na árvore como transitiva) e ~150 linhas
+de parse leem as quatro partes que a importação precisa — workbook (primeira
+aba), rels (qual arquivo é ela), sharedStrings e a sheet. Célula pulada vira
+`''` sem desalinhar cabeçalho (o índice vem do atributo `r`); texto rico
+(`<si><r>`) concatena os `<t>`; entidades decodificadas. **Data chega como o
+serial cru do Excel (`29126`) — e `parseDataFlexivel` (`serialExcelParaIso`)
+já o interpretava desde a 0001**, então zero código de data novo. `.xls`
+binário segue recusado com correção ("salvar como .xlsx").
+
+**Formato cego ao pipeline.** `lerPlanilha` devolve o MESMO `string[][]` do
+`parseCsv`; o `import_batches` já tinha CHECK `('csv','xlsx')` e `delimiter`
+nullable — o schema esperava este dia. A prévia mostra "lido como xlsx" (sem
+encoding/delimitador, nulos no tipo); `accept` da Dropzone e textos atualizados.
+
+**Bug meu que o teste pegou:** o helper `casarBlocos` assume DOIS grupos de
+captura e os regex de `<si>`/`<t>` tinham um — dicionário vazio, colunas em
+branco. O teste de fixture (montado com `zipSync` do próprio fflate) pegou na
+hora.
+
+**Verificação:** 3 testes novos (`tests/imports/xlsx.test.ts` — prévia,
+confirmação com serial de data, recusa de zip mentiroso e de `.xls`);
+657/657; build limpo; e o fluxo REAL no navegador com `dev@zarpa.local`:
+prévia mapeando colunas, confirmação, 2 contatos criados.
+
 ## 2026-09-10 (tarde) — Fase 4a: PJ no contato + centro de custo
 
 O ok do PO no plano (`docs/FASE4_PJ.md`) virou código na mesma sessão. Duas

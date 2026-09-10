@@ -9,6 +9,7 @@ import { exigirContaAtiva } from './subscriptionGate';
 import { registrarAuditoria } from './audit';
 import { cpfValido, ehVazio, normalizarEmail, normalizarTexto, parseDataFlexivel } from './normalize';
 import { camposDocumentoDoContato, camposNascimento } from './piiFields';
+import { linhasDoXlsx } from './xlsx';
 import {
   decodificarArquivo,
   detectarDelimitador,
@@ -40,9 +41,10 @@ import {
  * temporário em algum lugar — não há uma sessão de importação por trás, só uma função
  * pura de (arquivo, mapeamento) para relatório.
  *
- * **XLSX**: ainda não suportado — falta biblioteca de parsing (pedido em
- * `docs/handoffs/rafa-para-po.md`). Um `.xlsx` recebido devolve erro claro com a correção
- * ("exportar como CSV"), nunca tenta interpretar o binário como texto.
+ * **XLSX**: suportado desde a Fase 4a (`src/server/xlsx.ts`, leitor mínimo próprio com
+ * `fflate` — sem SheetJS/npm, que parou numa versão com CVEs). A célula chega como
+ * string crua no MESMO shape de `parseCsv`, então todo o pipeline abaixo é cego ao
+ * formato; data em serial do Excel cai no `parseDataFlexivel`, que já o interpretava.
  */
 
 export type CampoContatoImportavel =
@@ -60,9 +62,10 @@ export type Mapeamento = Record<string, MapeamentoColuna>;
 
 export type PreviaImportacao = {
   arquivoNome: string;
-  formato: 'csv';
-  encoding: Encoding;
-  delimitador: string;
+  formato: 'csv' | 'xlsx';
+  /** `null` no xlsx: é binário zipado, sem encoding de texto nem delimitador. */
+  encoding: Encoding | null;
+  delimitador: string | null;
   colunas: string[];
   mapeamentoSugerido: Mapeamento;
   totalLinhas: number;
@@ -153,25 +156,33 @@ function ehXlsx(arquivo: File): boolean {
   const nome = arquivo.name.toLowerCase();
   return (
     nome.endsWith('.xlsx') ||
-    nome.endsWith('.xls') ||
-    arquivo.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-    arquivo.type === 'application/vnd.ms-excel'
+    arquivo.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   );
 }
 
-function recusarXlsx(): never {
-  throw new ServiceError(
-    'DADOS_INVALIDOS',
-    'Arquivos .xlsx ainda não são aceitos aqui.',
-    {
-      campo: 'arquivo',
-      correcao: 'Abrir no Excel/Sheets e exportar como CSV (separado por vírgula ou ponto e vírgula)',
-    },
-  );
-}
-
-async function lerEDecodificar(arquivo: File): Promise<{ texto: string; encoding: Encoding; delimitador: string }> {
-  if (ehXlsx(arquivo)) recusarXlsx();
+/**
+ * Lê a planilha em linhas de string, CEGO ao formato — o shape de saída é o mesmo para
+ * CSV e xlsx (`string[][]`), e quem consome não pergunta de onde veio.
+ *
+ * `.xls` (binário do Excel 97-2003) segue recusado: outro formato inteiro, e a conversão
+ * para xlsx é um clique de "Salvar como" — a recusa diz isso.
+ */
+async function lerPlanilha(
+  arquivo: File,
+): Promise<
+  | { formato: 'csv'; linhas: string[][]; encoding: Encoding; delimitador: string }
+  | { formato: 'xlsx'; linhas: string[][] }
+> {
+  if (arquivo.name.toLowerCase().endsWith('.xls')) {
+    throw new ServiceError(
+      'DADOS_INVALIDOS',
+      'Esse formato antigo (.xls) não é lido aqui.',
+      {
+        campo: 'arquivo',
+        correcao: 'Salvar como .xlsx ou exportar como CSV e escolher de novo',
+      },
+    );
+  }
 
   const bytes = Buffer.from(await arquivo.arrayBuffer());
   if (bytes.length === 0) {
@@ -181,10 +192,14 @@ async function lerEDecodificar(arquivo: File): Promise<{ texto: string; encoding
     });
   }
 
+  if (ehXlsx(arquivo)) {
+    return { formato: 'xlsx', linhas: linhasDoXlsx(bytes) };
+  }
+
   const encoding = detectarEncoding(bytes);
   const texto = decodificarArquivo(bytes, encoding);
   const delimitador = detectarDelimitador(texto);
-  return { texto, encoding, delimitador };
+  return { formato: 'csv', linhas: parseCsv(texto, delimitador), encoding, delimitador };
 }
 
 /**
@@ -196,8 +211,8 @@ export async function pravisualizarImportacao(arquivo: File): Promise<ServiceRes
   return comoResultado(async () => {
     await requireAuthContext();
 
-    const { texto, encoding, delimitador } = await lerEDecodificar(arquivo);
-    const linhas = parseCsv(texto, delimitador);
+    const lido = await lerPlanilha(arquivo);
+    const linhas = lido.linhas;
 
     if (linhas.length === 0) {
       throw new ServiceError('DADOS_INVALIDOS', 'Não encontrei nenhuma linha nesse arquivo.', {
@@ -219,9 +234,9 @@ export async function pravisualizarImportacao(arquivo: File): Promise<ServiceRes
 
     return {
       arquivoNome: arquivo.name,
-      formato: 'csv',
-      encoding,
-      delimitador,
+      formato: lido.formato,
+      encoding: lido.formato === 'csv' ? lido.encoding : null,
+      delimitador: lido.formato === 'csv' ? lido.delimitador : null,
       colunas: cabecalho,
       mapeamentoSugerido: sugerirMapeamento(cabecalho),
       totalLinhas: dados.length,
@@ -260,8 +275,8 @@ export async function confirmarImportacao(
 ): Promise<ServiceResult<RelatorioImportacao>> {
   return comoResultado(async () => {
     const { tenantId, userId } = await requireAuthContext();
-    const { texto, encoding, delimitador } = await lerEDecodificar(arquivo);
-    const linhas = parseCsv(texto, delimitador);
+    const lido = await lerPlanilha(arquivo);
+    const { linhas } = lido;
 
     if (linhas.length < 1) {
       throw new ServiceError('DADOS_INVALIDOS', 'Não encontrei nenhuma linha nesse arquivo.', {
@@ -496,9 +511,11 @@ export async function confirmarImportacao(
         .values({
           tenantId,
           filename: arquivo.name,
-          format: 'csv',
-          encoding,
-          delimiter: delimitador,
+          // O schema já esperava este dia: format tem CHECK ('csv','xlsx') e
+          // delimiter é null para xlsx. Encoding no xlsx é diagnóstico ('utf-8').
+          format: lido.formato,
+          encoding: lido.formato === 'csv' ? lido.encoding : 'utf-8',
+          delimiter: lido.formato === 'csv' ? lido.delimitador : null,
           entity: 'contacts',
           mapping: mapeamento,
           totalRows: dados.length,
