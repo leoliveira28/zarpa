@@ -99,7 +99,7 @@ export default async function OfertaPublicaPage({
           href={`${whatsapp}${mensagem ? `&text=${mensagem}` : ""}`}
           target="_blank"
           rel="noopener"
-          className="flex min-h-11 items-center justify-center rounded-md bg-accent px-6 text-15 font-medium text-paper"
+          className="flex min-h-11 items-center justify-center rounded-md bg-accent px-6 text-15 font-medium text-on-accent hover:bg-accent-hover"
         >
           Tenho interesse — falar com a agência
         </a>

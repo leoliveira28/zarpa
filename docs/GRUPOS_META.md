@@ -60,6 +60,33 @@ padrão:
 | 6a | `groups` + `group_members` (migration 0025), CRUD da ficha do grupo (`/grupos`), ocupação de lugares, vínculo com negócio |
 | 6b | Parcelamento por reserva (lendo as parcelas 5a), sub-aba Grupos nos Relatórios, chips no funil/ficha |
 
+## 5b. A associação grupo ↔ proposta/negócio — DECIDIDO (2026-09-11, revisão do PO)
+
+A pergunta: "vai associar uma proposta dentro do grupo ou grupo dentro da
+proposta? Senão o grupo fica solto". Resposta: **a cadeia é uma só, e o
+grupo fica no MEIO dela — no negócio, nunca na proposta**:
+
+    grupo (o pacote com lugares)
+      └── group_members (contato + deal_id, N lugares)   ← A ASSOCIAÇÃO É AQUI
+            └── deal (o negócio da reserva)
+                  ├── proposals (1..n, com opções)
+                  └── sales (a venda) → receivables (parcelas)
+
+- **Proposta NÃO se associa a grupo** — ela nasce de um deal, e o deal já é
+  membro do grupo. Associar proposta diretamente criaria dois caminhos para a
+  mesma verdade (e contagem dupla no relatório).
+- **A contabilização sobe pela cadeia**: proposta/venda pertencem ao deal →
+  o deal pertence ao grupo via `group_members` → o Relatório de Grupos soma as
+  vendas dos deals membros (6b, já no ar). Uma reserva = um deal = uma linha
+  de ocupação com N lugares; as vendas dele contam UMA vez para o grupo.
+- **Superfícies do vínculo**: chip na ficha do negócio e no card do funil
+  (6b, no ar); a ficha do grupo lista os membros com link para o deal; quando
+  a Vitrine 7b entrar, o interessado vira contato → negócio → membro, e a
+  cadeia se fecha sem novo mecanismo.
+- **O que o PO pediu a mais**: ao criar um negócio PARA um contato que já é
+  membro de um grupo, a ficha do grupo passa a sugerir "criar negócio" no
+  lugar do membro sem deal (rodada 7c, junto com a origem da oferta).
+
 ## 6. Fora de escopo, de propósito
 
 Assento específico/andaime de ônibus, lista de espera automática, portal do

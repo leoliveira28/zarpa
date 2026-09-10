@@ -1571,6 +1571,7 @@ async function semearVitrine(tx: TenantDb, tenantId: string): Promise<void> {
       type: oferta.type,
       priceCents: oferta.priceCents,
       summary: oferta.summary,
+      coverUrl: oferta.coverUrl,
       blocks: [],
       publicToken: `seed-${oferta.position}-${uuidv7()}`,
       position: oferta.position,
