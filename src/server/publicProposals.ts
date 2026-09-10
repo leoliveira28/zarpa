@@ -94,6 +94,15 @@ export type PropostaPublica = {
   brand: PropostaPublicaBrand;
   options: PropostaPublicaOpcao[];
   blocks: PropostaPublicaBloco[];
+  /**
+   * 0020 — os NOMES de todos os clientes do negócio ("Preparado para Ana e Carlos"),
+   * principal primeiro, depois a ordem de entrada. Nome e só nome: telefone, e-mail e
+   * documento de cliente (principal ou secundário) não têm caminho para o payload — a
+   * função pública seleciona `contacts.name` explicitamente, e o teste de vazamento
+   * (`tests/security/deal-contacts-rls.test.ts`) prova com canários plantados nos DOIS
+   * contatos. Ver o comentário de `'clientes'` na `drizzle/0020_negocio_varios_clientes.sql`.
+   */
+  clientes: string[];
 };
 
 /**

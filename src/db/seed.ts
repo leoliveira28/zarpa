@@ -62,6 +62,7 @@ import {
   activities,
   auditLog,
   contacts,
+  dealContacts,
   deals,
   importBatches,
   integrations,
@@ -259,7 +260,41 @@ async function criarNegocio(
       updatedAt: dados.criadoEm,
     })
     .returning({ id: deals.id });
-  return linha!.id;
+  const dealId = linha!.id;
+
+  // 0020 — a linha principal é o espelho de `deals.contact_id`: todo negócio nasce com
+  // ela (mesma invariante que `criarNegocio` em `src/server/deals.ts` planta e que o
+  // partial unique `deal_contacts_deal_principal_key` garante no banco).
+  await tx.insert(dealContacts).values({
+    tenantId,
+    dealId,
+    contactId: contatoId,
+    principal: true,
+    createdAt: dados.criadoEm,
+  });
+
+  return dealId;
+}
+
+/**
+ * 0020 — o SEGUNDO cliente do negócio (casal, família, amigos): entra como secundário
+ * na N:N `deal_contacts`, pelo mesmo caminho que `adicionarClienteAoNegocio` grava.
+ * O principal (`deals.contact_id`) nunca passa por aqui.
+ */
+async function adicionarClienteSecundario(
+  tx: TenantDb,
+  tenantId: string,
+  dealId: string,
+  contatoId: string,
+  criadoEm: Date,
+): Promise<void> {
+  await tx.insert(dealContacts).values({
+    tenantId,
+    dealId,
+    contactId: contatoId,
+    principal: false,
+    createdAt: criadoEm,
+  });
 }
 
 type OpcaoSeed = { name: string; priceCents: number; costCents: number; recommended?: boolean };
@@ -1254,6 +1289,75 @@ async function cenarioVoltaAoMundo(tx: TenantDb, tenantId: string, ownerId: stri
     ownerId,
   });
 
+  // --- Ana e Carlos: o CASAL (0020) — um negócio, dois clientes ----------------
+  // O "Preparado para Ana e Carlos": o negócio tem Ana como titular e Carlos como
+  // cliente secundário (`deal_contacts`, principal=false). A proposta pública devolve
+  // os dois NOMES e nenhum telefone/e-mail/documento — o teste de vazamento
+  // (`tests/security/deal-contacts-rls.test.ts`) planta canários nos dois contatos.
+  const ana = await criarContato(tx, tenantId, {
+    name: 'Ana Beatriz Fontes',
+    email: 'ana.fontes@exemplo.test',
+    phone: '+5511991002008',
+    document: '12312312387',
+    birthDate: '1986-06-14',
+    source: 'instagram',
+    tags: [...tag, 'casal'],
+    notes: 'Viaja com o Carlos. Ela decide, ele paga — mandar a proposta para os dois.',
+    criadoEm: daysFromNow(-12),
+  });
+  const carlos = await criarContato(tx, tenantId, {
+    name: 'Carlos Henrique Menezes',
+    email: 'carlos.menezes@exemplo.test',
+    phone: '+5511991002009',
+    document: '98765432100',
+    birthDate: '1984-10-02',
+    source: 'whatsapp',
+    tags: [...tag, 'casal'],
+    criadoEm: daysFromNow(-12),
+  });
+  const negocioCasal = await criarNegocio(tx, tenantId, ana, {
+    title: 'Aniversário de 10 anos em Bariloche',
+    destination: 'San Carlos de Bariloche, ARG',
+    stage: 'proposta_enviada',
+    valueCents: 12_800_000,
+    costCents: 9_600_000,
+    departureOn: isoDate(75),
+    returnOn: isoDate(82),
+    expectedCloseOn: isoDate(7),
+    criadoEm: daysFromNow(-12),
+  });
+  // O segundo cliente do casal — o mesmo INSERT que `adicionarClienteAoNegocio` faz.
+  await adicionarClienteSecundario(tx, tenantId, negocioCasal, carlos, daysFromNow(-11));
+  await criarProposta(tx, tenantId, negocioCasal, MARCA_VOLTA_AO_MUNDO, {
+    title: 'Bariloche — 7 noites de neve para dois',
+    summary: 'Sete noites com meia pensão no cerro Catedral, circuito chico e jantar de aniversário.',
+    options: [
+      { name: 'Essencial', priceCents: 11_200_000, costCents: 8_500_000 },
+      { name: 'Conforto', priceCents: 12_800_000, costCents: 9_600_000, recommended: true },
+    ],
+    blocks: [
+      { kind: 'text', title: 'Sobre a viagem', body: 'Sete noites na base do cerro Catedral, com neve garantida na temporada.' },
+      { kind: 'flight', title: 'Aéreo GRU × BRC', content: { cia: 'Aerolíneas', bagagem: '1x23kg', escalas: 1 }, optionName: 'Conforto' },
+      { kind: 'hotel', title: 'Hotel Nevado — 7 noites', content: { noites: 7, regime: 'meia pensão', categoria: '4 estrelas' }, optionName: 'Conforto' },
+      { kind: 'tour', title: 'Cerro Tronador e cascata de los Alerces', content: { duracao: 'dia inteiro', inclui: 'guia em português' }, optionName: 'Conforto' },
+    ],
+    sentAt: daysFromNow(-3),
+    validUntilDays: 12,
+    views: [
+      { quando: daysFromNow(-2), durationMs: 175_000 },
+      { quando: daysFromNow(-1), durationMs: 240_000 },
+    ],
+  });
+  await criarTarefa(tx, tenantId, {
+    dealId: negocioCasal,
+    contactId: ana,
+    title: 'Retomar Ana e Carlos sobre Bariloche',
+    notes: 'Ela quer travar a data antes do fim da validade da proposta.',
+    kind: 'whatsapp',
+    dueAt: em(1, 10, 0),
+    ownerId,
+  });
+
   // --- Acervo do construtor (library_items do tenant) --------------------------
   await tx.insert(libraryItems).values([
     {
@@ -1345,7 +1449,7 @@ async function cenarioVoltaAoMundo(tx: TenantDb, tenantId: string, ownerId: stri
     },
   ]);
 
-  console.log('[seed] tenant A: 8 contatos, 10 negócios (6 estágios), 8 propostas, 3 vendas, 2 roteiros, 16 lembretes.');
+  console.log('[seed] tenant A: 10 contatos, 11 negócios (6 estágios, um deles o casal Ana e Carlos), 9 propostas, 3 vendas, 2 roteiros, 17 lembretes.');
 }
 
 // ---------------------------------------------------------------------------
@@ -1474,6 +1578,65 @@ async function cenarioMareAlta(tx: TenantDb, tenantId: string, ownerId: string):
   });
   await criarAtividade(tx, tenantId, { dealId: negocioLençois, contactId: sonia, type: 'contact_created', body: 'Sônia chegou pelo Instagram.', metadata: { source: 'instagram' }, ocorreuEm: daysFromNow(-4), ownerId });
 
+  // --- Cecília e Jorge: o CASAL do tenant B (0020) — isolamento provado nos dois lados
+  // (o teste de vazamento da pública roda contra o tenant B e espera os nomes DELE).
+  const cecilia = await criarContato(tx, tenantId, {
+    name: 'Cecília Prado Meireles',
+    email: 'cecilia.meireles@exemplo.test',
+    phone: '+5581987650006',
+    document: '45645645600',
+    birthDate: '1979-02-18',
+    source: 'indicacao',
+    tags: ['mare-alta', 'casal'],
+    criadoEm: daysFromNow(-9),
+  });
+  const jorge = await criarContato(tx, tenantId, {
+    name: 'Jorge Amâncio Salles',
+    email: 'jorge.salles@exemplo.test',
+    phone: '+5581987650007',
+    document: '78978978932',
+    birthDate: '1977-08-25',
+    source: 'whatsapp',
+    tags: ['mare-alta', 'casal'],
+    criadoEm: daysFromNow(-9),
+  });
+  const negocioCasalB = await criarNegocio(tx, tenantId, cecilia, {
+    title: 'Lua de prata em Bonito',
+    destination: 'Bonito, MS',
+    stage: 'proposta_enviada',
+    valueCents: 7_900_000,
+    costCents: 5_900_000,
+    departureOn: isoDate(45),
+    returnOn: isoDate(49),
+    expectedCloseOn: isoDate(6),
+    criadoEm: daysFromNow(-9),
+  });
+  await adicionarClienteSecundario(tx, tenantId, negocioCasalB, jorge, daysFromNow(-8));
+  await criarProposta(tx, tenantId, negocioCasalB, MARCA_MARE_ALTA, {
+    title: 'Bonito — 4 noites para dois',
+    summary: 'Quatro noites com flutuação na Lagoa Misteriosa e gruta do Lago Azul.',
+    options: [
+      { name: 'Essencial', priceCents: 6_800_000, costCents: 5_100_000 },
+      { name: 'Completa', priceCents: 7_900_000, costCents: 5_900_000, recommended: true },
+    ],
+    blocks: [
+      { kind: 'text', title: 'Sobre a viagem', body: 'Quatro noites no centro de Bonito, com os dois passeios mais pedidos.' },
+      { kind: 'hotel', title: 'Pousada Águas de Bonito', content: { noites: 4, regime: 'café da manhã', categoria: '3 estrelas' }, optionName: 'Completa' },
+      { kind: 'tour', title: 'Flutuação na Lagoa Misteriosa', content: { duracao: 'meio período', inclui: 'equipamento e guia' }, optionName: 'Completa' },
+    ],
+    sentAt: daysFromNow(-2),
+    validUntilDays: 10,
+    views: [{ quando: daysFromNow(-1), durationMs: 130_000 }],
+  });
+  await criarTarefa(tx, tenantId, {
+    dealId: negocioCasalB,
+    contactId: cecilia,
+    title: 'Retomar Cecília e Jorge sobre Bonito',
+    kind: 'whatsapp',
+    dueAt: em(0, 17, 30),
+    ownerId,
+  });
+
   await tx.insert(libraryItems).values({
     tenantId,
     isGlobal: false,
@@ -1483,7 +1646,7 @@ async function cenarioMareAlta(tx: TenantDb, tenantId: string, ownerId: string):
     details: {},
   });
 
-  console.log('[seed] tenant B: 3 contatos, 3 negócios (3 estágios), 1 proposta aceita, 1 venda, 1 roteiro, 1 parcela atrasada.');
+  console.log('[seed] tenant B: 5 contatos, 4 negócios (3 estágios), 1 proposta aceita e 1 enviada (casal Cecília e Jorge), 1 venda, 1 roteiro, 1 parcela atrasada, 2 lembretes.');
 }
 
 // ---------------------------------------------------------------------------
@@ -1701,6 +1864,9 @@ async function main(): Promise<void> {
     withTenant(tenantId, async (tx) => ({
       contatos: (await tx.select({ id: contacts.id }).from(contacts)).length,
       negocios: (await tx.select({ id: deals.id }).from(deals)).length,
+      // 0020 — principais + secundários. Tem que ser `negocios + secundários` exatamente:
+      // 12 no tenant A (11 principais + Carlos), 5 no B (4 principais + Jorge).
+      linhasDeClientes: (await tx.select({ dealId: dealContacts.dealId }).from(dealContacts)).length,
       propostas: (await tx.select({ id: proposals.id }).from(proposals)).length,
       visitas: (await tx.select({ id: proposalViews.id }).from(proposalViews)).length,
       roteiros: (await tx.select({ id: itineraries.id }).from(itineraries)).length,

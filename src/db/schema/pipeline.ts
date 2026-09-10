@@ -8,6 +8,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -231,6 +232,46 @@ export const activities = pgTable(
 );
 
 /**
+ * `deal_contacts` — os clientes DO negócio (0020, `drizzle/0020_negocio_varios_clientes.sql`).
+ *
+ * Casal, família, amigos: a viagem tem dois CPFs na cabine e um orçamento só. A fonte de
+ * verdade da composição é esta N:N; `deals.contact_id` segue sendo o cliente PRINCIPAL
+ * (imutável nesta rodada — relatórios e ranking leem por ele) e a linha `principal = true`
+ * desta tabela é o ESPELHO dele: `criarNegocio` planta, o backfill da 0020 plantou o
+ * histórico, e o partial unique `deal_contacts_deal_principal_key` garante no BANCO que
+ * existe no máximo uma por negócio.
+ *
+ * PK composta `(deal_id, contact_id)`: a chave real da relação É o par — o índice único
+ * que recusa duplicado é a própria PK, e o lado quente ("clientes deste negócio") varre
+ * por ela. Sem coluna `id`: nenhum consumidor. Detalhes no comentário de topo da 0020.
+ */
+export const dealContacts = pgTable(
+  'deal_contacts',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    dealId: uuid('deal_id')
+      .notNull()
+      .references(() => deals.id, { onDelete: 'cascade' }),
+    /** RESTRICT: apagar contato não pode sumir com a composição de um negócio vendido. */
+    contactId: uuid('contact_id')
+      .notNull()
+      .references(() => contacts.id, { onDelete: 'restrict' }),
+    principal: boolean('principal').notNull().default(false),
+    /** Ordem de entrada: é como a ficha e a proposta ordenam os secundários. */
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.dealId, t.contactId] }),
+    index('deal_contacts_contact_id_idx').on(t.contactId),
+    uniqueIndex('deal_contacts_deal_principal_key')
+      .on(t.dealId)
+      .where(sql`${t.principal}`),
+  ],
+);
+
+/**
  * `pipeline_stages` — as colunas do funil, POR TENANT (S15, `drizzle/0015_estagios_do_funil.sql`).
  *
  * Hoje `deals.stage` é enum de texto com CHECK, e `COLUNAS_DO_FUNIL`
@@ -297,5 +338,7 @@ export type Task = typeof tasks.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;
 export type Activity = typeof activities.$inferSelect;
 export type NewActivity = typeof activities.$inferInsert;
+export type DealContact = typeof dealContacts.$inferSelect;
+export type NewDealContact = typeof dealContacts.$inferInsert;
 export type PipelineStage = typeof pipelineStages.$inferSelect;
 export type NewPipelineStage = typeof pipelineStages.$inferInsert;

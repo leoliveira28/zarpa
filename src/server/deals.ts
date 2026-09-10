@@ -1,8 +1,17 @@
 'use server';
 
-import { and, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { activities, contacts, deals, member, pipelineStages, user, type Deal } from '@/db/schema';
+import {
+  activities,
+  contacts,
+  dealContacts,
+  deals,
+  member,
+  pipelineStages,
+  user,
+  type Deal,
+} from '@/db/schema';
 import {
   filtroDeEscopoProprio,
   withTenant,
@@ -299,6 +308,18 @@ function ultimaAtividadeSql() {
   return sql<string | null>`(select max(a.occurred_at) from activities a where a.deal_id = deals.id)`;
 }
 
+/**
+ * Contagem de clientes SECUNDÁRIOS do negócio (0020) — o "+2" do card do funil
+ * ("Ana +2"). Mesmas ressalvas de `ultimaAtividadeSql()`: nomes de coluna LITERAIS
+ * (`deals.id`) porque `sql<>` como VALOR de `.select()` renderiza `${coluna}` sem
+ * qualificar a tabela, e alias quebraria a correlação — `.from(deals)` não tem alias.
+ * `::int` de propósito: `count(*)` volta `bigint` do Postgres e o driver entrega STRING
+ * (mesma armadilha do header do arquivo); o cast devolve `int4`, que chega como number.
+ */
+function clientesSecundariosSql() {
+  return sql<number>`(select count(*)::int from deal_contacts dc where dc.deal_id = deals.id and dc.principal = false)`;
+}
+
 // ---------------------------------------------------------------------------
 // 1) Board do funil
 // ---------------------------------------------------------------------------
@@ -320,6 +341,12 @@ export type NegocioDoFunil = {
   stagePosition: number;
   contactId: string;
   contactName: string;
+  /**
+   * 0020 — quantos clientes SECUNDÁRIOS acompanham o principal: o card mostra
+   * "Ana +2". O principal NÃO conta (ele já é `contactName`); zero é o negócio
+   * de cliente único de sempre.
+   */
+  clientesSecundarios: number;
   /**
    * Quem vende (Fase 3, §8): o monograma do card e o alternador "Meus / Time" leem
    * daqui. `null` em negócio sem vendedor definido (dado antigo/importado).
@@ -367,6 +394,7 @@ export async function listarNegociosDoFunil(): Promise<ServiceResult<NegocioDoFu
             updatedAt: deals.updatedAt,
             contactId: deals.contactId,
             contactName: contacts.name,
+            clientesSecundarios: clientesSecundariosSql(),
             agentId: deals.agentId,
             agentName: user.name,
             ultimaAtividadeEm: ultimaAtividadeSql(),
@@ -399,6 +427,7 @@ export async function listarNegociosDoFunil(): Promise<ServiceResult<NegocioDoFu
           stagePosition: linha.stagePosition,
           contactId: linha.contactId,
           contactName: linha.contactName,
+          clientesSecundarios: linha.clientesSecundarios,
           agentId: linha.agentId,
           agentName: linha.agentName,
           departureOn: linha.departureOn,
@@ -744,6 +773,18 @@ export async function criarNegocio(
 
       const negocio = criado!;
 
+      // 0020 — o espelho do principal nasce junto. `deals.contact_id` é o cliente
+      // principal, e a invariante "todo negócio tem exatamente uma linha principal em
+      // `deal_contacts`" é o que o backfill da 0020 plantou para o histórico e o
+      // partial unique `deal_contacts_deal_principal_key` mantém a partir de agora:
+      // sem este INSERT, um negócio novo ficaria fora da própria lista de clientes.
+      await tx.insert(dealContacts).values({
+        tenantId,
+        dealId: negocio.id,
+        contactId: negocio.contactId,
+        principal: true,
+      });
+
       // Nome do criador para o board (o board mostra quem carrega o negócio).
       const [criador] = await tx
         .select({ name: user.name })
@@ -775,6 +816,8 @@ export async function criarNegocio(
         stagePosition: alvo.position,
         contactId: negocio.contactId,
         contactName: contato.name,
+        // Acabou de nascer com o principal — secundário nenhum ainda.
+        clientesSecundarios: 0,
         departureOn: negocio.departureOn,
         diasParado: 0,
       };
@@ -831,6 +874,13 @@ export type NegocioDetalhe = {
   updatedAt: Date;
   /** Mais recente primeiro. */
   activities: AtividadeDoNegocio[];
+  /**
+   * 0020 — TODOS os clientes do negócio, principal primeiro. É daqui que a ficha e o
+   * editor montam "Preparado para Ana e Carlos" e o envio por WhatsApp escolhe o
+   * destinatário. `telefone` só existe nesta leitura AUTENTICADA — a pública devolve
+   * nomes (`PropostaPublica.clientes`), nunca contato.
+   */
+  clientes: ClienteDoNegocio[];
 };
 
 /**
@@ -896,11 +946,14 @@ async function buscarNegocioDetalhe(tx: TenantDb, dealId: string): Promise<Negoc
     .where(eq(activities.dealId, dealId))
     .orderBy(desc(activities.occurredAt));
 
+  const clientes = await listaClientesDoNegocio(tx, dealId);
+
   return {
     ...negocio,
     // `metadata` é `jsonb` sem `$type<>()` no schema (infere `unknown`) — o cast aqui
     // documenta o contrato de saída, não esconde um `any`.
     activities: linhasAtividade as AtividadeDoNegocio[],
+    clientes,
   };
 }
 
@@ -1103,6 +1156,275 @@ export async function atualizarNegocio(
       });
 
       return buscarNegocioDetalhe(tx, dealId);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 4c) A composição de clientes do negócio (0020) — casal, família, amigos
+// ---------------------------------------------------------------------------
+//
+// A fonte de verdade é a N:N `deal_contacts` (`drizzle/0020_negocio_varios_clientes.sql`);
+// estas duas actions são o que o "adicionar cliente" dos editores de proposta e de
+// negócio chamam (contrato em `docs/handoffs/rafa-para-nina.md` §15). O cliente
+// PRINCIPAL (`deals.contact_id`) é imutável nesta rodada — relatórios e ranking leem por
+// ele — então ele não entra nem sai por aqui: tentativa recusada com CONFLITO.
+
+export type ClienteDoNegocio = {
+  contactId: string;
+  nome: string;
+  /**
+   * Valor CRU de `contacts.whatsapp ?? contacts.phone` — SEM formatação. Quem monta o
+   * link é `waMeLink()` (`src/lib/ui/whatsapp.ts`), no cliente. Sanitizar aqui criaria
+   * uma segunda regra de formato no servidor, e a disciplina da casa é o servidor mandar
+   * o valor cru (ver `waMeLink`). Nulo em contato sem telefone nenhum. Este campo só
+   * existe em leitura AUTENTICADA — a página pública nunca o recebe.
+   */
+  telefone: string | null;
+  principal: boolean;
+};
+
+export type ClientesDoNegocio = {
+  dealId: string;
+  /** Principal primeiro, depois a ordem em que cada cliente entrou. */
+  clientes: ClienteDoNegocio[];
+};
+
+/**
+ * A lista de clientes de UM negócio, dentro de uma transação já aberta. Consumida por
+ * `buscarNegocioDetalhe` (a ficha) e devolvida pelas duas actions abaixo (a tela
+ * reconcilia sem reconsultar). A ordem — principal primeiro, depois `created_at` — é a
+ * MESMA da chave `clientes` da função pública: quem consome as duas fontes vê a lista
+ * na mesma ordem.
+ */
+async function listaClientesDoNegocio(tx: TenantDb, dealId: string): Promise<ClienteDoNegocio[]> {
+  const linhas = await tx
+    .select({
+      contactId: dealContacts.contactId,
+      nome: contacts.name,
+      whatsapp: contacts.whatsapp,
+      phone: contacts.phone,
+      principal: dealContacts.principal,
+    })
+    .from(dealContacts)
+    .innerJoin(contacts, eq(contacts.id, dealContacts.contactId))
+    .where(eq(dealContacts.dealId, dealId))
+    .orderBy(desc(dealContacts.principal), asc(dealContacts.createdAt));
+
+  return linhas.map((linha) => ({
+    contactId: linha.contactId,
+    nome: linha.nome,
+    telefone: linha.whatsapp?.trim() || linha.phone?.trim() || null,
+    principal: linha.principal,
+  }));
+}
+
+const clienteDoNegocioInput = z.object({
+  negocioId: z.uuid('Negócio inválido.'),
+  contatoId: z.uuid('Escolha um contato.'),
+});
+
+type ClienteDoNegocioInput = z.infer<typeof clienteDoNegocioInput>;
+
+/**
+ * Validação comum às duas actions: zod antes da transação (uma chamada malformada não
+ * custa conexão nem passa pelo gate), depois negócio e contato resolvidos DENTRO do
+ * `withTenant` — onde a policy de isolation já fez id de outro tenant sumir, então
+ * "não existe" e "é de outro tenant" viram o mesmo NAO_ENCONTRADO de propósito (a
+ * mensagem nunca confirma a existência de recurso fora da conta).
+ */
+async function resolverClientesDoNegocio(
+  tx: TenantDb,
+  input: ClienteDoNegocioInput,
+): Promise<{ negocioId: string; contatoId: string; principalContactId: string }> {
+  const parsed = clienteDoNegocioInput.safeParse(input);
+  if (!parsed.success) {
+    const primeiro = parsed.error.issues[0];
+    throw new ServiceError('DADOS_INVALIDOS', primeiro?.message ?? 'Dados inválidos', {
+      campo: primeiro?.path.join('.'),
+      correcao: 'Corrigir e tentar de novo',
+    });
+  }
+
+  const [negocio] = await tx
+    .select({ id: deals.id, contactId: deals.contactId })
+    .from(deals)
+    .where(eq(deals.id, parsed.data.negocioId))
+    .limit(1);
+  if (!negocio) {
+    throw new ServiceError('NAO_ENCONTRADO', 'Esse negócio não existe mais.', {
+      correcao: 'Voltar para o funil',
+    });
+  }
+
+  const [contato] = await tx
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(eq(contacts.id, parsed.data.contatoId))
+    .limit(1);
+  if (!contato) {
+    throw new ServiceError('NAO_ENCONTRADO', 'Esse contato não existe mais.', {
+      campo: 'contatoId',
+      correcao: 'Escolher outro contato',
+    });
+  }
+
+  return { negocioId: negocio.id, contatoId: contato.id, principalContactId: negocio.contactId };
+}
+
+/**
+ * Adiciona um cliente SECUNDÁRIO ao negócio ("e mais alguém viaja"): o casal, a mãe que
+ * acompanha, o amigo da Vanuatu. Recusas, cada uma com a mensagem certa:
+ *   - o contato É o principal → CONFLITO (ele já está no negócio por definição);
+ *   - o contato já está na lista → CONFLITO (a PK de `deal_contacts` também recusaria —
+ *     a leitura antes é para a mensagem ser entendível, o índice é a garantia);
+ *   - corrida de dois cliques que passa pela leitura e bate na PK → capturado e
+ *     devolvido como o MESMO CONFLITO, não como erro 500.
+ * Gate de dunning ANTES de escrever (regra 6 do gate): recusa de conta bloqueada não
+ * grava linha e não gera auditoria.
+ */
+export async function adicionarClienteAoNegocio(
+  input: ClienteDoNegocioInput,
+): Promise<ServiceResult<ClientesDoNegocio>> {
+  return comoResultado(async () => {
+    const { tenantId, userId } = await requireAuthContext();
+
+    // zod cedo: valida o shape antes de abrir transação (mesma ordem de criarNegocio).
+    const shape = clienteDoNegocioInput.safeParse(input);
+    if (!shape.success) {
+      const primeiro = shape.error.issues[0];
+      throw new ServiceError('DADOS_INVALIDOS', primeiro?.message ?? 'Dados inválidos', {
+        campo: primeiro?.path.join('.'),
+        correcao: 'Corrigir e tentar de novo',
+      });
+    }
+
+    return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada.
+      await exigirContaAtiva(tx, tenantId);
+
+      const { negocioId, contatoId, principalContactId } =
+        await resolverClientesDoNegocio(tx, input);
+
+      if (principalContactId === contatoId) {
+        throw new ServiceError(
+          'CONFLITO',
+          'Esse contato já é o cliente principal deste negócio.',
+          { campo: 'contatoId', correcao: 'Fechar' },
+        );
+      }
+
+      const [existente] = await tx
+        .select({ principal: dealContacts.principal })
+        .from(dealContacts)
+        .where(and(eq(dealContacts.dealId, negocioId), eq(dealContacts.contactId, contatoId)))
+        .limit(1);
+
+      if (existente) {
+        throw new ServiceError('CONFLITO', 'Esse contato já está neste negócio.', {
+          campo: 'contatoId',
+          correcao: 'Fechar',
+        });
+      }
+
+      try {
+        await tx.insert(dealContacts).values({
+          tenantId,
+          dealId: negocioId,
+          contactId: contatoId,
+          principal: false,
+        });
+      } catch (erro) {
+        // 23505 = unique_violation. Só a PK composta disputa aqui: duas chamadas
+        // simultâneas passam pelas leituras e uma perde no índice. O rollback da
+        // transação limpa o insert falho; o erro vira a mesma resposta de conflito.
+        if ((erro as { code?: string }).code === '23505') {
+          throw new ServiceError('CONFLITO', 'Esse contato já está neste negócio.', {
+            campo: 'contatoId',
+            correcao: 'Fechar',
+          });
+        }
+        throw erro;
+      }
+
+      await registrarAuditoria(tx, {
+        tenantId,
+        actorUserId: userId,
+        action: 'deal.contact_added',
+        entity: 'deal',
+        entityId: negocioId,
+        // Só o fato. Nome, telefone e documento de cliente não entram em log.
+        metadata: { contactId: contatoId, principal: false },
+      });
+
+      return { dealId: negocioId, clientes: await listaClientesDoNegocio(tx, negocioId) };
+    });
+  });
+}
+
+/**
+ * Remove um cliente SECUNDÁRIO do negócio. Recusas:
+ *   - o contato não está na lista → NAO_ENCONTRADO;
+ *   - a linha é a do PRINCIPAL → CONFLITO: trocar o titular de um negócio vendido não é
+ *     remoção, é outra rodada de produto — o relatório e o ranking leem de
+ *     `deals.contact_id`, e o espelho ficar coerente com ele é invariante do banco.
+ */
+export async function removerClienteDoNegocio(
+  input: ClienteDoNegocioInput,
+): Promise<ServiceResult<ClientesDoNegocio>> {
+  return comoResultado(async () => {
+    const { tenantId, userId } = await requireAuthContext();
+
+    const shape = clienteDoNegocioInput.safeParse(input);
+    if (!shape.success) {
+      const primeiro = shape.error.issues[0];
+      throw new ServiceError('DADOS_INVALIDOS', primeiro?.message ?? 'Dados inválidos', {
+        campo: primeiro?.path.join('.'),
+        correcao: 'Corrigir e tentar de novo',
+      });
+    }
+
+    return withTenant(tenantId, async (tx) => {
+      // S13a: gate de dunning — recusa escrita se a conta está bloqueada.
+      await exigirContaAtiva(tx, tenantId);
+
+      const { negocioId, contatoId } = await resolverClientesDoNegocio(tx, input);
+
+      const [linha] = await tx
+        .select({ principal: dealContacts.principal })
+        .from(dealContacts)
+        .where(and(eq(dealContacts.dealId, negocioId), eq(dealContacts.contactId, contatoId)))
+        .limit(1);
+
+      if (!linha) {
+        throw new ServiceError('NAO_ENCONTRADO', 'Esse contato não está neste negócio.', {
+          campo: 'contatoId',
+          correcao: 'Recarregar a lista',
+        });
+      }
+
+      if (linha.principal) {
+        throw new ServiceError(
+          'CONFLITO',
+          'O cliente principal não sai da lista. Edite o negócio para trocar o titular.',
+          { campo: 'contatoId', correcao: 'Fechar' },
+        );
+      }
+
+      await tx
+        .delete(dealContacts)
+        .where(and(eq(dealContacts.dealId, negocioId), eq(dealContacts.contactId, contatoId)));
+
+      await registrarAuditoria(tx, {
+        tenantId,
+        actorUserId: userId,
+        action: 'deal.contact_removed',
+        entity: 'deal',
+        entityId: negocioId,
+        metadata: { contactId: contatoId },
+      });
+
+      return { dealId: negocioId, clientes: await listaClientesDoNegocio(tx, negocioId) };
     });
   });
 }

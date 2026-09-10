@@ -160,6 +160,10 @@ export {
   criarNegocio,
   obterNegocio,
   atualizarNegocio,
+  // 0020 — a composição de clientes do negócio (casal, família, amigos). Ver §15 do
+  // handoff para a Nina: os editores de proposta e de negócio chamam estas duas actions.
+  adicionarClienteAoNegocio,
+  removerClienteDoNegocio,
   listarNegociosParados,
   obterResumoDoPipeline,
   type DealStage,
@@ -171,6 +175,8 @@ export {
   type NegocioPatch,
   type AtividadeDoNegocio,
   type NegocioDetalhe,
+  type ClienteDoNegocio,
+  type ClientesDoNegocio,
   type NegocioParado,
   type ResumoDeParados,
   type ResumoDoPipeline,
