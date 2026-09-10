@@ -80,7 +80,9 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { useToast } from "@/components/ui/Toast";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { ArchPlate, BiplanePlate, CompassPlate, FernPlate, Rule } from "@/components/plates";
+import { SimboloVela } from "@/components/brand/SimboloVela";
 import { OpenedIcon } from "@/components/app/icons";
+import { linhaViaApp } from "@/lib/assinatura";
 import { cn } from "@/lib/ui/cn";
 import { ReducedMotionOverride } from "@/lib/ui/motion";
 
@@ -126,6 +128,7 @@ export function KitchenSink() {
       <SheetSection />
       <ToastSection />
       <TooltipSection />
+      <MarcaSection />
       <PlatesSection />
       <ReducedMotionSection />
     </div>
@@ -1091,6 +1094,36 @@ function TooltipSection() {
 /* =============================================================================
    Plates
    ========================================================================== */
+
+/* =============================================================================
+   Marca — Vela de Papel (docs/MARCA.md §3)
+   ========================================================================== */
+
+function MarcaSection() {
+  return (
+    <section className="flex flex-col gap-4">
+      <Heading note="docs/MARCA.md §3.1–3.3 — monocromática em currentColor, nunca no accent; sem girar, sombrear, recolorir ou caixa. Duas variantes e só elas: a pequena (16–24px, aqui a 24 e a 16) é só o glifo — vinco e mar são descartados; o mestre (vinco + mar em fio cabelo) é para superfície grande de marca e morre abaixo de ~48px. Na tela de verdade o símbolo vive NO colofão (`Assinatura`), uma aparição por página — nunca competindo com a marca do agente.">
+        Marca — Vela de Papel
+      </Heading>
+      <TwoThemes>
+        <div className="flex flex-wrap items-end gap-8 text-ink">
+          <SimboloVela variante="mestre" size={96} title="Símbolo mestre: vela, vinco e mar" />
+          <SimboloVela variante="pequena" size={24} title="Símbolo, variante pequena" />
+          <SimboloVela variante="pequena" size={16} title="Símbolo a 16px" />
+        </div>
+        {/* O lockup do colofão exatamente como ele aparece no fim de /p e /r:
+            símbolo 16px + a linha do token, na cor mais quieta do papel. */}
+        <div className="flex flex-col gap-2">
+          <span className="text-13 text-subtle">colofão (`Assinatura`):</span>
+          <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-13 text-subtle">
+            <SimboloVela size={16} />
+            <span>{linhaViaApp()}</span>
+          </p>
+        </div>
+      </TwoThemes>
+    </section>
+  );
+}
 
 function PlatesSection() {
   return (

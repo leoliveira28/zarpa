@@ -1,4 +1,5 @@
 import { Rule } from "@/components/plates";
+import { SimboloVela } from "@/components/brand/SimboloVela";
 import { linhaViaApp, type MarcaParaAssinatura } from "@/lib/assinatura";
 
 /* =============================================================================
@@ -16,6 +17,16 @@ import { linhaViaApp, type MarcaParaAssinatura } from "@/lib/assinatura";
    roteiro) e o nome do agente em linha quieta embaixo. Quando só existe um dos
    nomes, a linha única é a linha inteira — a assinatura nunca inventa texto e
    nunca fica vazia: sem nome nenhum, resta a linha fina "via {APP_NAME}".
+
+   O símbolo (Vela de Papel, docs/MARCA.md §3) mora NA linha do "via": é o
+   lockup da assinatura do produto, não um enfeite do colofão. Por ali e não
+   acima do nome da agência: acima, o símbolo pareceria MARCAR a marca do
+   agente — e a peça é dele. E é a ÚNICA aparição do símbolo na página: a capa
+   e a barra do topo são do agente; o Zarpa assina uma vez, no fim, na cor
+   mais quieta do papel (`text-subtle`, §3.2 — currentColor, nunca accent).
+   16px porque a variante pequena vive na faixa 16–24px e o colofão é o
+   registro mais silencioso que a marca tem; o mestre (vinco + mar) espera
+   superfície grande de marca (§13) — abaixo de ~48px ele vira lama.
 
    Sem "use client" de propósito: as duas páginas públicas são server
    components e a assinatura não precisa de nada vivo.
@@ -55,10 +66,14 @@ export function Assinatura({ marca, instagram, className }: AssinaturaProps) {
             {agente}
           </p>
         ) : null}
-        <p className="text-center text-13 text-subtle">
-          {linhaViaApp()}
+        {/* A linha do produto: símbolo + "via {APP_NAME}". O " · " do Instagram
+            viaja DENTRO do span do link para uma quebra de linha nunca órfã —
+            sem handle, o separador não existe. */}
+        <p className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 text-13 text-subtle">
+          <SimboloVela size={16} className="shrink-0" />
+          <span>{linhaViaApp()}</span>
           {instagramLimpo ? (
-            <>
+            <span>
               {" · "}
               <a
                 href={instagramLimpo.href}
@@ -68,7 +83,7 @@ export function Assinatura({ marca, instagram, className }: AssinaturaProps) {
               >
                 {instagramLimpo.texto}
               </a>
-            </>
+            </span>
           ) : null}
         </p>
       </div>

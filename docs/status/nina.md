@@ -1,5 +1,59 @@
 # Nina — status
 
+## 2026-09-10 (2ª) — O símbolo da marca nas superfícies públicas (pedido do PO)
+
+A Vela de Papel entrou na única superfície que ela tem a direito de ocupar
+enquanto não existe site: **o colofão**.
+
+**Posicionamento — a peça é do agente; o Zarpa assina uma vez, no fim.**
+O símbolo mora DENTRO da linha "via {APP_NAME}" da `Assinatura`
+(`src/components/public/Assinatura.tsx`): lockup inline `[símbolo 16px] via
+Zarpa`, `currentColor` na cor mais quieta do papel (`text-subtle`). Decidi
+contra colocá-lo acima do bloco do colofão: ali ele pareceria MARCAR a marca
+do agente, e a capa/topo de `/p` e `/r` são dele (`PublicBrandBar`). E decidi
+contra qualquer segundo ponto editorial (capa, divisor): o §13 da MARCA.md
+diz que o mestre "entra quando houver superfície grande de marca (site,
+capa)" — a capa pública é do agente, então a contenção É a decisão. Uma
+aparição do símbolo por página; se o guia não autoriza mais que o colofão,
+não se inventa autorização.
+
+**Por que 16px e a variante pequena.** §3.1: vinco e mar são descartados na
+faixa pequena ("o que não sobrevive a 16px não entra lá") — a 16px o mestre
+vira lama (fio de 0,055px). Traço 10/160 = exatamente 1px em 16px. O colofão
+é o registro mais silencioso que a marca tem; 20px+ começaria a disputar com
+o nome do agente em 13px.
+
+**Fonte de verdade técnica: `src/components/brand/SimboloVela.tsx`** (pasta
+`brand/` nova — símbolo é logo, não prancha; o acervo de `plates/` é fechado
+por §7). Duas variantes (`pequena` padrão 16px, `mestre`), geometria
+verificada byte a byte contra `public/brand/*.svg` (os 5 caminhos do mestre,
+os 3 da pequena = mestre sem vinco/mar), `stroke="currentColor"`, pontas
+arredondadas, `aria-hidden` por padrão. Sem `non-scaling-stroke` de propósito:
+na prancha a linha é instrumento (1px sempre); na logo o traço É parte do
+desenho. Nada do §3.3 (sem girar, sombrear, recolorir, caixa).
+
+**Glifo antigo: nada a aposentar.** `/p`, `/r`, os dois not-found e
+termos/privacidade não têm nenhum símbolo do produto hoje (grep) — só a marca
+do agente e texto. A `CompassPlate` segue só em entrada (§3.1 a mantém como
+prancha de entrada) e no catálogo.
+
+**Kitchen-sink:** seção `Marca — Vela de Papel` nova (antes de Pranchas), com
+mestre 96, pequena 24 e 16, e o lockup do colofão — nos dois temas via
+`TwoThemes`. O texto "via" sai de `linhaViaApp()`, nunca de string solta.
+
+**Números:** `npx tsc --noEmit` limpo; guardas de design **203/203**;
+SSR de inspeção renderiza o lockup esperado nos três estados da `Assinatura`
+(completo, sem nomes, com Instagram — o " · " viaja dentro do span do link
+para quebra nunca órfã). `npm run build` passa.
+
+**Para o PO/rafa, fora do meu alcance:** a suíte completa tem **6 falhas
+pré-existentes** que NÃO são desta rodada — provei escondendo só os meus
+arquivos e rerodando (a falha persiste sem eles): `tests/brand/assinatura.test.ts`
+(roteiro: fallback do `gerarRoteiro`), `tests/security/deal-contacts-rls.test.ts`
+(4) e `tests/security/public-roteiro.test.ts` (1) — todas em áreas do rafa
+(`src/server/itineraries.ts`, `deals`, `contacts` e a migration 0021 em voo
+não-commitada na árvore). Nada em design, a11y ou UI.
+
 ## 2026-09-10 — UI de negócio com vários clientes (§15 do Rafa, commit 5139393)
 
 Uma viagem, vários clientes — do cadastro ao clique, nos dois editores e nas
