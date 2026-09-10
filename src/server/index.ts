@@ -372,3 +372,18 @@ export {
   type CriarFaturaInput,
   type EmitirBoletoInput,
 } from './invoices';
+export {
+  criarGrupo,
+  listarGrupos,
+  obterGrupo,
+  atualizarGrupo,
+  adicionarMembroAoGrupo,
+  removerMembroDoGrupo,
+  type GrupoResumo,
+  type GrupoDetalhe,
+  type MembroDoGrupo,
+  type GrupoStatus,
+  type CriarGrupoInput,
+  type AtualizarGrupoInput,
+  type MembroInput,
+} from './groups';

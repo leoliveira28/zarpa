@@ -1,5 +1,40 @@
 # Nina — status
 
+## 2026-09-10 (fim da noite) — Rodada 6a dos Grupos: o pacote com lugares
+
+Ok do PO na meta (`docs/GRUPOS_META.md`) virou rodada. O grupo é agora o
+PRODUTO que a agente monta antes de vender.
+
+**Migration 0025** (`drizzle/0025_grupos.sql`, aplicada no dev e no teste —
+35 tabelas): `groups` (total_seats + os QUATRO números da venda em escala de
+lugar, FOTOGRAFADOS como a agente digitou — mesma doutrina de `sales`;
+status montando→vendendo→encerrado) + `group_members` (contato + negócio
+opcional + N lugares; PK composta (group_id, contact_id) — um contato é
+membro uma vez, mudou a quantidade é outra ação; deal_id SET NULL — apagar o
+negócio não apaga a ocupação). RLS de isolamento nas duas.
+
+**Serviço (`src/server/groups.ts`):** CRUD + ocupação; a conta de "sobram X"
+é SEMPRE do servidor (`lugaresOcupados` = soma dos membros). Duas cercas que
+protegem a verdade: ocupar além do total recusa dizendo quanto resta, e
+reduzir o total abaixo da ocupação recusa (maquiar o que já foi vendido não).
+Encerrado não recebe ocupação. Margem por lugar = preço − custo − comissão −
+taxa, calculada no servidor, nunca na tela.
+
+**UI:** `/grupos` (lista: título · destino/datas · "3 de 10 lugares" · preço ·
+status) e `/grupos/[id]` (ficha: a CONTA por lugar com a margem na voz grande —
+Fase 2 — e o card Ocupação com link para o negócio de cada membro). Sheets
+novas com remontagem por `key` — o lint da casa reprovou o efeito de reset
+(setState síncrono em efeito) e a arquitetura que consertou foi a remontagem,
+não o silêncio da regra. Entrada no shell junto de Equipe/Sua marca.
+
+**Números:** 5 testes novos (`tests/groups/grupos.test.ts` — quatro números +
+margem, ocupação/excesso/repetido/liberar, cercas de limite e encerrado, deal
+SET NULL, isolamento); **686/686** (uma corrida flaky de signup na primeira
+rodada, passou na registrada); build limpo; lint zerado nos meus.
+
+**6b (próxima):** parcelamento por reserva lendo as parcelas da 5a, sub-aba
+Grupos nos Relatórios, chips do grupo no funil/ficha.
+
 ## 2026-09-10 (noite, 2ª) — Fase 5a: excursão/grupo leve — os três gaps fechados
 
 Ok do PO no plano (`docs/FASE5_EXCURSAO.md`) virou rodada única. O fluxo do

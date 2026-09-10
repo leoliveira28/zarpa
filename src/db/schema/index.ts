@@ -30,4 +30,5 @@ export * from './imports';
 export * from './sales';
 export * from './costCenters';
 export * from './invoices';
+export * from './groups';
 export * from './integrations';
