@@ -450,7 +450,9 @@ function BottomNav({ activeHref }: { activeHref: string | null }) {
       aria-label="Principal"
       className={cn(
         "veil-strong fixed inset-x-0 bottom-0 z-30 border-t border-hairline lg:hidden",
-        "pb-safe",
+        // Respiro na base SEMPRE (o PO achou colado) + a área segura do
+        // aparelho quando existir — o maior dos dois vence via max().
+        "pb-[max(0.375rem,env(safe-area-inset-bottom))]",
       )}
     >
       <ul className="flex items-stretch">

@@ -34,6 +34,27 @@ import {
    ========================================================================== */
 
 type Side = "bottom" | "right";
+/** `auto` (padrão): gaveta INFERIOR no celular (polegar manda), LATERAL DIREITA
+ * no desktop (tela grande pede mais espaço — pedido do PO na revisão da Vitrine). */
+type SideRequest = Side | "auto";
+
+/** O lado EFETIVO de um pedido, reagindo ao breakpoint lg. */
+function useLadoEfetivo(pedido: SideRequest): Side {
+  const [lateral, setLateral] = React.useState(
+    () => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches,
+  );
+
+  React.useEffect(() => {
+    if (pedido !== "auto") return;
+    const media = window.matchMedia("(min-width: 1024px)");
+    const mudou = (evento: MediaQueryListEvent) => setLateral(evento.matches);
+    media.addEventListener("change", mudou);
+    return () => media.removeEventListener("change", mudou);
+  }, [pedido]);
+
+  if (pedido !== "auto") return pedido;
+  return lateral ? "right" : "bottom";
+}
 
 interface SheetContextValue {
   side: Side;
@@ -49,7 +70,8 @@ export interface SheetContentProps
     React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>,
     "title"
   > {
-  side?: Side;
+  /** `auto` (padrão) resolve bottom no celular, right no desktop. */
+  side?: SideRequest;
   /** Título obrigatório: Radix exige, e o leitor de tela também. */
   title: React.ReactNode;
   description?: React.ReactNode;
@@ -62,7 +84,7 @@ export interface SheetContentProps
 }
 
 export function SheetContent({
-  side = "bottom",
+  side: sidePedido = "auto",
   title,
   description,
   footer,
@@ -74,6 +96,7 @@ export function SheetContent({
   ...props
 }: SheetContentProps) {
   const reducedMotion = usePrefersReducedMotion();
+  const side = useLadoEfetivo(sidePedido);
   const axis = side === "bottom" ? "y" : "x";
   const offset = useMotionValue(0);
   const panelRef = React.useRef<HTMLDivElement>(null);
@@ -180,7 +203,7 @@ export function SheetContent({
                     "flex flex-col bg-surface shadow-3",
                     side === "bottom"
                       ? "max-h-[88dvh] w-full rounded-t-xl border-t border-line sm:w-[32rem] sm:border-x"
-                      : "h-full w-[min(28rem,100vw)] border-l border-line",
+                      : "h-dvh w-[min(32rem,100vw)] rounded-l-xl border-l border-line",
                     className,
                   )}
                 >
@@ -232,7 +255,7 @@ export function SheetContent({
                   </div>
 
                   {footer ? (
-                    <div className="shrink-0 border-t border-hairline bg-surface px-4 py-3 pb-safe">
+                    <div className="shrink-0 border-t border-hairline bg-surface px-4 pb-4 pt-3" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
                       {footer}
                     </div>
                   ) : null}
