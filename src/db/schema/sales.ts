@@ -13,6 +13,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { uuidv7 } from '../uuid';
 import { tenants } from './tenants';
+import { contacts } from './people';
 import { deals } from './pipeline';
 import { user } from './auth';
 import { proposals, proposalOptions } from './proposals';
@@ -160,6 +161,13 @@ export const receivables = pgTable(
      * cobrança consolidado. SET NULL: fatura apagada não some com o cronograma.
      */
     invoiceId: uuid('invoice_id').references(() => invoices.id, { onDelete: 'set null' }),
+    /**
+     * Comprador da parcela (Fase 5a, `drizzle/0024_comprador_da_parcela.sql`) — a
+     * etiqueta que responde "quem já pagou da saída". Nullable: venda de um comprador
+     * só não tem etiqueta e nunca precisará. SET NULL: apagar o contato não apaga a
+     * parcela. A validade (comprador ∈ deal_contacts do negócio) é do serviço.
+     */
+    contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

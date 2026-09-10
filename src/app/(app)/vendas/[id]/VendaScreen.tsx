@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   atualizarParcela,
+  listarClientesDoNegocio,
+  type ClienteDoNegocio,
   atualizarStatusComissao,
   atualizarVenda,
   criarParcela,
@@ -401,6 +403,8 @@ function ParcelasCard({ venda }: { venda: VendaResumo }) {
   const [gerarOpen, setGerarOpen] = React.useState(false);
   const [novaOpen, setNovaOpen] = React.useState(false);
   const [editando, setEditando] = React.useState<ParcelaResumo | null>(null);
+  /** Clientes do negócio (excursão) — 2+ abre a etiqueta de comprador nas parcelas. */
+  const [compradores, setCompradores] = React.useState<ClienteDoNegocio[]>([]);
 
   const [reloadToken, setReloadToken] = React.useState(0);
   const reload = React.useCallback(() => setReloadToken((token) => token + 1), []);
@@ -415,6 +419,12 @@ function ParcelasCard({ venda }: { venda: VendaResumo }) {
       }
       setParcelas(result.data);
       setStatus("ready");
+    });
+    // A lista de compradores vem do NEGÓCIO (0020) — a etiqueta da parcela só
+    // faz sentido quando o negócio é grupo (2+ clientes).
+    void listarClientesDoNegocio(venda.dealId).then((result) => {
+      if (!active) return;
+      if (result.ok) setCompradores(result.data.clientes);
     });
     return () => {
       active = false;
@@ -484,6 +494,7 @@ function ParcelasCard({ venda }: { venda: VendaResumo }) {
               <ParcelaRow
                 key={parcela.id}
                 parcela={parcela}
+                comprador={compradores.find((c) => c.contactId === parcela.contactId)?.nome ?? null}
                 onRemoved={() => handleRemove(parcela)}
                 onMarkPaid={() => void handleMarkPaid(parcela)}
                 onEdit={() => setEditando(parcela)}
@@ -525,6 +536,7 @@ function ParcelasCard({ venda }: { venda: VendaResumo }) {
         open={novaOpen}
         onOpenChange={setNovaOpen}
         vendaId={venda.id}
+        compradores={compradores}
         onCreated={(parcela) => {
           setParcelas((current) => [...current, parcela].sort((a, b) => a.venceEm.localeCompare(b.venceEm)));
           setNovaOpen(false);
@@ -532,6 +544,7 @@ function ParcelasCard({ venda }: { venda: VendaResumo }) {
       />
       <EditarParcelaSheet
         parcela={editando}
+        compradores={compradores}
         onOpenChange={(open) => {
           if (!open) setEditando(null);
         }}
@@ -546,11 +559,13 @@ function ParcelasCard({ venda }: { venda: VendaResumo }) {
 
 function ParcelaRow({
   parcela,
+  comprador,
   onRemoved,
   onMarkPaid,
   onEdit,
 }: {
   parcela: ParcelaResumo;
+  comprador: string | null;
   onRemoved: () => void;
   onMarkPaid: () => void;
   onEdit: () => void;
@@ -568,7 +583,10 @@ function ParcelaRow({
             {PARCELA_STATUS_LABEL[parcela.status]}
           </Badge>
         </span>
-        <span className="text-13 text-muted">{vencimentoLabel(dias)}</span>
+        <span className="text-13 text-muted">
+          {vencimentoLabel(dias)}
+          {comprador ? ` · ${comprador}` : ""}
+        </span>
       </div>
 
       <Money cents={parcela.valorCents} size="15" reserveFor={parcela.valorCents} />
@@ -681,15 +699,19 @@ function NovaParcelaSheet({
   open,
   onOpenChange,
   vendaId,
+  compradores,
   onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   vendaId: string;
+  /** Clientes do negócio (excursão) — vazio/1 comprador: a etiqueta nem nasce. */
+  compradores: ClienteDoNegocio[];
   onCreated: (parcela: ParcelaResumo) => void;
 }) {
   const [venceEm, setVenceEm] = React.useState("");
   const [valor, setValor] = React.useState<number | null>(null);
+  const [comprador, setComprador] = React.useState<string>("sem-comprador");
   const [creating, setCreating] = React.useState(false);
   const [fieldError, setFieldError] = React.useState<{ campo?: string; mensagem: string } | null>(null);
 
@@ -697,6 +719,7 @@ function NovaParcelaSheet({
     if (!open) {
       setVenceEm("");
       setValor(null);
+      setComprador("sem-comprador");
       setFieldError(null);
     }
   }, [open]);
@@ -705,7 +728,11 @@ function NovaParcelaSheet({
     event.preventDefault();
     setCreating(true);
     setFieldError(null);
-    const result = await criarParcela(vendaId, { venceEm, valorCents: valor ?? 0 });
+    const result = await criarParcela(vendaId, {
+      venceEm,
+      valorCents: valor ?? 0,
+      contactId: comprador === "sem-comprador" ? null : comprador,
+    });
     setCreating(false);
     if (!result.ok) {
       avisarRecusaDeEscrita(result);
@@ -746,6 +773,25 @@ function NovaParcelaSheet({
             <CentsInput cents={valor} onCommit={setValor} invalid={fieldError?.campo === "valorCents"} />
             {fieldError?.campo === "valorCents" ? <FieldError>{fieldError.mensagem}</FieldError> : null}
           </Field>
+          {compradores.length > 1 ? (
+            <Field invalid={fieldError?.campo === "contactId"}>
+              <Label optional>Comprador</Label>
+              <Select value={comprador} onValueChange={setComprador}>
+                <SelectTrigger aria-label="Comprador da parcela">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="sem-comprador">Sem comprador</SelectItem>
+                  {compradores.map((c) => (
+                    <SelectItem key={c.contactId} value={c.contactId}>
+                      {c.nome}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {fieldError?.campo === "contactId" ? <FieldError>{fieldError.mensagem}</FieldError> : null}
+            </Field>
+          ) : null}
           {fieldError && !fieldError.campo ? <FieldError>{fieldError.mensagem}</FieldError> : null}
         </form>
       </SheetContent>
@@ -815,16 +861,19 @@ function EncerramentoCard({ venda }: { venda: VendaResumo }) {
 
 function EditarParcelaSheet({
   parcela,
+  compradores,
   onOpenChange,
   onSaved,
 }: {
   parcela: ParcelaResumo | null;
+  compradores: ClienteDoNegocio[];
   onOpenChange: (open: boolean) => void;
   onSaved: (atualizada: ParcelaResumo) => void;
 }) {
   const open = parcela !== null;
   const [venceEm, setVenceEm] = React.useState("");
   const [valor, setValor] = React.useState<number | null>(null);
+  const [comprador, setComprador] = React.useState<string>("sem-comprador");
   const [saving, setSaving] = React.useState(false);
   const [fieldError, setFieldError] = React.useState<{ campo?: string; mensagem: string } | null>(null);
 
@@ -833,6 +882,7 @@ function EditarParcelaSheet({
     if (parcela) {
       setVenceEm(parcela.venceEm);
       setValor(parcela.valorCents);
+      setComprador(parcela.contactId ?? "sem-comprador");
       setFieldError(null);
     }
   }, [parcela]);
@@ -845,6 +895,7 @@ function EditarParcelaSheet({
     const result = await atualizarParcela(parcela.id, {
       venceEm,
       valorCents: valor ?? parcela.valorCents,
+      contactId: comprador === "sem-comprador" ? null : comprador,
     });
     setSaving(false);
     if (!result.ok) {
@@ -886,6 +937,25 @@ function EditarParcelaSheet({
             <CentsInput cents={valor} onCommit={setValor} invalid={fieldError?.campo === "valorCents"} />
             {fieldError?.campo === "valorCents" ? <FieldError>{fieldError.mensagem}</FieldError> : null}
           </Field>
+          {compradores.length > 1 ? (
+            <Field invalid={fieldError?.campo === "contactId"}>
+              <Label optional>Comprador</Label>
+              <Select value={comprador} onValueChange={setComprador}>
+                <SelectTrigger aria-label="Comprador da parcela">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="sem-comprador">Sem comprador</SelectItem>
+                  {compradores.map((c) => (
+                    <SelectItem key={c.contactId} value={c.contactId}>
+                      {c.nome}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {fieldError?.campo === "contactId" ? <FieldError>{fieldError.mensagem}</FieldError> : null}
+            </Field>
+          ) : null}
           {fieldError && !fieldError.campo ? <FieldError>{fieldError.mensagem}</FieldError> : null}
         </form>
       </SheetContent>

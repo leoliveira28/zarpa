@@ -2,7 +2,7 @@
 
 import { and, asc, desc, eq, inArray, isNotNull, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { contacts, travelers } from '@/db/schema';
+import { contacts, dealContacts, deals, travelers } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { maskDocument } from '@/lib/crypto';
@@ -468,6 +468,76 @@ export async function listarPassaportesVencendo(
         .limit(200);
 
       return linhas as (ViajanteResumo & { contatoNome: string })[];
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Viajantes do NEGÓCIO (Fase 5a, `docs/FASE5_EXCURSAO.md`) — a lista que vai
+// para o fornecedor e alimenta o card da ficha. Varre `deal_contacts` (0020):
+// na excursão, os viajantes cadastrados nos contatos secundários são tantos
+// quanto os do titular, e a lista presa a `deals.contact_id` sumia com eles.
+//
+// Ordem = MESMA política dos nomes da 0021 (titular primeiro, depois a ordem
+// de entrada do comprador, e dentro do comprador a ordem de cadastro do
+// viajante) — uma leitura só, dois consumidores (card + CSV).
+// ---------------------------------------------------------------------------
+
+export type ViajanteDoNegocio = {
+  id: string;
+  contactId: string;
+  /** Quem comprou — o que agrupa a lista na excursão. */
+  comprador: string;
+  /** Titular do negócio (o primeiro da lista, por definição da ordem). */
+  isTitular: boolean;
+  fullName: string;
+  kind: 'adult' | 'child' | 'infant';
+  nationality: string;
+  temCpf: boolean;
+  temPassaporte: boolean;
+  passportExpiresOn: string | null;
+};
+
+export async function listarViajantesDoNegocio(
+  negocioId: string,
+): Promise<ServiceResult<ViajanteDoNegocio[]>> {
+  return comoResultado(async () => {
+    const { tenantId } = await requireAuthContext();
+
+    return withTenant(tenantId, async (tx) => {
+      const linhas = await tx
+        .select({
+          id: travelers.id,
+          contactId: travelers.contactId,
+          comprador: contacts.name,
+          principal: dealContacts.principal,
+          fullName: travelers.fullName,
+          kind: travelers.kind,
+          nationality: travelers.nationality,
+          temCpf: sql<boolean>`${travelers.cpfHash} is not null`,
+          temPassaporte: sql<boolean>`${travelers.passportNumber} is not null`,
+          passportExpiresOn: travelers.passportExpiresOn,
+        })
+        .from(deals)
+        .innerJoin(dealContacts, eq(dealContacts.dealId, deals.id))
+        .innerJoin(contacts, eq(contacts.id, dealContacts.contactId))
+        .innerJoin(travelers, eq(travelers.contactId, dealContacts.contactId))
+        .where(eq(deals.id, negocioId))
+        .orderBy(desc(dealContacts.principal), asc(dealContacts.createdAt), asc(travelers.createdAt))
+        .limit(200);
+
+      return linhas.map((l) => ({
+        id: l.id,
+        contactId: l.contactId,
+        comprador: l.comprador,
+        isTitular: l.principal,
+        fullName: l.fullName,
+        kind: l.kind,
+        nationality: l.nationality,
+        temCpf: l.temCpf,
+        temPassaporte: l.temPassaporte,
+        passportExpiresOn: l.passportExpiresOn,
+      }));
     });
   });
 }

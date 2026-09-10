@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import {
   contacts,
+  dealContacts,
   deals,
   proposals,
   receivables,
@@ -96,6 +97,9 @@ describe('csvPassageirosDoNegocio', () => {
           currency: 'BRL',
         })
         .returning({ id: deals.id })
+      // Invariante da 0020: todo negócio tem a linha principal em deal_contacts —
+      // é por ela que a lista do grupo (Fase 5a) varre.
+      await tx.insert(dealContacts).values({ tenantId, dealId: deal!.id, contactId: contato!.id, principal: true })
       await tx.insert(travelers).values([
         {
           tenantId,
@@ -131,12 +135,13 @@ describe('csvPassageirosDoNegocio', () => {
     // BOM na frente — e depois some da comparação de linhas.
     expect(conteudo.charCodeAt(0)).toBe(0xfeff)
     const linhas = conteudo.slice(1).replace(/\r\n$/, '').split('\r\n')
-    expect(linhas[0]).toBe('Nome;Tipo;CPF;Passaporte')
+    // Fase 5a: a coluna "Comprador" entrou (o grupo inteiro, titular e secundários).
+    expect(linhas[0]).toBe('Nome;Tipo;CPF;Passaporte;Comprador')
     // PII decifrada — ciphertext na planilha não serve para NADA para o fornecedor.
     // (Ordem entre viajantes do mesmo milissegundo não é promessa — busca por nome.)
     const linhaDe = (nome: string) => linhas.find((l) => l.startsWith(nome))!
-    expect(linhaDe('Helena Reis')).toBe('Helena Reis;Adulto;529.982.247-25;FG123456')
-    expect(linhaDe('Tomás Reis')).toBe('Tomás Reis;Criança;;')
+    expect(linhaDe('Helena Reis')).toBe('Helena Reis;Adulto;529.982.247-25;FG123456;Família Reis')
+    expect(linhaDe('Tomás Reis')).toBe('Tomás Reis;Criança;;;Família Reis')
     expect(linhas).toHaveLength(3)
     expect(conteudo).not.toContain('Terceiro Alheio')
     expect(conteudo).not.toContain('111.444.777-35')

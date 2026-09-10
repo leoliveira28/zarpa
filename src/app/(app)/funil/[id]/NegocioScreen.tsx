@@ -10,6 +10,8 @@ import {
   listarEstagios,
   listarPropostas,
   listarViajantes,
+  listarViajantesDoNegocio,
+  type ViajanteDoNegocio,
   moverEstagioDoNegocio,
   obterNegocio,
   type AtividadeDoNegocio,
@@ -1215,14 +1217,16 @@ function ClientesCard({
 
 function PassageirosCard({ negocio }: { negocio: NegocioDetalhe }) {
   const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
-  const [travelers, setTravelers] = React.useState<ViajanteResumo[]>([]);
+  const [travelers, setTravelers] = React.useState<ViajanteDoNegocio[]>([]);
   const [reloadToken, setReloadToken] = React.useState(0);
   const reload = React.useCallback(() => setReloadToken((token) => token + 1), []);
 
   React.useEffect(() => {
     let active = true;
     setStatus("loading");
-    void listarViajantes({ contatoId: negocio.contactId }).then((result) => {
+    // Fase 5a — o GRUPO inteiro: titular E secundários (deal_contacts, 0020).
+    // A lista presa ao titular sumia os viajantes da excursão.
+    void listarViajantesDoNegocio(negocio.id).then((result) => {
       if (!active) return;
       if (!result.ok) {
         setStatus("error");
@@ -1234,7 +1238,12 @@ function PassageirosCard({ negocio }: { negocio: NegocioDetalhe }) {
     return () => {
       active = false;
     };
-  }, [negocio.contactId, reloadToken]);
+  }, [negocio.id, reloadToken]);
+
+  // O nome do comprador só aparece quando o negócio é grupo (2+ compradores com
+  // viajante) — viagem de um comprador só não ganha ruído.
+  const compradoresComViajante = new Set(travelers.map((t) => t.contactId));
+  const mostrarComprador = compradoresComViajante.size > 1;
 
   return (
     <Card>
@@ -1272,6 +1281,7 @@ function PassageirosCard({ negocio }: { negocio: NegocioDetalhe }) {
                   <span className="truncate text-15 text-ink">{traveler.fullName}</span>
                   <span className="truncate text-13 text-muted">
                     {TRAVELER_KIND_LABELS[traveler.kind] ?? traveler.kind} · {traveler.nationality}
+                    {mostrarComprador ? ` · ${traveler.comprador}` : ""}
                   </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5">
@@ -1334,7 +1344,7 @@ function ResultadoCard({ dealId }: { dealId: string }) {
   }, [dealId, reloadToken]);
 
   if (status === "ready" && dados) {
-    return <ResultadoViagemCard dados={dados} />;
+    return <ResultadoViagemCard dados={dados} porComprador={dados.porComprador} />;
   }
 
   return (

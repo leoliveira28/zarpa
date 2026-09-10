@@ -1,6 +1,6 @@
-import { and, asc, eq, gte, inArray, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lt } from 'drizzle-orm';
 import { z } from 'zod';
-import { contacts, costCenters, deals, receivables, sales, travelers } from '@/db/schema';
+import { contacts, costCenters, dealContacts, deals, receivables, sales, travelers } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
@@ -78,29 +78,37 @@ export async function csvPassageirosDoNegocio(dealId: string): Promise<ServiceRe
       });
     }
 
+    // Fase 5a — o GRUPO inteiro: viajantes do titular E dos secundários (deal_contacts,
+    // 0020), na mesma ordem da 0021 (titular primeiro, entrada do comprador, cadastro).
+    // A lista presa ao titular sumia os viajantes da excursão — o furo que a rodada fecha.
     const viajantes = await tx
       .select({
+        comprador: contacts.name,
         fullName: travelers.fullName,
         kind: travelers.kind,
         // Decifram sozinhos na leitura (encryptedText) — a via da casa, sem tocar na chave.
         cpf: travelers.cpf,
         passportNumber: travelers.passportNumber,
       })
-      .from(travelers)
-      .where(eq(travelers.contactId, negocio.contactId))
-      .orderBy(asc(travelers.createdAt));
+      .from(deals)
+      .innerJoin(dealContacts, eq(dealContacts.dealId, deals.id))
+      .innerJoin(contacts, eq(contacts.id, dealContacts.contactId))
+      .innerJoin(travelers, eq(travelers.contactId, dealContacts.contactId))
+      .where(eq(deals.id, negocio.id))
+      .orderBy(desc(dealContacts.principal), asc(dealContacts.createdAt), asc(travelers.createdAt));
 
     const hoje = new Date().toISOString().slice(0, 10);
     const baseNome = slugificar(negocio.destino ?? negocio.titulo) || 'viagem';
     const arquivo = montarCsv(
       `passageiros-${baseNome}-${hoje}.csv`,
       [
-        ['Nome', 'Tipo', 'CPF', 'Passaporte'],
+        ['Nome', 'Tipo', 'CPF', 'Passaporte', 'Comprador'],
         ...viajantes.map((v) => [
           v.fullName,
           ROTULO_DO_TIPO[v.kind],
           v.cpf ?? '',
           v.passportNumber ?? '',
+          v.comprador,
         ]),
       ],
     );

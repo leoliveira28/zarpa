@@ -29,6 +29,8 @@ export {
 } from './contacts';
 export {
   listarViajantes,
+  listarViajantesDoNegocio,
+  type ViajanteDoNegocio,
   obterViajante,
   buscarViajantePorCpf,
   criarViajante,

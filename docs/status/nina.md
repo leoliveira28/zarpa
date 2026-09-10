@@ -1,5 +1,46 @@
 # Nina — status
 
+## 2026-09-10 (noite, 2ª) — Fase 5a: excursão/grupo leve — os três gaps fechados
+
+Ok do PO no plano (`docs/FASE5_EXCURSAO.md`) virou rodada única. O fluxo do
+critério de aceite fecha: grupo de compradores (0020, já existia) → lista de
+passageiros do grupo → parcelas etiquetadas por comprador → resultado da
+saída com quebra "quem já pagou".
+
+**Gap 1 — passageiros do grupo.** `listarViajantesDoNegocio` (novo em
+`travelers.ts`) varre `deal_contacts` na MESMA ordem dos nomes da 0021
+(titular primeiro, entrada do comprador, cadastro do viajante); o card
+Passageiros da ficha e o `csvPassageirosDoNegocio` (coluna "Comprador" nova)
+consumem a mesma leitura. A lista presa ao titular sumia os viajantes da
+excursão — dois testes antigos do CSV atualizados porque a fixture não
+plantava o espelho da 0020 (a invariant que o join novo agora cobra).
+
+**Gap 2 — etiqueta de comprador (0024, aplicada no dev/teste).**
+`receivables.contact_id` (nullable, SET NULL): venda de um comprador só não
+tem etiqueta e nunca precisará. O serviço valida o comprador contra
+`deal_contacts` (etiquetar com estranho recusa com a correção) — o banco não
+impõe (atravessaria duas FKs por tenant; RLS + serviço cobrem). UI: o select
+"Comprador" nas sheets de parcela SÓ nasce com 2+ clientes no negócio
+(a ficha da venda lê `listarClientesDoNegocio`); a row mostra " · nome" no
+vencimento.
+
+**Gap 3 — resultado por comprador.** `resultadoDaViagem` devolve
+`porComprador` (pago/a pagar, Map na gramática do ranking, maior pendência
+primeiro); `ResultadoViagemCard` ganha a seção "Por comprador" — que a FICHA
+manda e o agregado do Relatório não (não é somável por nome). Sem etiqueta
+nenhuma a seção nem nasce, e o agregado continua fechando (provado no teste:
+zerar as etiquetas não muda `recebidoCents`).
+
+**Juros (pedido do PO no meio da rodada):** editar parcela — valor e
+vencimento — entrou antes (`17b57b0`): o servidor já tinha
+`atualizarParcela`, a UI nunca expôs; sheet de edição na ParcelaRow, só
+parcela não paga.
+
+**Números:** 3 testes novos (`tests/invoices/excursao.test.ts` — o fluxo do
+critério de aceite inteiro); **669/669**; build limpo; lint zerado nos meus
+(baseline da casa mantido nos pré-existentes); 25 migrations no teste, 0024
+no dev.
+
 ## 2026-09-10 (noite) — Fase 4b: faturamento consolidado — fatura, boleto sandbox e baixa automática
 
 A última peça do critério de aceite da Fase 4 (`docs/FASE4_PJ.md` §7), backend

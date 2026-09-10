@@ -1,6 +1,7 @@
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Money, MoneyStat } from "@/components/ui/Money";
 import { Rule } from "@/components/plates";
+import type { ResultadoDaViagem } from "@/server";
 import type { ValoresDaViagem } from "@/lib/ui/fase12Api";
 
 /* =============================================================================
@@ -29,6 +30,7 @@ export function ResultadoViagemCard({
   titulo = "Resultado da viagem",
   nota,
   rodape,
+  porComprador,
 }: {
   /** Os seis números somáveis — o item da ficha e a soma do período cabem nele. */
   dados: ValoresDaViagem;
@@ -38,6 +40,12 @@ export function ResultadoViagemCard({
   nota?: string;
   /** Slot de rodapé (ação única — ver CardFooter). */
   rodape?: React.ReactNode;
+  /**
+   * Quebra por comprador (Fase 5a) — só a FICHA manda (excursão com cobrança
+   * individual); o agregado do Relatório não tem a quebra por natureza. Vazio:
+   * a seção nem nasce, e a viagem de um comprador só fica como sempre foi.
+   */
+  porComprador?: ResultadoDaViagem["porComprador"];
 }) {
   const reserva = Math.max(
     1,
@@ -105,6 +113,32 @@ export function ResultadoViagemCard({
           reserveFor={reserva}
         />
       </div>
+
+      {porComprador && porComprador.length > 0 ? (
+        <>
+          <Rule loose />
+          <div className="flex flex-col gap-2 px-4 pb-4">
+            <span className="text-13 font-medium text-muted">Por comprador</span>
+            <ul className="flex flex-col">
+              {porComprador.map((linha) => (
+                <li key={linha.contactId} className="flex items-center gap-3 py-2">
+                  <span className="min-w-0 flex-1 truncate text-15 text-ink">{linha.nome}</span>
+                  {linha.pagoCents > 0 ? (
+                    <Money cents={linha.pagoCents} size="15" tone="ok" reserveFor={reserva} />
+                  ) : (
+                    <span className="text-13 text-subtle">não pagou</span>
+                  )}
+                  {linha.aPagarCents > 0 ? (
+                    <span className="text-13 tabular-nums text-muted">
+                      falta <Money cents={linha.aPagarCents} size="13" tone="muted" reserveFor={reserva} />
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      ) : null}
 
       {rodape}
     </Card>

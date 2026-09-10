@@ -169,6 +169,13 @@
       "when": 1759363200000,
       "tag": "0023_faturamento_consolidado",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1759449600000,
+      "tag": "0024_comprador_da_parcela",
+      "breakpoints": true
     }
   ]
 }

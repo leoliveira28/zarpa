@@ -2,7 +2,7 @@
 
 import { desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { deals, pipelineStages, proposalOptions, receivables, sales } from '@/db/schema';
+import { contacts, deals, pipelineStages, proposalOptions, receivables, sales } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
@@ -54,6 +54,17 @@ export type ResultadoDaViagem = {
   margemPrevistaCents: number;
   /** Espelho do estado da comissão na venda; `'prevista'` quando ainda não há venda. */
   comissaoStatus: 'prevista' | 'recebida' | 'atrasada';
+  /**
+   * Quebra por comprador (Fase 5a, 0024) — a saída com cobrança individual. Só
+   * existe quando HÁ parcelas etiquetadas; viagem de um comprador só vem vazia
+   * (a seção nem nasce na tela).
+   */
+  porComprador: Array<{
+    contactId: string;
+    nome: string;
+    pagoCents: number;
+    aPagarCents: number;
+  }>;
 };
 
 const resultadoInput = z.object({ dealId: z.uuid('Negócio inválido') });
@@ -166,11 +177,37 @@ export async function resultadoDaViagem(dealId: string): Promise<ServiceResult<R
       let recebidoCents = 0;
       let aReceberCents = 0;
 
+      let porComprador: ResultadoDaViagem['porComprador'] = [];
+
       if (venda) {
         const parcelas = await tx
-          .select({ status: receivables.status, valorCents: receivables.valorCents })
+          .select({
+            status: receivables.status,
+            valorCents: receivables.valorCents,
+            contactId: receivables.contactId,
+            comprador: contacts.name,
+          })
           .from(receivables)
+          .leftJoin(contacts, eq(contacts.id, receivables.contactId))
           .where(eq(receivables.saleId, venda.id));
+
+        // A quebra só existe com etiqueta — soma por comprador as vivas, na mesma
+        // gramática do Map do ranking (Fase 5a). Sem etiqueta nenhuma, seção nula.
+        const porContato = new Map<string, { nome: string; pago: number; aPagar: number }>();
+        for (const p of parcelas) {
+          if (!p.contactId || p.status === 'cancelado') continue;
+          let entrada = porContato.get(p.contactId);
+          if (!entrada) {
+            entrada = { nome: p.comprador ?? '', pago: 0, aPagar: 0 };
+            porContato.set(p.contactId, entrada);
+          }
+          if (p.status === 'pago') entrada.pago += p.valorCents;
+          if (p.status === 'pendente' || p.status === 'atrasado') entrada.aPagar += p.valorCents;
+        }
+        porComprador = [...porContato.entries()]
+          .map(([contactId, e]) => ({ contactId, nome: e.nome, pagoCents: e.pago, aPagarCents: e.aPagar }))
+          // Maior pendência primeiro — é a cobrança do dia.
+          .sort((a, b) => b.aPagarCents - a.aPagarCents || b.pagoCents - a.pagoCents);
 
         const vivas = parcelas.filter((p) => p.status !== 'cancelado');
         recebidoCents = vivas
@@ -197,6 +234,7 @@ export async function resultadoDaViagem(dealId: string): Promise<ServiceResult<R
         aReceberCents,
         margemPrevistaCents: valorVendaCents - custoPrevistoCents,
         comissaoStatus,
+        porComprador,
       } satisfies ResultadoDaViagem;
     });
   });

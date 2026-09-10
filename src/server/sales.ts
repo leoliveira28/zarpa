@@ -2,7 +2,7 @@
 
 import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { deals, proposalOptions, proposals, receivables, sales } from '@/db/schema';
+import { dealContacts, deals, proposalOptions, proposals, receivables, sales } from '@/db/schema';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
@@ -47,6 +47,7 @@ const COLUNAS_VENDA = {
 const COLUNAS_PARCELA = {
   id: receivables.id,
   saleId: receivables.saleId,
+  contactId: receivables.contactId,
   venceEm: receivables.venceEm,
   valorCents: receivables.valorCents,
   status: receivables.status,
@@ -76,6 +77,12 @@ export type VendaResumo = {
 export type ParcelaResumo = {
   id: string;
   saleId: string;
+  /**
+   * Comprador da parcela (Fase 5a, 0024) — `null` na venda de um comprador só. O
+   * NOME não viaja aqui: a tela resolve pela lista de clientes do negócio que já
+   * carrega (uma fonte só de nomes, como em todo lugar da casa).
+   */
+  contactId: string | null;
   /** `AAAA-MM-DD`. */
   venceEm: string;
   valorCents: number;
@@ -142,6 +149,31 @@ async function exigirVenda(
     });
   }
   return venda;
+}
+
+/**
+ * Validade da etiqueta de comprador (Fase 5a, 0024): tem que ser cliente DO negócio
+ * da venda (`deal_contacts`). O banco não impõe (atravessaria duas FKs por tenant);
+ * o serviço recusa com a correção. `contatoId` nulo nem chega aqui.
+ */
+async function exigirCompradorDoNegocio(
+  tx: Parameters<Parameters<typeof withTenant>[1]>[0],
+  vendaId: string,
+  contatoId: string,
+): Promise<void> {
+  const [membro] = await tx
+    .select({ contactId: dealContacts.contactId })
+    .from(dealContacts)
+    .innerJoin(sales, eq(sales.dealId, dealContacts.dealId))
+    .where(and(eq(sales.id, vendaId), eq(dealContacts.contactId, contatoId)))
+    .limit(1);
+
+  if (!membro) {
+    throw new ServiceError('DADOS_INVALIDOS', 'Esse comprador não é cliente deste negócio.', {
+      campo: 'contactId',
+      correcao: 'Adicionar o comprador aos clientes do negócio antes',
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +531,8 @@ export async function excluirVenda(vendaId: string): Promise<ServiceResult<null>
 const parcelaInput = z.object({
   venceEm: dataInput,
   valorCents: z.number().int().min(0),
+  /** Comprador da parcela (excursão — Fase 5a). Validado contra deal_contacts. */
+  contactId: z.uuid('Comprador inválido').nullable().optional(),
 });
 
 export type ParcelaInput = z.infer<typeof parcelaInput>;
@@ -541,6 +575,9 @@ export async function criarParcela(
       // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
       await exigirContaAtiva(tx, tenantId);
       await exigirVenda(tx, vendaId);
+      if (dados.contactId) {
+        await exigirCompradorDoNegocio(tx, vendaId, dados.contactId);
+      }
 
       const [criada] = await tx
         .insert(receivables)
@@ -549,6 +586,7 @@ export async function criarParcela(
           saleId: vendaId,
           venceEm: dados.venceEm,
           valorCents: dados.valorCents,
+          contactId: dados.contactId ?? null,
           status: 'pendente',
         })
         .returning(COLUNAS_PARCELA);
@@ -664,6 +702,8 @@ const parcelaPatchInput = z.object({
   venceEm: dataInput.optional(),
   valorCents: z.number().int().min(0).optional(),
   status: z.enum(['pendente', 'pago', 'atrasado', 'cancelado']).optional(),
+  /** Comprador da parcela (excursão — Fase 5a). `null` limpa a etiqueta. */
+  contactId: z.uuid('Comprador inválido').nullable().optional(),
 });
 
 export type ParcelaPatch = z.infer<typeof parcelaPatchInput>;
@@ -706,6 +746,10 @@ export async function atualizarParcela(
       valores.pagoEm = dados.status === 'pago' ? new Date() : null;
       mudou++;
     }
+    if (dados.contactId !== undefined) {
+      valores.contactId = dados.contactId;
+      mudou++;
+    }
 
     if (mudou === 0) {
       throw new ServiceError('DADOS_INVALIDOS', 'Nada para salvar.', { correcao: 'Fechar' });
@@ -714,6 +758,20 @@ export async function atualizarParcela(
     return withTenant(tenantId, async (tx) => {
       // S13a: gate de dunning — recusa escrita se a conta está bloqueada (subscriptionGate.ts).
       await exigirContaAtiva(tx, tenantId);
+      if (dados.contactId) {
+        // A validade da etiqueta depende do negócio da venda — que vem da parcela.
+        const [alvo] = await tx
+          .select({ saleId: receivables.saleId })
+          .from(receivables)
+          .where(eq(receivables.id, parcelaId))
+          .limit(1);
+        if (!alvo) {
+          throw new ServiceError('NAO_ENCONTRADO', 'Essa parcela não existe mais.', {
+            correcao: 'Recarregar a venda',
+          });
+        }
+        await exigirCompradorDoNegocio(tx, alvo.saleId, dados.contactId);
+      }
       const linhas = await tx
         .update(receivables)
         .set(valores)
