@@ -1,5 +1,44 @@
 # Nina — status
 
+## 2026-09-09 (noite, 3ª) — Micro-rodada: furos fechados pelo Rafa (e79b6f1), contornos aposentados
+
+O §14 do handoff dele cumpre o que promete. O que mudou do meu lado:
+
+- **`src/lib/ui/equipeApi.ts`**: a interface `AuthOrganization` (e o cast
+  `organizacao()`) se aposentou — as quatro mutações chamam
+  `authClient.organization.*` direto, tipadas. Achado da integração que
+  vale registrar: o método CLIENT do convite é **`inviteMember`**, não
+  `createInvitation` — o nome do lado browser vem do PATH
+  (`/organization/invite-member`), enquanto `createInvitation` é o nome do
+  endpoint NO SERVIDOR (`auth.api.createInvitation`). Mesma rota, mesmo input,
+  mesmo gate de assentos; o comentário no arquivo conta isso para o próximo.
+  E a regra do §14.1 virou ASSINATURA: `organizationId` é obrigatório em
+  `mudarPapelDoMembro`/`removerMembro` (opcional no schema do plugin, mas sem
+  ele a rota procura "organization ativa" da sessão, que a casa não mantém).
+  Os tradutores de erro ficaram intocados, como previsto — o shape do plugin
+  casa no `RespostaDoPlugin`.
+- **`EquipeScreen.tsx`**: as chamadas de mudar papel e remover passam o
+  `organizationId` do tenant; guarda honesta no caso (teórico) de a carga ter
+  vindo pela metade — toast de erro + reload, sem chamar o plugin às cegas.
+- **`NegocioScreen.tsx`** (`VendedorField`): o contorno do furo 2 saiu INTEIRO.
+  A ficha carrega `agentId`/`agentName` (inclusive no negócio PERDIDO, que era
+  exatamente o caso que o contorno não cobria), então a segunda leitura
+  (`listarNegociosDoFunil`) saiu, o hint "de quem era não aparece em negócio
+  perdido" se aposentou, e o patch do pai agora sai do RETORNO do
+  `atualizarNegocio` (o `NegocioDetalhe` reconciliado) — sem adivinhar o nome
+  no cliente. Uma leitura a menos em cada abertura de ficha. O guard de dono
+  continua idêntico: quem decide é o `listarEquipe`, e o erro do servidor
+  segue sendo a verdade.
+
+### Verificação
+
+- `npx tsc --noEmit`: **0 erros** (verificado após cada passo).
+- Lint: `equipeApi.ts` e `EquipeScreen.tsx` **0 problemas**;
+  `NegocioScreen.tsx` mantém os 8 pré-existentes (5 erros + 3 warnings, todos
+  da fundação — retirei só o warning que a aposentadoria do hint criou).
+- `npm test`: **32 arquivos / 606 testes** (o 606º é o teste do Rafa que trava
+  o furo 2). `npm run build`: limpo.
+
 ## 2026-09-09 (noite, 2ª) — TELAS DA FASE 3: `/equipe`, monograma, escopo, quebra por vendedor, reatribuição
 
 A fundação do Rafa (§13 do handoff dele) consumida de ponta a ponta. A tela da

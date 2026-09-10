@@ -7,7 +7,6 @@ import {
   atualizarNegocio,
   listarEquipe,
   listarEstagios,
-  listarNegociosDoFunil,
   listarPropostas,
   listarViajantes,
   moverEstagioDoNegocio,
@@ -41,7 +40,7 @@ import {
   CardTitle,
 } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Field, FieldError, FieldHint, Label, SavedMark } from "@/components/ui/Field";
+import { Field, FieldError, Label, SavedMark } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { CentsInput, MoneyStat } from "@/components/ui/Money";
 import { Monogram } from "@/components/ui/Monogram";
@@ -623,7 +622,7 @@ function ViagemCard({
         {/* Fase 3 (§13.6) — de quem é este negócio. Só o dono vê: reatribuir
             é decisão dele (o guard está no servidor e o erro DADOS_INVALIDOS
             de lá é a verdade, não este sumiço). */}
-        <VendedorField negocio={negocio} dealId={dealId} />
+        <VendedorField negocio={negocio} dealId={dealId} onPatched={onPatched} />
       </CardBody>
     </Card>
   );
@@ -632,18 +631,15 @@ function ViagemCard({
 /* -----------------------------------------------------------------------------
    VendedorField — reatribuição de negócio (§13.6), dono only
    -------------------------------------------------------------------------
-   Duas leituras extra, com precedente na própria ficha (a PropostaCard lê
-   `listarPropostas` e filtra por `dealId` no cliente):
+   UMA leitura extra: `listarEquipe()` diz SE eu sou o dono (o membro cujo
+   `userId` é o `solicitanteUserId` com papel 'owner') e quem são os membros —
+   o cardápio do select. Não-dono: o campo nem nasce.
 
-   1. `listarEquipe()` diz SE eu sou o dono (o membro cujo `userId` é o
-      `solicitanteUserId` com papel 'owner') e quem são os membros — o
-      cardápio do select. Não-dono: o campo nem nasce.
-
-   2. `NegocioDetalhe` NÃO carrega `agentId`/`agentName` — furo de contrato
-      registrado em docs/handoffs/nina-para-rafa.md. O contorno honesto é ler
-      o valor ATUAL do quadro (`listarNegociosDoFunil`, que tem os dois) e
-      achar o negócio pelo id. Em negócio PERDIDO o quadro não o devolve, e o
-      campo diz isso: sem fingir valor que não sei, sem esconder o controle.
+   O valor atual vem da PRÓPRIA ficha: `NegocioDetalhe` carrega
+   `agentId`/`agentName` desde o e79b6f1 (§14.2) — inclusive no negócio
+   PERDIDO, que é o caso que o contorno antigo (ler o quadro) não cobria. E o
+   retorno do `atualizarNegocio` é o `NegocioDetalhe` reconciliado, então o
+   patch do pai sai do RETORNO, sem adivinhar o nome no cliente.
 
    Commit no change (select não tem blur útil), "Salvo" discreto como todo
    campo da ficha, e o desfazer do toast devolve o vendedor anterior.
@@ -655,50 +651,41 @@ const SEM_VENDEDOR = "sem-vendedor";
 function VendedorField({
   negocio,
   dealId,
+  onPatched,
 }: {
   negocio: NegocioDetalhe;
   dealId: string;
+  onPatched: (patch: Partial<NegocioDetalhe>) => void;
 }) {
   const toast = useToast();
 
   const [status, setStatus] = React.useState<"loading" | "indisponivel" | "pronto">("loading");
   const [membros, setMembros] = React.useState<EquipeResumo["membros"]>([]);
-  /** `{ agentId, agentName }` do negócio — `null` quando não dá para saber. */
-  const [atual, setAtual] = React.useState<{ agentId: string | null; agentName: string | null } | null>(null);
-  const [valor, setValor] = React.useState<string>(SEM_VENDEDOR);
+  const [valor, setValor] = React.useState<string>(negocio.agentId ?? SEM_VENDEDOR);
   const [state, setState] = React.useState<"idle" | "saving" | "saved" | "error">("idle");
   const [erro, setErro] = React.useState<{ mensagem: string; correcao?: string } | null>(null);
 
   React.useEffect(() => {
     let active = true;
-    void Promise.all([listarEquipe(), listarNegociosDoFunil()]).then(
-      ([equipeResult, quadroResult]) => {
-        if (!active) return;
-        if (!equipeResult.ok) {
-          setStatus("indisponivel");
-          return;
-        }
-        const resumo = equipeResult.data;
-        const eu = resumo.membros.find((m) => m.userId === resumo.solicitanteUserId);
-        if (eu?.role !== "owner") {
-          setStatus("indisponivel"); // agente/admin não reatribuem — campo nem nasce
-          return;
-        }
-        setMembros(resumo.membros);
-        if (quadroResult.ok) {
-          const meu = quadroResult.data.find((item) => item.id === negocio.id);
-          if (meu) {
-            setAtual({ agentId: meu.agentId, agentName: meu.agentName });
-            setValor(meu.agentId ?? SEM_VENDEDOR);
-          }
-        }
-        setStatus("pronto");
-      },
-    );
+    void listarEquipe().then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setStatus("indisponivel");
+        return;
+      }
+      const resumo = result.data;
+      const eu = resumo.membros.find((m) => m.userId === resumo.solicitanteUserId);
+      if (eu?.role !== "owner") {
+        setStatus("indisponivel"); // agente/admin não reatribuem — campo nem nasce
+        return;
+      }
+      setMembros(resumo.membros);
+      setStatus("pronto");
+    });
     return () => {
       active = false;
     };
-  }, [negocio.id]);
+  }, []);
 
   /** Grava a atribuição. `anunciar` é falso no caminho do DESFAZER — o toast
       que o chamou já é a mensagem; um segundo toast repetindo a volta é
@@ -719,19 +706,15 @@ function VendedorField({
       setErro({ mensagem: result.mensagem, correcao: result.correcao });
       return;
     }
+    // §14.2: o retorno é o NegocioDetalhe reconciliado — o patch sai do
+    // RETORNO (agentId E agentName), sem reler nada nem adivinhar o nome.
     setState("saved");
-    setAtual({
-      agentId: proximo === SEM_VENDEDOR ? null : proximo,
-      agentName:
-        proximo === SEM_VENDEDOR
-          ? null
-          : (membros.find((m) => m.userId === proximo)?.name ?? null),
-    });
+    onPatched({ agentId: result.data.agentId, agentName: result.data.agentName });
     if (!anunciar) return;
     toast.undo(
-      proximo === SEM_VENDEDOR
+      result.data.agentId === null
         ? "Vendedor removido do negócio"
-        : `Reatribuído para ${primeiroNomeDe(nomeDe(proximo) ?? "novo vendedor")}`,
+        : `Reatribuído para ${primeiroNomeDe(result.data.agentName ?? nomeDe(result.data.agentId) ?? "novo vendedor")}`,
       () => void salvar(anterior, false),
       { tone: "ok" },
     );
@@ -755,8 +738,6 @@ function VendedorField({
     );
   }
   if (status === "indisponivel") return null;
-
-  const semValorConhecido = atual === null;
 
   return (
     <Field invalid={state === "error"} className="mt-4">
@@ -806,12 +787,6 @@ function VendedorField({
         >
           {erro.mensagem}
         </FieldError>
-      ) : semValorConhecido ? (
-        // Negócio perdido: o quadro não devolve o vendedor atual (furo do
-        // contrato). O hint diz o que o campo faz — não finge que sabe.
-        <FieldHint>
-          De quem era não aparece em negócio perdido — escolher aqui reatribui.
-        </FieldHint>
       ) : null}
     </Field>
   );

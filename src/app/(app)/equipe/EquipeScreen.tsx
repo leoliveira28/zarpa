@@ -215,6 +215,16 @@ export function EquipeScreen() {
 
   function mudarPapel(membro: EquipeResumo["membros"][number], papel: PapelDoMembro) {
     if (papel === membro.role) return;
+    // O §14.1 manda o organizationId explicitamente (a sessão da casa não
+    // mantém "organization ativa"). Sem ele na carga, não há para quem falar.
+    if (!organizationId) {
+      toast.show({
+        title: "Não consegui identificar a agência.",
+        tone: "danger",
+      });
+      reload();
+      return;
+    }
     const anterior = membro.role;
     setPapelEmTransito(membro.memberId);
     setEquipe((current) =>
@@ -227,7 +237,7 @@ export function EquipeScreen() {
           }
         : current,
     );
-    void mudarPapelDoMembro({ memberId: membro.memberId, role: papel }).then(
+    void mudarPapelDoMembro({ memberId: membro.memberId, role: papel, organizationId }).then(
       (resultado) => {
         setPapelEmTransito(null);
         if (!resultado.ok) {
@@ -251,7 +261,7 @@ export function EquipeScreen() {
         toast.undo(
           `${membro.name ?? membro.email} agora é ${ROTULO_PAPEL[papel]}`,
           () => {
-            void mudarPapelDoMembro({ memberId: membro.memberId, role: anterior }).then(
+            void mudarPapelDoMembro({ memberId: membro.memberId, role: anterior, organizationId }).then(
               (volteiou) => {
                 if (!volteiou.ok) reload();
                 else
@@ -276,12 +286,21 @@ export function EquipeScreen() {
 
   function remover(membro: EquipeResumo["membros"][number]) {
     const nome = membro.name ?? membro.email;
+    // Mesma regra do §14.1 — ver a guarda em mudarPapel.
+    if (!organizationId) {
+      toast.show({
+        title: "Não consegui identificar a agência.",
+        tone: "danger",
+      });
+      reload();
+      return;
+    }
     setEquipe((current) =>
       current
         ? { ...current, membros: current.membros.filter((m) => m.memberId !== membro.memberId) }
         : current,
     );
-    void removerMembro(membro.memberId).then((resultado) => {
+    void removerMembro({ memberIdOrEmail: membro.memberId, organizationId }).then((resultado) => {
       if (!resultado.ok) {
         reload();
         toast.show({

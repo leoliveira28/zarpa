@@ -15,16 +15,18 @@ import type { PapelDoMembro } from "@/server";
    pt-BR + correção) que a interface da casa espera, e devolve um resultado
    fechado para a tela nunca ver JSON cru.
 
-   FURO REGISTRADO (docs/handoffs/nina-para-rafa.md): `src/lib/auth/client.ts`
-   (dele) não tem `organizationClient()` no array de plugins — o `authClient`
-   não conhece os métodos de organização em TEMPO DE TIPO. Em RUNTIME não há
-   problema: o client do better-auth é um proxy dinâmico de rotas, então
-   `authClient.organization.createInvitation(...)` resolve para
-   POST /organization/create-invitation, que o server plugin atende. A interface
-   local `AuthOrganization` abaixo tipa só os quatro métodos que a Equipe usa;
-   no dia em que o `organizationClient()` entrar, ela pode se aposentar e os
-   tipos passam a vir da lib. A guarda `organization == null` mantém a tela
-   viva e honesta caso a rota não exista em alguma build.
+   O `organizationClient()` está no ar (e79b6f1, §14.1 do handoff): o
+   `authClient.organization` existe em TIPO, então as chamadas são diretas — a
+   interface local que tipava o cast se aposentou. Os tradutores de erro ficam:
+   o shape do plugin client casa no `RespostaDoPlugin` daqui, e a recusa de
+   limite ("membership limit") continua sendo o caso que mais importa.
+
+   REGRA DO §14.1 (não esquecer nas próximas mutações): o plugin aceita
+   `organizationId` OPCIONAL em `updateMemberRole`/`removeMember`, mas SEM ele
+   a rota resolve a "organization ativa" da SESSÃO — e esta casa NÃO mantém
+   `activeOrganizationId`. Todo método que o plugin deixa opcional aqui é
+   OBRIGATÓRIO na assinatura: é o id do tenant (o id da organization É o id do
+   tenant, 0019), o mesmo que o convite já manda.
    ========================================================================== */
 
 /** Resposta crua do plugin — só o que a tradução lê. */
@@ -36,30 +38,6 @@ type RespostaDoPlugin<T> = {
     code?: string | null;
   } | null;
 };
-
-/** Os quatro métodos de `authClient.organization` que a tela Equipe fala. */
-type AuthOrganization = {
-  createInvitation: (input: {
-    email: string;
-    role: PapelDoMembro;
-    /** O id da organization É o id do tenant (0019). Explícito de propósito: a sessão desta casa não mantém "organization ativa" do plugin. */
-    organizationId: string;
-    resend?: boolean;
-  }) => Promise<RespostaDoPlugin<unknown>>;
-  cancelInvitation: (input: { invitationId: string }) => Promise<RespostaDoPlugin<unknown>>;
-  updateMemberRole: (input: {
-    memberId: string;
-    role: PapelDoMembro;
-  }) => Promise<RespostaDoPlugin<unknown>>;
-  removeMember: (input: { memberIdOrEmail: string }) => Promise<RespostaDoPlugin<unknown>>;
-};
-
-function organizacao(): AuthOrganization | null {
-  const candidate = authClient as unknown as {
-    organization?: AuthOrganization | null;
-  };
-  return candidate.organization ?? null;
-}
 
 /* ------------------------------------------------------------------ resultado */
 
@@ -126,20 +104,11 @@ function traduzir(error: NonNullable<RespostaDoPlugin<unknown>["error"]>): Recus
   };
 }
 
-const SEM_ROTA: RecusaDeEquipe = {
-  codigo: "outro",
-  mensagem:
-    "A parte da equipe que fala com o servidor não está disponível nesta build.",
-  correcao: "Tentar de novo",
-};
-
 async function comoResultadoDeEscrita(
-  call: (organization: AuthOrganization) => Promise<RespostaDoPlugin<unknown>>,
+  call: () => Promise<RespostaDoPlugin<unknown>>,
 ): Promise<ResultadoDeEscrita> {
-  const organization = organizacao();
-  if (!organization) return { ok: false, recusa: SEM_ROTA };
   try {
-    const resposta = await call(organization);
+    const resposta = await call();
     if (resposta.error) return { ok: false, recusa: traduzir(resposta.error) };
     return { ok: true };
   } catch {
@@ -156,21 +125,26 @@ async function comoResultadoDeEscrita(
 
 /* ------------------------------------------------------------------- as quatro */
 
-/** Envia o convite. O gate de assentos do plugin recusa o N+1 aqui. */
+/** Envia o convite. O gate de assentos do plugin recusa o N+1 aqui.
+    NOTA DE NOMES: o método CLIENT é `inviteMember` (o nome vem do PATH
+    `/organization/invite-member`), não `createInvitation` — que é o nome do
+    endpoint NO SERVIDOR (`auth.api.createInvitation`). É a mesma rota, o
+    mesmo input e o mesmo gate; só o rótulo do lado do browser difere. */
 export function convidarMembro(input: {
   email: string;
   role: PapelDoMembro;
+  /** O id da organization É o id do tenant (0019). Explícito de propósito. */
   organizationId: string;
 }): Promise<ResultadoDeEscrita> {
-  return comoResultadoDeEscrita((organization) =>
-    organization.createInvitation(input),
+  return comoResultadoDeEscrita(() =>
+    authClient.organization.inviteMember(input),
   );
 }
 
 /** Cancela um convite pendente. Quem desfazer precisa fazer é RECONVIDAR — a tela sabe. */
 export function cancelarConvite(invitationId: string): Promise<ResultadoDeEscrita> {
-  return comoResultadoDeEscrita((organization) =>
-    organization.cancelInvitation({ invitationId }),
+  return comoResultadoDeEscrita(() =>
+    authClient.organization.cancelInvitation({ invitationId }),
   );
 }
 
@@ -178,15 +152,21 @@ export function cancelarConvite(invitationId: string): Promise<ResultadoDeEscrit
 export function mudarPapelDoMembro(input: {
   memberId: string;
   role: PapelDoMembro;
+  /** Opcional no schema do plugin, OBRIGATÓRIO aqui — ver a regra do §14.1 no cabeçalho. */
+  organizationId: string;
 }): Promise<ResultadoDeEscrita> {
-  return comoResultadoDeEscrita((organization) =>
-    organization.updateMemberRole(input),
+  return comoResultadoDeEscrita(() =>
+    authClient.organization.updateMemberRole(input),
   );
 }
 
 /** Remove um membro. O desfazer da tela é reconvidar pelo e-mail e pelo papel antigos. */
-export function removerMembro(memberId: string): Promise<ResultadoDeEscrita> {
-  return comoResultadoDeEscrita((organization) =>
-    organization.removeMember({ memberIdOrEmail: memberId }),
+export function removerMembro(input: {
+  memberIdOrEmail: string;
+  /** Opcional no schema do plugin, OBRIGATÓRIO aqui — ver a regra do §14.1 no cabeçalho. */
+  organizationId: string;
+}): Promise<ResultadoDeEscrita> {
+  return comoResultadoDeEscrita(() =>
+    authClient.organization.removeMember(input),
   );
 }
