@@ -552,16 +552,32 @@ export async function registrarInteresseOferta(
       }
     }
 
-    // Reuso por WhatsApp: compara só dígitos dos dois lados (mesma régua da
-    // importação). Sem blind index de telefone na casa, o LIKE por dígitos
-    // é a leitura honesta — o índice `contacts_tenant_phone_idx` varre.
+    // Reuso por WhatsApp: compara com a MESMA normalização de
+    // `normalizarTelefone` dos DOIS lados — só dígitos, sem o `55` do país e
+    // sem o zero de operadora. Sem isto, `+55 11 98888-7777` (gravado cru) e
+    // `11 98888-7777` (digitado depois) viravam DOIS contatos idênticos — o
+    // bug que o PO pegou. Checa `whatsapp` E `phone` (contato manual pode
+    // preencher só um dos campos).
     const [existente] = await tx
       .select({ id: contacts.id, tags: contacts.tags })
       .from(contacts)
       .where(
         and(
           eq(contacts.tenantId, tenantId),
-          sql`regexp_replace(coalesce(${contacts.whatsapp}, ''), '\\D', '', 'g') = ${telefone}`,
+          sql`(
+            regexp_replace(coalesce(${contacts.whatsapp}, ''), '\\D', '', 'g') = ${telefone}
+            or regexp_replace(coalesce(${contacts.phone}, ''), '\\D', '', 'g') = ${telefone}
+            or (
+              length(regexp_replace(coalesce(${contacts.whatsapp}, ''), '\\D', '', 'g')) > 11
+              and left(regexp_replace(coalesce(${contacts.whatsapp}, ''), '\\D', '', 'g'), 2) = '55'
+              and substring(regexp_replace(coalesce(${contacts.whatsapp}, ''), '\\D', '', 'g') from 3) = ${telefone}
+            )
+            or (
+              length(regexp_replace(coalesce(${contacts.phone}, ''), '\\D', '', 'g')) > 11
+              and left(regexp_replace(coalesce(${contacts.phone}, ''), '\\D', '', 'g'), 2) = '55'
+              and substring(regexp_replace(coalesce(${contacts.phone}, ''), '\\D', '', 'g') from 3) = ${telefone}
+            )
+          )`,
         ),
       )
       .limit(1);

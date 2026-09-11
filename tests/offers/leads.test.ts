@@ -154,6 +154,41 @@ describe('interesse da Vitrine (7b)', () => {
     expect(leads[0]?.contactId).toBe(antiga!.id)
   })
 
+  it('REGRESSÃO do bug do PO: o mesmo número com e sem `+55` NÃO vira dois cadastros', async () => {
+    const fixture = await seedTenant('regressao')
+    entrarComo(fixture)
+
+    const oferta = await criarOferta({ title: 'Pacote Dubái', type: 'pacote', priceCents: 700_000 })
+    expect(oferta.ok).toBe(true)
+    if (!oferta.ok) return
+    await publicarOferta({ id: oferta.data.id, publicada: true })
+
+    // Primeira captura com código do país; segunda sem — mesmo número.
+    const primeira = await registrarInteresseOferta({
+      slug: fixture.slug,
+      token: oferta.data.publicToken,
+      name: 'João Cruz',
+      whatsapp: '+55 11 98888-7777',
+    })
+    expect(primeira.ok).toBe(true)
+    const segunda = await registrarInteresseOferta({
+      slug: fixture.slug,
+      token: oferta.data.publicToken,
+      name: 'João Cruz',
+      whatsapp: '11 98888-7777',
+    })
+    expect(segunda.ok).toBe(true)
+
+    const contatos = await withTenant(fixture.tenantId, (tx) =>
+      tx.select({ id: contacts.id, name: contacts.name, whatsapp: contacts.whatsapp }).from(contacts),
+    )
+    expect(contatos).toHaveLength(1)
+    const leads = await withTenant(fixture.tenantId, (tx) =>
+      tx.select({ id: offerLeads.id }).from(offerLeads),
+    )
+    expect(leads).toHaveLength(1)
+  })
+
   it('recusas: oferta despublicada, WhatsApp inválido — e o lead de outra agência não vaza', async () => {
     const fixture = await seedTenant('recusa')
     entrarComo(fixture)
