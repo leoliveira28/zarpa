@@ -694,7 +694,8 @@ export async function leadsRecentesDaVitrine(
     const dias = Math.min(Math.max(filtro?.dias ?? 7, 1), 30);
 
     return withTenant(tenantId, async (tx) => {
-      const desde = new Date(Date.now() - dias * 24 * 60 * 60 * 1000);
+      // ISO string: o template `sql` cru não interpola Date (o driver rejeita).
+      const desde = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
 
       const [total] = await tx
         .select({ total: sql<number>`count(*)::int` })
