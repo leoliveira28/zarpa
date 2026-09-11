@@ -5,6 +5,7 @@ import { Assinatura } from "@/components/public/Assinatura";
 import { PublicBlockSection } from "@/components/public/PublicBlockSection";
 import { Money } from "@/components/ui/Money";
 import { waMeLink } from "@/lib/ui/whatsapp";
+import { FormularioInteresse } from "@/components/public/FormularioInteresse";
 import { TIPO_LABEL } from "@/lib/ui/ofertaTipo";
 
 export const metadata: Metadata = { title: "Oferta" };
@@ -94,16 +95,16 @@ export default async function OfertaPublicaPage({
         </section>
       ) : null}
 
-      {whatsapp ? (
-        <a
-          href={`${whatsapp}${mensagem ? `&text=${mensagem}` : ""}`}
-          target="_blank"
-          rel="noopener"
-          className="flex min-h-11 items-center justify-center rounded-md bg-accent px-6 text-15 font-medium text-on-accent hover:bg-accent-hover"
-        >
-          Tenho interesse — falar com a agência
-        </a>
-      ) : null}
+      {/* Fit 7b — o interesse vira CLIENTE: nome + WhatsApp capturados aqui,
+          contato com tag `vitrine` no cadastro da agência, lead na ficha da
+          oferta. O WhatsApp direto fica como caminho B. */}
+      <FormularioInteresse
+        slug={slug}
+        token={token}
+        titulo={oferta.title}
+        agenciaNome={agencia.nome}
+        whatsappFallback={whatsapp ? `${whatsapp}${mensagem ? `&text=${mensagem}` : ""}` : null}
+      />
 
       <footer className="mt-auto pt-8">
         <Assinatura

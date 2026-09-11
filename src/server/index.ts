@@ -404,3 +404,8 @@ export {
   resumoDosGrupos,
   type ParcelasDoGrupo,
 } from './groups';
+export {
+  registrarInteresseOferta,
+  listarInteressadosDaOferta,
+  type InteressadoDaOferta,
+} from './offers';

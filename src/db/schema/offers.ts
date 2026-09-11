@@ -14,6 +14,7 @@ import {
 import { uuidv7 } from '../uuid';
 import { tenants } from './tenants';
 import { groups } from './groups';
+import { contacts } from './people';
 
 /**
  * `offers` — a oferta da Vitrine (Fit 7, `docs/FIT7_VITRINE.md`,
@@ -73,3 +74,42 @@ export const offers = pgTable(
 
 export type Offer = typeof offers.$inferSelect;
 export type NewOffer = typeof offers.$inferInsert;
+
+/**
+ * `offer_leads` — o interessado de uma oferta da Vitrine (Fit 7b,
+ * `drizzle/0027_interesse_ofertas.sql`). Nome + WhatsApp capturados na página
+ * pública: o contato é REUSADO quando o WhatsApp já é cliente da casa, e a
+ * linha é idempotente por (oferta, contato) — duplo toque não duplica.
+ * `ip_hash` alimenta o throttle da action. Escrita SEMPRE via `withTenant`
+ * (a action descobre o tenant pela oferta publicada); isolamento padrão.
+ */
+export const offerLeads = pgTable(
+  'offer_leads',
+  {
+    id: uuid('id').primaryKey().$defaultFn(uuidv7),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    offerId: uuid('offer_id')
+      .notNull()
+      .references(() => offers.id, { onDelete: 'cascade' }),
+    contactId: uuid('contact_id')
+      .notNull()
+      .references(() => contacts.id, { onDelete: 'cascade' }),
+    whatsapp: text('whatsapp'),
+    ipHash: text('ip_hash'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('offer_leads_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
+    index('offer_leads_offer_id_idx').on(t.offerId),
+    uniqueIndex('offer_leads_offer_contact_key').on(t.offerId, t.contactId),
+    check(
+      'offer_leads_whatsapp_check',
+      sql`${t.whatsapp} is null or char_length(${t.whatsapp}) between 8 and 20`,
+    ),
+  ],
+);
+
+export type OfferLead = typeof offerLeads.$inferSelect;
+export type NewOfferLead = typeof offerLeads.$inferInsert;

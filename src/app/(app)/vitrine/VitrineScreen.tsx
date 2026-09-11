@@ -5,11 +5,13 @@ import { useRouter } from "next/navigation";
 import {
   atualizarOferta,
   criarOferta,
+  listarInteressadosDaOferta,
   listarOfertas,
   obterOferta,
   publicarOferta,
   urlDaVitrine,
   type BlocoDeOferta,
+  type InteressadoDaOferta,
   type OfertaResumo,
 } from "@/server";
 import { avisarRecusaDeEscrita } from "@/lib/ui/assinatura";
@@ -361,6 +363,7 @@ function EditarOfertaForm({
   const [price, setPrice] = React.useState<number | null>(0);
   const [summary, setSummary] = React.useState("");
   const [blocks, setBlocks] = React.useState<BlocoDeOferta[]>([]);
+  const [interessados, setInteressados] = React.useState<InteressadoDaOferta[]>([]);
   const [saving, setSaving] = React.useState(false);
   const [fieldError, setFieldError] = React.useState<{ campo?: string; mensagem: string } | null>(null);
 
@@ -378,6 +381,11 @@ function EditarOfertaForm({
       setSummary(result.data.summary ?? "");
       setBlocks(result.data.blocks);
       setStatus("ready");
+    });
+    // Fit 7b — os interessados que a página pública capturou.
+    void listarInteressadosDaOferta(ofertaId).then((result) => {
+      if (!active) return;
+      if (result.ok) setInteressados(result.data);
     });
     return () => {
       active = false;
@@ -543,6 +551,34 @@ function EditarOfertaForm({
               Adicionar bloco
             </Button>
           </div>
+
+          {interessados.length > 0 ? (
+            <div className="mt-2 flex flex-col gap-1 rounded-md border border-line p-3">
+              <span className="text-13 font-semibold uppercase tracking-wider text-subtle">
+                Interessados ({interessados.length})
+              </span>
+              <ul className="mt-1">
+                {interessados.map((pessoa) => (
+                  <li key={pessoa.contactId} className="flex items-center justify-between gap-2 py-1.5">
+                    <span className="min-w-0 flex-1 truncate text-15 text-ink">{pessoa.contactName}</span>
+                    {pessoa.whatsapp ? (
+                      <a
+                        href={`https://wa.me/${pessoa.whatsapp}`}
+                        target="_blank"
+                        rel="noopener"
+                        className="shrink-0 text-13 font-medium text-accent underline underline-offset-2"
+                      >
+                        WhatsApp
+                      </a>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1 text-13 text-muted">
+                Também estão na tela Clientes com a tag “vitrine” — transforme o interesse em negócio pelo funil.
+              </p>
+            </div>
+          ) : null}
 
           {fieldError && !fieldError.campo ? <FieldError>{fieldError.mensagem}</FieldError> : null}
         </form>

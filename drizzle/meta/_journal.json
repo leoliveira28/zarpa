@@ -190,6 +190,13 @@
       "when": 1759622400000,
       "tag": "0026_ofertas",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1759708800000,
+      "tag": "0027_interesse_ofertas",
+      "breakpoints": true
     }
   ]
 }

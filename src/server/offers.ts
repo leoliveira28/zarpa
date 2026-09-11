@@ -3,13 +3,17 @@
 import { randomBytes } from 'node:crypto';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { groups, offers, tenants } from '@/db/schema';
+import { contacts, groups, offerLeads, offers, tenants } from '@/db/schema';
+import { unsafeDbWithoutTenant } from '@/db/client';
 import { unsafeSqlWithoutTenant } from '@/db/client';
 import { withTenant } from '@/lib/tenant/withTenant';
 import { requireAuthContext } from '@/lib/auth/session';
 import { ServiceError, comoResultado, type ServiceResult } from './errors';
 import { registrarAuditoria } from './audit';
 import { exigirContaAtiva } from './subscriptionGate';
+import { normalizarTelefone } from './normalize';
+import { blindIndex } from '../lib/crypto/keyring';
+import { headers } from 'next/headers';
 import type { BlocoKind } from './proposals';
 
 /**
@@ -53,8 +57,6 @@ export type BlocoDeOferta = {
   images: string[];
   content: Record<string, unknown>;
 };
-
-const TIPOS: OfertaTipo[] = ['pacote', 'voo', 'hospedagem', 'transfer', 'servico'];
 
 const blocoInput = z.object({
   kind: z.enum([
@@ -454,6 +456,189 @@ export async function reordenarOfertas(
         entityId: dados.ids[0] ?? '',
       });
       return null;
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Interesse do visitante (Fit 7b) — nome + WhatsApp capturados na página
+// pública. SEM sessão: a action descobre o tenant pela oferta publicada (GUC
+// de contexto público, MESMA porta da leitura) e escreve via `withTenant`.
+// O contato é REUSADO quando o WhatsApp já é cliente da casa — a mesma pessoa
+// não vira dois clientes por ter se interessado duas vezes.
+// ---------------------------------------------------------------------------
+
+const interesseInput = z.object({
+  slug: z.string().trim().min(1).max(120),
+  token: z.string().trim().min(10).max(120),
+  name: z.string().trim().min(2, 'Diga seu nome').max(160),
+  whatsapp: z.string().trim().max(30),
+});
+
+export type RegistroDeInteresse = {
+  ok: boolean;
+  mensagem?: string;
+};
+
+/** Limite anti-robô: leads do mesmo IP na última hora. Genérico de propósito —
+ * a recusa não ensina o limite a quem testa o endpoint. */
+const LIMITE_POR_IP = 8;
+
+export async function registrarInteresseOferta(
+  input: unknown,
+): Promise<RegistroDeInteresse> {
+  const parsed = interesseInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, mensagem: parsed.error.issues[0]?.message ?? 'Dados incompletos.' };
+  }
+  const { slug, token, name, whatsapp } = parsed.data;
+  const telefone = normalizarTelefone(whatsapp);
+  if (!telefone || telefone.length < 10 || telefone.length > 15) {
+    return { ok: false, mensagem: 'Esse WhatsApp não abre conversa — confira o número com DDD.' };
+  }
+
+  // Descoberta do tenant: GUC de contexto público numa transação própria (a
+  // `offers_public_read` exige). Depois, a escrita é `withTenant` de verdade.
+  const alvo = await unsafeDbWithoutTenant.transaction(async (tx) => {
+    await tx.execute(sql`select set_config('app.proposal_public_context', 'on', true)`);
+    // O join com `tenants` (FORCE RLS, resolve por slug) precisa da MESMA porta
+    // do auth-service — mesma coisa que a função DEFINER da vitrine faz.
+    await tx.execute(sql`select set_config('app.auth_context', 'on', true)`);
+    const linhas = await tx.execute<{ id: string; tenant_id: string; title: string }>(sql`
+      select o.id, o.tenant_id, o.title
+      from offers o
+      join tenants t on t.id = o.tenant_id and t.slug = ${slug}
+      where o.public_token = ${token}
+        and o.published_at is not null
+        and o.unpublished_at is null
+      limit 1
+    `);
+    return linhas[0] ?? null;
+  });
+  if (!alvo) {
+    // Oferta inexistente/despublicada: recusa genérica, sem pista.
+    return { ok: false, mensagem: 'Esta oferta não está mais disponível.' };
+  }
+  const tenantId = alvo.tenant_id;
+
+  // Throttle por IP (o hash vem dos headers da requisição da action). Fora de
+  // request scope (testes), não há headers — o throttle simplesmente não conta.
+  let ip: string | null = null;
+  try {
+    const cabecalhos = await headers();
+    ip = cabecalhos.get('x-forwarded-for')?.split(',')[0]?.trim() ?? cabecalhos.get('x-real-ip') ?? null;
+  } catch {
+    ip = null;
+  }
+  const ipHash = ip ? blindIndex(ip, 'offer_lead_ip') : null;
+
+  const resultado = await withTenant(tenantId, async (tx) => {
+    if (ipHash) {
+      const [recentes] = await tx
+        .select({ total: sql<number>`count(*)::int` })
+        .from(offerLeads)
+        .where(
+          and(
+            eq(offerLeads.ipHash, ipHash),
+            sql`${offerLeads.createdAt} > now() - interval '1 hour'`,
+          ),
+        );
+      if ((recentes?.total ?? 0) >= LIMITE_POR_IP) {
+        throw new ServiceError('CONFLITO', 'Muitos interesses vindos da mesma conexão. Tente mais tarde.');
+      }
+    }
+
+    // Reuso por WhatsApp: compara só dígitos dos dois lados (mesma régua da
+    // importação). Sem blind index de telefone na casa, o LIKE por dígitos
+    // é a leitura honesta — o índice `contacts_tenant_phone_idx` varre.
+    const [existente] = await tx
+      .select({ id: contacts.id, tags: contacts.tags })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.tenantId, tenantId),
+          sql`regexp_replace(coalesce(${contacts.whatsapp}, ''), '\\D', '', 'g') = ${telefone}`,
+        ),
+      )
+      .limit(1);
+
+    let contatoId: string;
+    if (existente) {
+      contatoId = existente.id;
+      // A tag da vitrine entra uma vez — contato antigo não acumula repetição.
+      if (!existente.tags.includes('vitrine')) {
+        await tx
+          .update(contacts)
+          .set({ tags: [...existente.tags, 'vitrine'], updatedAt: new Date() })
+          .where(eq(contacts.id, existente.id));
+      }
+    } else {
+      const [criado] = await tx
+        .insert(contacts)
+        .values({
+          tenantId,
+          name,
+          whatsapp: whatsapp.trim(),
+          phone: whatsapp.trim(),
+          source: 'outro',
+          tags: ['vitrine'],
+        })
+        .returning({ id: contacts.id });
+      contatoId = criado!.id;
+    }
+
+    // Idempotente pelo índice (oferta, contato): o duplo toque atualiza.
+    await tx
+      .insert(offerLeads)
+      .values({ tenantId, offerId: alvo.id, contactId: contatoId, whatsapp: telefone, ipHash })
+      .onConflictDoUpdate({
+        target: [offerLeads.offerId, offerLeads.contactId],
+        set: { createdAt: new Date(), whatsapp: telefone },
+      });
+
+    await registrarAuditoria(tx, {
+      tenantId,
+      actorUserId: null,
+      action: 'offer.lead',
+      entity: 'offer',
+      entityId: alvo.id,
+      metadata: { novoContato: !existente },
+    });
+
+    return alvo.title;
+  });
+
+  return { ok: true, mensagem: resultado ? `Interesse registrado em ${alvo.title}.` : undefined };
+}
+
+/** Os interessados da oferta — a ficha na Vitrine lê por aqui (autenticado). */
+export type InteressadoDaOferta = {
+  contactId: string;
+  contactName: string;
+  whatsapp: string | null;
+  createdAt: Date;
+};
+
+export async function listarInteressadosDaOferta(
+  ofertaId: string,
+): Promise<ServiceResult<InteressadoDaOferta[]>> {
+  return comoResultado(async () => {
+    const { tenantId } = await requireAuthContext();
+
+    return withTenant(tenantId, async (tx) => {
+      const linhas = await tx
+        .select({
+          contactId: offerLeads.contactId,
+          contactName: contacts.name,
+          whatsapp: offerLeads.whatsapp,
+          createdAt: offerLeads.createdAt,
+        })
+        .from(offerLeads)
+        .innerJoin(contacts, eq(contacts.id, offerLeads.contactId))
+        .where(and(eq(offerLeads.tenantId, tenantId), eq(offerLeads.offerId, ofertaId)))
+        .orderBy(desc(offerLeads.createdAt))
+        .limit(200);
+      return linhas;
     });
   });
 }

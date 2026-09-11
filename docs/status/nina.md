@@ -1,5 +1,38 @@
 # Nina — status
 
+## 2026-09-11 (madrugada) — Rodada 7b: o interesse da Vitrine vira cliente
+
+PO decidiu: 7b sai com **nome + WhatsApp** (Google fica para quando houver
+credencial OAuth). O circuito do lead fechado:
+
+**Migration 0027** (`drizzle/0027_interesse_ofertas.sql`, no dev e no teste —
+37 tabelas): `offer_leads` (oferta × contato, WhatsApp cru, `ip_hash` para o
+throttle) com unique (offer_id, contact_id) — **o duplo toque não duplica**.
+Isolamento padrão; a descoberta do tenant na action usa a `offers_public_read`
+da 0026 + a porta `auth_context` para o join com `tenants` (FORCE RLS
+alcançou a action também — segunda vez que essa porta aparece, agora escrito
+no comentário do código).
+
+**`registrarInteresseOferta`** (action pública, sem sessão): valida nome e
+WhatsApp pela régua do `waMeLink` (10–15 dígitos), **REUSA o contato quando o
+WhatsApp já é cliente da casa** (mesma pessoa não vira dois clientes) e só
+então cria com tag `vitrine`; throttle por IP (8/hora, recusa genérica);
+auditada. Fora de request scope (testes), o throttle não conta — try/catch em
+`headers()`.
+
+**UI:** a página da oferta troca o CTA de WhatsApp pelo **formulário de
+interesse** (nome + WhatsApp, contexto da oferta visível, sucesso diz "responde
+em até 1 dia"; WhatsApp vira caminho B em texto). Na ficha da oferta
+(autenticada), seção **"Interessados (N)"** com link direto para o WhatsApp de
+cada um — e a nota de que também estão na tela Clientes com a tag "vitrine".
+
+**Números:** 3 testes novos (`tests/offers/leads.test.ts` — caminho feliz com
+idempotência, reuso de contato, recusas sem gravação e token cruzado entre
+agências); **708/708**; build limpo; lint zerado nos meus.
+
+**7c (última da Vitrine):** "criar negócio" no interessado/membro sem deal +
+origem da oferta nos Relatórios.
+
 ## 2026-09-11 (2ª) — Rodada 6b dos Grupos: a lente sobre o dinheiro (fechando a 6b que ficou na fila)
 
 O PO lembrou: a 6b tinha ficado para trás quando a Vitrine entrou. Fechada.
