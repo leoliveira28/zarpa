@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   adicionarMembroAoGrupo,
+  criarNegocioParaMembro,
   listarContatos,
   obterGrupo,
   removerMembroDoGrupo,
@@ -156,8 +157,20 @@ function MembrosCard({
   onPatched: (grupo: GrupoDetalhe) => void;
 }) {
   const toast = useToast();
+  const router = useRouter();
   const [sheetOpen, setSheetOpen] = React.useState(false);
   const restam = Math.max(grupo.totalSeats - grupo.lugaresOcupados, 0);
+
+  // Fit: o membro entra no FUNIL com um toque — o deal nasce com o título do
+  // grupo e o chip no funil passa a apontar para cá. Idempotente no servidor.
+  async function criarNegocio(contactId: string, nome: string) {
+    const result = await criarNegocioParaMembro({ groupId: grupo.id, contactId });
+    if (!result.ok) {
+      toast.show({ title: `Não consegui criar o negócio de ${nome}`, description: result.mensagem, tone: "danger" });
+      return;
+    }
+    router.push(`/funil/${result.data.dealId}`);
+  }
 
   async function remover(contactId: string, nome: string) {
     const anterior = grupo;
@@ -210,7 +223,16 @@ function MembrosCard({
                       {membro.dealTitle}
                     </Link>
                   ) : (
-                    <span className="text-13 text-subtle">sem negócio vinculado</span>
+                    <span className="flex items-center gap-2 text-13 text-subtle">
+                      sem negócio vinculado
+                      <button
+                        type="button"
+                        className="font-medium text-accent underline underline-offset-2"
+                        onClick={() => void criarNegocio(membro.contactId, membro.contactName)}
+                      >
+                        Criar negócio
+                      </button>
+                    </span>
                   )}
                 </span>
                 <Button

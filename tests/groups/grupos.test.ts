@@ -35,6 +35,7 @@ const {
   grupoDoNegocio,
   parcelasDoGrupo,
   resumoDosGrupos,
+  criarNegocioParaMembro,
 } = await import('@/server/groups')
 
 type Fixture = { tenantId: string; userId: string }
@@ -196,6 +197,51 @@ describe('grupos (rodada 6a)', () => {
     if (!depois.ok) return
     expect(depois.data.lugaresOcupados).toBe(1)
     expect(depois.data.members[0]?.dealId).toBeNull()
+  })
+
+  it('6c: membro sem negócio vira NEGÓCIO pela ficha do grupo — e o grupo aparece no funil', async () => {
+    const tenant = await seedTenant('converte')
+    entrarComo(tenant)
+
+    const grupo = await criarGrupo({ title: 'Serra do Cipó', totalSeats: 6 })
+    expect(grupo.ok).toBe(true)
+    if (!grupo.ok) return
+
+    const contatoId = await withTenant(tenant.tenantId, async (tx) => {
+      const [c] = await tx.insert(contacts).values({ tenantId: tenant.tenantId, name: 'Sofia' }).returning({ id: contacts.id })
+      return c!.id
+    })
+    await adicionarMembroAoGrupo({ groupId: grupo.data.id, contactId: contatoId, seats: 1 })
+
+    // Antes: o negócio de Sofia não tem grupo (não existe negócio).
+    const antes = await grupoDoNegocio('00000000-0000-0000-0000-000000000000')
+    expect(antes.ok).toBe(true)
+
+    const criado = await criarNegocioParaMembro({ groupId: grupo.data.id, contactId: contatoId })
+    expect(criado.ok).toBe(true)
+    if (!criado.ok) return
+    expect(criado.data.jaExistia).toBe(false)
+
+    // O negócio nasce com o TÍTULO do grupo e o chip aponta para ele.
+    const { obterNegocio } = await import('@/server/deals')
+    const detalhe = await obterNegocio(criado.data.dealId)
+    expect(detalhe.ok).toBe(true)
+    if (!detalhe.ok) return
+    expect(detalhe.data.title).toBe('Serra do Cipó')
+    expect(detalhe.data.contactName).toBe('Sofia')
+
+    const chip = await grupoDoNegocio(criado.data.dealId)
+    expect(chip.ok).toBe(true)
+    if (!chip.ok) return
+    expect(chip.data?.id).toBe(grupo.data.id)
+    expect(chip.data?.title).toBe('Serra do Cipó')
+
+    // Toque duplo: devolve o MESMO negócio, nada duplica.
+    const repetido = await criarNegocioParaMembro({ groupId: grupo.data.id, contactId: contatoId })
+    expect(repetido.ok).toBe(true)
+    if (!repetido.ok) return
+    expect(repetido.data.jaExistia).toBe(true)
+    expect(repetido.data.dealId).toBe(criado.data.dealId)
   })
 
   it('isolamento: grupo de outro tenant não abre', async () => {

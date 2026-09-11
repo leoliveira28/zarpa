@@ -379,6 +379,7 @@ export {
   atualizarGrupo,
   adicionarMembroAoGrupo,
   removerMembroDoGrupo,
+  criarNegocioParaMembro,
   type GrupoResumo,
   type GrupoDetalhe,
   type MembroDoGrupo,

@@ -707,3 +707,93 @@ export async function resumoDosGrupos(): Promise<
     });
   });
 }
+
+/**
+ * O interessado vira NEGÓCIO pela ficha do grupo (meta Grupos, rodada 6c):
+ * cria o deal para o membro que ainda não tem e registra a passagem em
+ * `group_members.deal_id` — é o que faz o grupo APARECER no funil (chip do
+ * card) e amarrar as propostas/vendas pela cadeia
+ * grupo → membro → deal → proposta → venda.
+ *
+ * Idempotente por leitura: membro com negócio já existente DEVOLVE o negócio.
+ * Grupo encerrado não gera negócio novo.
+ */
+export async function criarNegocioParaMembro(
+  input: { groupId: string; contactId: string },
+): Promise<ServiceResult<{ dealId: string; jaExistia: boolean }>> {
+  return comoResultado(async () => {
+    const { tenantId, userId } = await requireAuthContext();
+    const dados = validar(z.object({ groupId: z.uuid(), contactId: z.uuid() }), input);
+
+    return withTenant(tenantId, async (tx) => {
+      await exigirContaAtiva(tx, tenantId);
+
+      const [grupo] = await tx
+        .select(COLUNAS_GRUPO)
+        .from(groups)
+        .where(and(eq(groups.id, dados.groupId), eq(groups.tenantId, tenantId)))
+        .limit(1);
+      if (!grupo) throw new ServiceError('NAO_ENCONTRADO', 'Grupo não encontrado.');
+      if (grupo.status === 'encerrado') {
+        throw new ServiceError('CONFLITO', 'Este grupo já encerrou — a saída passou.', {
+          correcao: 'Criar um novo grupo para a próxima saída',
+        });
+      }
+
+      const [membro] = await tx
+        .select({ dealId: groupMembers.dealId })
+        .from(groupMembers)
+        .where(
+          and(
+            eq(groupMembers.groupId, dados.groupId),
+            eq(groupMembers.contactId, dados.contactId),
+            eq(groupMembers.tenantId, tenantId),
+          ),
+        )
+        .limit(1);
+      if (!membro) throw new ServiceError('NAO_ENCONTRADO', 'Esse cliente não está no grupo.');
+
+      // Já trabalhou o membro? Devolve o negócio — o toque duplo não duplica.
+      if (membro.dealId) {
+        return { dealId: membro.dealId, jaExistia: true };
+      }
+
+      const { criarNegocio } = await import('./deals');
+      const criado = await criarNegocio({
+        contactId: dados.contactId,
+        title: grupo.title.slice(0, 200),
+        departureOn: undefined,
+        returnOn: undefined,
+        expectedCloseOn: undefined,
+      });
+      if (!criado.ok) {
+        throw new ServiceError(
+          criado.code === 'CONFLITO' ? 'CONFLITO' : 'DADOS_INVALIDOS',
+          criado.mensagem,
+          { correcao: criado.correcao ?? 'Criar o negócio pelo funil' },
+        );
+      }
+
+      await tx
+        .update(groupMembers)
+        .set({ dealId: criado.data.id, updatedAt: new Date() })
+        .where(
+          and(
+            eq(groupMembers.groupId, dados.groupId),
+            eq(groupMembers.contactId, dados.contactId),
+          ),
+        );
+
+      await registrarAuditoria(tx, {
+        tenantId,
+        actorUserId: userId,
+        action: 'group.member_converted',
+        entity: 'group',
+        entityId: dados.groupId,
+        metadata: { contactId: dados.contactId, dealId: criado.data.id },
+      });
+
+      return { dealId: criado.data.id, jaExistia: false };
+    });
+  });
+}
