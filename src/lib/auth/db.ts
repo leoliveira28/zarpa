@@ -32,8 +32,23 @@ declare global {
   var __zarpaAuthSql: ReturnType<typeof postgres> | undefined;
 }
 
+/**
+ * A conexão de auth NÃO pode passar pelo endpoint `-pooler` do Neon: o PgBouncer em modo
+ * transaction recusa parâmetros de startup (`unsupported startup parameter in options:
+ * app.auth_context`), e é exatamente por um parâmetro de startup que o contexto é ligado.
+ * Logo, este cliente fala direto com o compute (host sem `-pooler`). O pool aqui é de 4
+ * conexões reais por instância — aceitável porque só o serviço de auth usa este caminho;
+ * o tráfego de aplicação continua no pooler via `client.ts`. Em dev (Postgres local ou
+ * string sem `-pooler`) o replace é um no-op.
+ */
+function authDatabaseUrl(): string {
+  const override = process.env.AUTH_DATABASE_URL;
+  if (override) return override;
+  return databaseUrl().replace('-pooler.', '.');
+}
+
 function createAuthClient(): ReturnType<typeof postgres> {
-  return postgres(databaseUrl(), {
+  return postgres(authDatabaseUrl(), {
     max: Number(process.env.AUTH_POOL_MAX ?? 4),
     idle_timeout: 20,
     prepare: false,
