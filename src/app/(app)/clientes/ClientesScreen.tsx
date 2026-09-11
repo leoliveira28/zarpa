@@ -181,7 +181,7 @@ export function ClientesScreen() {
           </Card>
         ) : (
           <Card className="overflow-hidden">
-            <ul className="divide-y divide-line-subtle">
+            <ul className="divide-y divide-line-subtle" data-tour="clientes-lista">
               {contacts.map((contact) => (
                 <li key={contact.id} className="flex items-center gap-2 pr-2">
                   <Link

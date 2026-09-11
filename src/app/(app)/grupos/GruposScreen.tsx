@@ -116,7 +116,7 @@ export function GruposScreen() {
           }
         />
       ) : (
-        <ul className="flex flex-col">
+        <ul className="flex flex-col" data-tour="grupos-lista">
           {grupos.map((grupo) => (
             <li key={grupo.id} className="border-b border-line-subtle last:border-b-0">
               <Link

@@ -159,7 +159,7 @@ export function VitrineScreen() {
           }
         />
       ) : (
-        <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+        <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3" data-tour="vitrine-ofertas">
           {ofertas.map((oferta) => (
             <li
               key={oferta.id}

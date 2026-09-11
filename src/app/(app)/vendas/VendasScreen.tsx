@@ -189,7 +189,7 @@ export function VendasScreen({ periodoParam }: { periodoParam?: string }) {
           }
         />
       ) : (
-        <Card className="flex flex-col p-1">
+        <Card className="flex flex-col p-1" data-tour="vendas-lista">
           {vendas.map((venda, index) => (
             <React.Fragment key={venda.id}>
               {index > 0 ? <Rule inner /> : null}

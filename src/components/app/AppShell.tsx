@@ -269,7 +269,7 @@ function SideNav({ activeHref }: { activeHref: string | null }) {
         <Wordmark />
       </div>
 
-      <nav aria-label="Principal" className="flex flex-col gap-0.5 px-3 py-2">
+      <nav aria-label="Principal" data-tour="lateral-nav" className="flex flex-col gap-0.5 px-3 py-2">
         {NAV.map((item) => {
           const active = item.href === activeHref;
           return (

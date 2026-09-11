@@ -137,7 +137,7 @@ export function PropostasScreen({ initialIds }: { initialIds?: string[] }) {
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-5" data-tour="propostas-lista">
       <header className="flex flex-col gap-4">
         <div className="flex items-center justify-between gap-3">
           <h2 className="display text-32 text-ink">Propostas</h2>

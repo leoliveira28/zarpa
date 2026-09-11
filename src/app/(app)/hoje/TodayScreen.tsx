@@ -682,7 +682,7 @@ export function TodayScreen({ periodoParam }: { periodoParam?: string }) {
         </section>
       ) : null}
 
-      <section aria-labelledby="hoje-tarefas">
+      <section aria-labelledby="hoje-tarefas" data-tour="hoje-tarefas">
         <SectionHeading
           action={
             <div className="flex items-center gap-1">
