@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import {
   concluirTarefa,
+  leadsRecentesDaVitrine,
   criarTarefa,
   exportarResumoDoMesCsv,
   listarAberturasRecentes,
@@ -19,6 +20,7 @@ import {
   type AberturaProposta,
   type ContatoResumo,
   type EmViagemGrupos,
+  type LeadRecenteDaVitrine,
   type PropostaParada,
   type ResumoDoMes,
   type ResumoDoPipeline,
@@ -40,7 +42,7 @@ import { mensagemCobranca, mensagemDepoimento, waMeLink } from "@/lib/ui/whatsap
 import { useSession } from "@/lib/auth/client";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Card, SectionHeading } from "@/components/ui/Card";
+import { Card, CardBody, SectionHeading } from "@/components/ui/Card";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { Combobox } from "@/components/ui/Combobox";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -65,6 +67,7 @@ import {
 import {
   CakeIcon,
   ChatIcon,
+  ChevronRightIcon,
   ClockIcon,
   CopyIcon,
   DownloadIcon,
@@ -148,6 +151,30 @@ export function TodayScreen({ periodoParam }: { periodoParam?: string }) {
   // "Criar lembrete" — botão morto até aqui (sem `onClick`, sem função de
   // servidor). Ver docs/status/nina.md: `criarTarefa` (S9/S10) liga os dois.
   const [reminderSheetOpen, setReminderSheetOpen] = React.useState(false);
+
+  // Meta Vitrine (Fit 7b) — "como o agente vai saber": leads da página pública
+  // aparecem NO QUADRO que ele abre todo dia, não escondidos na /vitrine.
+  const [leadsStatus, setLeadsStatus] = React.useState<Status>("ready");
+  const [leads, setLeads] = React.useState<{ total: number; recentes: LeadRecenteDaVitrine[] }>({
+    total: 0,
+    recentes: [],
+  });
+
+  React.useEffect(() => {
+    let active = true;
+    void leadsRecentesDaVitrine({ dias: 7 }).then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setLeadsStatus("error");
+        return;
+      }
+      setLeads(result.data);
+      setLeadsStatus("ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Conta recém-criada — zero negócios. Uma sondagem `limite: 1` é o custo
   // todo: o que a tela precisa saber é só SE existe algum negócio (a ordem
@@ -572,6 +599,58 @@ export function TodayScreen({ periodoParam }: { periodoParam?: string }) {
           </div>
         )}
       </section>
+
+      {/* Meta Vitrine (Fit 7b) — o lead capturado pela página pública aparece
+          NO QUADRO DE TODO DIA. Só nasce quando EXISTE lead nos últimos 7
+          dias: quadro vazio não anuncia ausência (a mesma regra das seções
+          acima). O nome é o único clique (WhatsApp); "Ver vitrine" leva à
+          ficha da oferta. */}
+      {leadsStatus === "ready" && leads.total > 0 ? (
+        <section aria-labelledby="hoje-vitrine">
+          <SectionHeading
+            action={
+              <Link
+                href="/vitrine"
+                className="flex items-center gap-1 text-13 font-medium text-muted hover:text-ink"
+              >
+                Ver vitrine
+                <ChevronRightIcon className="size-3.5 -scale-x-100" />
+              </Link>
+            }
+          >
+            <span id="hoje-vitrine">Sua vitrine gerou interesse</span>
+          </SectionHeading>
+          <Card>
+            <CardBody flush>
+              <ul className="flex flex-col divide-y divide-line-subtle">
+                {leads.recentes.map((lead) => (
+                  <li key={`${lead.offerId}-${lead.contactId}`} className="flex items-center gap-3 px-4 py-3">
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-15 text-ink">
+                        <span className="font-medium">{lead.contactName}</span> se interessou por{" "}
+                        <span className="text-muted">{lead.ofertaTitulo}</span>
+                      </span>
+                      <span className="text-13 text-subtle">
+                        {formatDayMonth(lead.createdAt)} · via página pública
+                      </span>
+                    </span>
+                    {lead.whatsapp ? (
+                      <a
+                        href={`https://wa.me/${lead.whatsapp}`}
+                        target="_blank"
+                        rel="noopener"
+                        className="shrink-0 text-13 font-medium text-accent underline underline-offset-2"
+                      >
+                        WhatsApp
+                      </a>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </CardBody>
+          </Card>
+        </section>
+      ) : null}
 
       <section aria-labelledby="hoje-tarefas">
         <SectionHeading

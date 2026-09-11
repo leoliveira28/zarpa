@@ -659,3 +659,49 @@ async function contarLeads(
     .where(and(eq(offerLeads.tenantId, tenantId), eq(offerLeads.offerId, ofertaId)));
   return linha?.total ?? 0;
 }
+
+/** Os leads recentes da Vitrine — o quadro do /hoje ("como o agente vai saber"). */
+export type LeadRecenteDaVitrine = {
+  offerId: string;
+  ofertaTitulo: string;
+  contactId: string;
+  contactName: string;
+  whatsapp: string | null;
+  createdAt: Date;
+};
+
+export async function leadsRecentesDaVitrine(
+  filtro?: { dias?: number },
+): Promise<ServiceResult<{ total: number; recentes: LeadRecenteDaVitrine[] }>> {
+  return comoResultado(async () => {
+    const { tenantId } = await requireAuthContext();
+    const dias = Math.min(Math.max(filtro?.dias ?? 7, 1), 30);
+
+    return withTenant(tenantId, async (tx) => {
+      const desde = new Date(Date.now() - dias * 24 * 60 * 60 * 1000);
+
+      const [total] = await tx
+        .select({ total: sql<number>`count(*)::int` })
+        .from(offerLeads)
+        .where(and(eq(offerLeads.tenantId, tenantId), sql`${offerLeads.createdAt} >= ${desde}`));
+
+      const recentes = await tx
+        .select({
+          offerId: offerLeads.offerId,
+          ofertaTitulo: offers.title,
+          contactId: offerLeads.contactId,
+          contactName: contacts.name,
+          whatsapp: offerLeads.whatsapp,
+          createdAt: offerLeads.createdAt,
+        })
+        .from(offerLeads)
+        .innerJoin(offers, eq(offers.id, offerLeads.offerId))
+        .innerJoin(contacts, eq(contacts.id, offerLeads.contactId))
+        .where(and(eq(offerLeads.tenantId, tenantId), sql`${offerLeads.createdAt} >= ${desde}`))
+        .orderBy(desc(offerLeads.createdAt))
+        .limit(5);
+
+      return { total: total?.total ?? 0, recentes };
+    });
+  });
+}
