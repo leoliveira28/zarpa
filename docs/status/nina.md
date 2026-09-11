@@ -1,5 +1,42 @@
 # Nina — status
 
+## 2026-09-11 (manhã) — Fit 7 FECHADO: origem da oferta nos Relatórios + revisões do PO
+
+A última peça do Fit 7 + as revisões da primeira hora:
+
+**Origem da oferta nos Relatórios (7c, o fecho):** seção **"Vendas vindas da
+Vitrine"** no Resumo — vendas do período cujo negócio nasceu de um lead da
+página pública (join `offer_leads.deal_id` → `sales.deal_id`, sem migration:
+o vínculo da 0028 já é a origem). Por oferta de origem + total, com rótulo de
+período igual ao resto da tela. Some sozinha quando não há venda vinda de lá.
+LENTES sobre `sales` — o dinheiro continua no Financeiro. Teste prova: a venda
+do negócio convertido conta; negócio sem lead não.
+
+**Revisões do PO na primeira hora, todas resolvidas:**
+1. **Interesse não aparecia no /hoje** — `leadsRecentesDaVitrine` interpolava
+   `Date` em template `sql` cru: o driver rejeitava (ERR_INVALID_ARG_TYPE) e a
+   seção sumia silenciosamente. `toISOString()` resolveu. Provado E2E no
+   navegador: interesse pela página pública → quadro no /hoje com 5 linhas.
+2. **Dedupe do lead com `+55`** (a pergunta "como o mesmo cadastro 2x?") — o
+   compare não tirava o código do país. Corrigido com `normalizarTelefone` dos
+   dois lados (whatsapp E phone) + teste de regressão com o cenário exato.
+3. **Servidor dev reiniciado** — rodava desde ontem com cache de schema.
+
+**Do agente (redesign estilo Decolar, disparado como pedido):** hero grande
+com imagem, cartão de filtros flutuante, cards vendáveis com ribbon
+"Restam N", "A partir de" + preço grande, linha de confiança; página da
+oferta com capa 21:9 e cartão de preço com âncora para o formulário. Regra
+da casa intacta (só transform/opacity animam — o guarda pegou meu
+transition-shadow e foi removido, não registrado como desvio).
+
+**Números:** 711/711; build limpo; lint zerado nos meus.
+
+**O circuito completo do Fit 7 no ar:** agente monta oferta (blocos do
+construtor) → publica → `/a/[slug]` com hero, filtros e cards → visitante se
+interessa com nome+WhatsApp → contato com tag + lead → quadro no /hoje →
+"Criar negócio" com um toque → funil → venda → seção "Vendas vindas da
+Vitrine" fecha o ciclo.
+
 ## 2026-09-11 (madrugada) — Rodada 7b: o interesse da Vitrine vira cliente
 
 PO decidiu: 7b sai com **nome + WhatsApp** (Google fica para quando houver

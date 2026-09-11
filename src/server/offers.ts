@@ -3,7 +3,7 @@
 import { randomBytes } from 'node:crypto';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { contacts, groups, offerLeads, offers, tenants } from '@/db/schema';
+import { contacts, groups, offerLeads, offers, sales, tenants } from '@/db/schema';
 import { unsafeDbWithoutTenant } from '@/db/client';
 import { unsafeSqlWithoutTenant } from '@/db/client';
 import { withTenant } from '@/lib/tenant/withTenant';
@@ -805,6 +805,65 @@ export async function criarNegocioDoLead(
       });
 
       return { dealId: criado.data.id, jaExistia: false };
+    });
+  });
+}
+
+/**
+ * As vendas vindas da Vitrine (Fit 7c, a origem): vendas do período cujo
+ * negócio nasceu de um lead da página pública. LENTE sobre `sales` — o
+ * dinheiro continua lá; aqui é só a pergunta "quanto a vitrine trouxe?".
+ * Mesma janela de `sales.created_at` do resto do Relatório.
+ */
+export async function vendasVindasDaVitrine(
+  filtro?: { mes?: string; de?: string; ate?: string },
+): Promise<
+  ServiceResult<{
+    totalVendas: number;
+    receitaCents: number;
+    porOferta: Array<{ ofertaTitulo: string; vendas: number; receitaCents: number }>;
+  }>
+> {
+  return comoResultado(async () => {
+    const { tenantId } = await requireAuthContext();
+    const { resolverPeriodo } = await import('./periodo');
+    const periodo = resolverPeriodo(new Date(), filtro ?? {});
+
+    return withTenant(tenantId, async (tx) => {
+      const linhas = await tx
+        .select({
+          vendaId: sales.id,
+          valorBrutoCents: sales.valorBrutoCents,
+          ofertaTitulo: offers.title,
+        })
+        .from(sales)
+        .innerJoin(offerLeads, eq(offerLeads.dealId, sales.dealId))
+        .innerJoin(offers, eq(offers.id, offerLeads.offerId))
+        .where(
+          and(
+            eq(sales.tenantId, tenantId),
+            sql`${sales.createdAt} >= ${periodo.inicio.toISOString()}`,
+            sql`${sales.createdAt} < ${periodo.fimExclusivo.toISOString()}`,
+          ),
+        );
+
+      const porOferta = new Map<string, { vendas: number; receitaCents: number }>();
+      let receitaCents = 0;
+      for (const linha of linhas) {
+        const entrada = porOferta.get(linha.ofertaTitulo) ?? { vendas: 0, receitaCents: 0 };
+        entrada.vendas += 1;
+        entrada.receitaCents += linha.valorBrutoCents;
+        porOferta.set(linha.ofertaTitulo, entrada);
+        receitaCents += linha.valorBrutoCents;
+      }
+
+      return {
+        totalVendas: linhas.length,
+        receitaCents,
+        porOferta: [...porOferta.entries()]
+          .map(([ofertaTitulo, v]) => ({ ofertaTitulo, ...v }))
+          .sort((a, b) => b.receitaCents - a.receitaCents),
+      };
     });
   });
 }

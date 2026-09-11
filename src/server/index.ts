@@ -409,6 +409,7 @@ export {
   listarInteressadosDaOferta,
   leadsRecentesDaVitrine,
   criarNegocioDoLead,
+  vendasVindasDaVitrine,
   type InteressadoDaOferta,
   type LeadRecenteDaVitrine,
 } from './offers';

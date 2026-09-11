@@ -28,6 +28,7 @@ import {
 import { MoneyHubTabs } from "@/components/app/MoneyHubTabs";
 import { CentrosDeCusto } from "./CentrosDeCusto";
 import { GruposRelatorio } from "./GruposRelatorio";
+import { VendasDaVitrine } from "./VendasDaVitrine";
 import { RankingClientes } from "./RankingClientes";
 import { ResultadoDasViagens } from "./ResultadoDasViagens";
 import {
@@ -320,6 +321,11 @@ function PainelResumo({
               (Pro de uma pessoa): a seção some INTEIRA — dizer "você é o
               único vendedor" seria narrar o óbvio todo mês. */}
           <VendasPorVendedor porVendedor={resumo.porVendedor} />
+
+          {/* --- Vendas vindas da Vitrine (Fit 7c) ---------------------- */}
+          {/* A origem: quanto a página pública trouxe no período. Some sozinha
+              quando não há venda vinda de lá. */}
+          <VendasDaVitrine periodoParam={periodoParam} />
 
           {/* --- Receita por origem ------------------------------------- */}
           <section aria-labelledby="relatorio-origem" className="flex flex-col gap-3">

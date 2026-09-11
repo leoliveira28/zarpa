@@ -242,6 +242,55 @@ describe('interesse da Vitrine (7b)', () => {
     expect(repetido.data.dealId).toBe(convertido.data.dealId)
   })
 
+  it('7c: vendasVindasDaVitrine conta a venda do negócio convertido — e só ela', async () => {
+    const fixture = await seedTenant('origem')
+    entrarComo(fixture)
+
+    const oferta = await criarOferta({ title: 'Oferta com origem', type: 'pacote', priceCents: 250_000 })
+    expect(oferta.ok).toBe(true)
+    if (!oferta.ok) return
+    await publicarOferta({ id: oferta.data.id, publicada: true })
+
+    // Lead convertido em negócio + venda direta no banco (o dinheiro mora em sales).
+    const { offerLeads, sales, proposals, deals } = await import('@/db/schema')
+    const interesse = await registrarInteresseOferta({
+      slug: fixture.slug,
+      token: oferta.data.publicToken,
+      name: 'Origem Teste',
+      whatsapp: '11944443333',
+    })
+    expect(interesse.ok).toBe(true)
+    const conversion = await import('@/server/offers')
+    const lista = await listarInteressadosDaOferta(oferta.data.id)
+    expect(lista.ok).toBe(true)
+    if (!lista.ok) return
+    const convertido = await conversion.criarNegocioDoLead({ leadId: lista.data[0]!.leadId })
+    expect(convertido.ok).toBe(true)
+    if (!convertido.ok) return
+
+    await withTenant(fixture.tenantId, async (tx) => {
+      const [p] = await tx
+        .insert(proposals)
+        .values({ tenantId: fixture.tenantId, dealId: convertido.data.dealId, publicToken: randomUUID(), title: 'P' })
+        .returning({ id: proposals.id })
+      await tx.insert(sales).values({
+        tenantId: fixture.tenantId,
+        dealId: convertido.data.dealId,
+        proposalId: p!.id,
+        valorBrutoCents: 250_000,
+      })
+      void offerLeads
+      void deals
+    })
+
+    const origem = await conversion.vendasVindasDaVitrine({})
+    expect(origem.ok).toBe(true)
+    if (!origem.ok) return
+    expect(origem.data.totalVendas).toBe(1)
+    expect(origem.data.receitaCents).toBe(250_000)
+    expect(origem.data.porOferta[0]?.ofertaTitulo).toBe('Oferta com origem')
+  })
+
   it('recusas: oferta despublicada, WhatsApp inválido — e o lead de outra agência não vaza', async () => {
     const fixture = await seedTenant('recusa')
     entrarComo(fixture)
