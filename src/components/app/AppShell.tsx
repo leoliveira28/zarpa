@@ -10,6 +10,7 @@ import { useTransitionPreset } from "@/lib/ui/motion";
 import { signOut } from "@/lib/auth/client";
 import { Button } from "@/components/ui/Button";
 import { AssinaturaBanner } from "./AssinaturaBanner";
+import { TourGuiado, reverTour } from "./TourGuiado";
 import { NovaPropostaSheet } from "./NovaPropostaSheet";
 import { ThemeToggle } from "./ThemeToggle";
 import {
@@ -318,6 +319,13 @@ function SideNav({ activeHref }: { activeHref: string | null }) {
             Kitchen sink
           </Link>
         )}
+        <button
+          type="button"
+          onClick={() => reverTour()}
+          className="rounded-md px-3 py-2 text-left text-13 text-muted hover:bg-surface-3 hover:text-ink"
+        >
+          Rever tour
+        </button>
         <div className="flex items-center justify-between gap-2 px-1">
           <span className="text-13 text-muted">Tema</span>
           <ThemeToggle />
@@ -437,6 +445,7 @@ function TopBar({ title }: { title: string }) {
           router.push(`/propostas/${id}/editar`);
         }}
       />
+      <TourGuiado />
     </>
   );
 }
