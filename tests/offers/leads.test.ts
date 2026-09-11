@@ -189,6 +189,59 @@ describe('interesse da Vitrine (7b)', () => {
     expect(leads).toHaveLength(1)
   })
 
+  it('7c: o interessado vira NEGÓCIO no funil — e o toque duplo não duplica', async () => {
+    const fixture = await seedTenant('funil')
+    entrarComo(fixture)
+
+    const oferta = await criarOferta({ title: 'Pacote Jeri — 5 noites', type: 'pacote', priceCents: 300_000 })
+    expect(oferta.ok).toBe(true)
+    if (!oferta.ok) return
+    await publicarOferta({ id: oferta.data.id, publicada: true })
+
+    const interesse = await registrarInteresseOferta({
+      slug: fixture.slug,
+      token: oferta.data.publicToken,
+      name: 'Paulo Teste',
+      whatsapp: '11966665555',
+    })
+    expect(interesse.ok).toBe(true)
+
+    const lista = await listarInteressadosDaOferta(oferta.data.id)
+    expect(lista.ok).toBe(true)
+    if (!lista.ok) return
+    expect(lista.data[0]?.dealId).toBeNull()
+
+    const { obterNegocio } = await import('@/server')
+    const conversion = await import('@/server/offers')
+
+    // O leadId vem da listagem.
+    const leadId = lista.data[0]!.leadId
+    const convertido = await conversion.criarNegocioDoLead({ leadId })
+    expect(convertido.ok).toBe(true)
+    if (!convertido.ok) return
+    expect(convertido.data.jaExistia).toBe(false)
+
+    // O negócio existe no funil, com o título da oferta e o contato do lead.
+    const detalhe = await obterNegocio(convertido.data.dealId)
+    expect(detalhe.ok).toBe(true)
+    if (!detalhe.ok) return
+    expect(detalhe.data.title).toBe('Pacote Jeri — 5 noites')
+    expect(detalhe.data.contactName).toBe('Paulo Teste')
+
+    // A leitura do interessado agora carrega o deal.
+    const apos = await listarInteressadosDaOferta(oferta.data.id)
+    expect(apos.ok).toBe(true)
+    if (!apos.ok) return
+    expect(apos.data[0]?.dealId).toBe(convertido.data.dealId)
+
+    // Toque duplo: devolve o MESMO negócio (jaExistia), nada duplica.
+    const repetido = await conversion.criarNegocioDoLead({ leadId })
+    expect(repetido.ok).toBe(true)
+    if (!repetido.ok) return
+    expect(repetido.data.jaExistia).toBe(true)
+    expect(repetido.data.dealId).toBe(convertido.data.dealId)
+  })
+
   it('recusas: oferta despublicada, WhatsApp inválido — e o lead de outra agência não vaza', async () => {
     const fixture = await seedTenant('recusa')
     entrarComo(fixture)

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import {
   concluirTarefa,
+  criarNegocioDoLead,
   leadsRecentesDaVitrine,
   criarTarefa,
   exportarResumoDoMesCsv,
@@ -634,6 +635,35 @@ export function TodayScreen({ periodoParam }: { periodoParam?: string }) {
                         {formatDayMonth(lead.createdAt)} · via página pública
                       </span>
                     </span>
+                    {/* Fit 7c — o lead entra no FUNIL com um toque. Depois de
+                        criado, vira link para o negócio. */}
+                    {lead.dealId ? (
+                      <Link
+                        href={`/funil/${lead.dealId}`}
+                        className="shrink-0 text-13 font-medium text-accent underline underline-offset-2"
+                      >
+                        No funil
+                      </Link>
+                    ) : (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() =>
+                          void criarNegocioDoLead({ leadId: lead.leadId }).then((result) => {
+                            if (result.ok) {
+                              setLeads((atual) => ({
+                                ...atual,
+                                recentes: atual.recentes.map((l) =>
+                                  l.leadId === lead.leadId ? { ...l, dealId: result.data.dealId } : l,
+                                ),
+                              }));
+                            }
+                          })
+                        }
+                      >
+                        Criar negócio
+                      </Button>
+                    )}
                     {lead.whatsapp ? (
                       <a
                         href={`https://wa.me/${lead.whatsapp}`}

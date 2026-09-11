@@ -15,6 +15,7 @@ import { uuidv7 } from '../uuid';
 import { tenants } from './tenants';
 import { groups } from './groups';
 import { contacts } from './people';
+import { deals } from './pipeline';
 
 /**
  * `offers` — a oferta da Vitrine (Fit 7, `docs/FIT7_VITRINE.md`,
@@ -98,11 +99,19 @@ export const offerLeads = pgTable(
       .references(() => contacts.id, { onDelete: 'cascade' }),
     whatsapp: text('whatsapp'),
     ipHash: text('ip_hash'),
+    /**
+     * O negócio criado a partir do interesse (Fit 7c, 0028) — `null` enquanto
+     * o lead não foi trabalhado. SET NULL: apagar o negócio devolve o lead a
+     * "não trabalhado". Unique parcial: um lead vira negócio UMA vez.
+     */
+    dealId: uuid('deal_id').references(() => deals.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index('offer_leads_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
     index('offer_leads_offer_id_idx').on(t.offerId),
+    index('offer_leads_deal_id_idx').on(t.dealId),
+    uniqueIndex('offer_leads_deal_key').on(t.dealId).where(sql`${t.dealId} is not null`),
     uniqueIndex('offer_leads_offer_contact_key').on(t.offerId, t.contactId),
     check(
       'offer_leads_whatsapp_check',

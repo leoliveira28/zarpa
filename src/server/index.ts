@@ -408,6 +408,7 @@ export {
   registrarInteresseOferta,
   listarInteressadosDaOferta,
   leadsRecentesDaVitrine,
+  criarNegocioDoLead,
   type InteressadoDaOferta,
   type LeadRecenteDaVitrine,
 } from './offers';

@@ -633,9 +633,12 @@ export async function registrarInteresseOferta(
 
 /** Os interessados da oferta — a ficha na Vitrine lê por aqui (autenticado). */
 export type InteressadoDaOferta = {
+  leadId: string;
   contactId: string;
   contactName: string;
   whatsapp: string | null;
+  /** Negócio já criado a partir do interesse (7c) — `null` se ainda não. */
+  dealId: string | null;
   createdAt: Date;
 };
 
@@ -648,9 +651,11 @@ export async function listarInteressadosDaOferta(
     return withTenant(tenantId, async (tx) => {
       const linhas = await tx
         .select({
+          leadId: offerLeads.id,
           contactId: offerLeads.contactId,
           contactName: contacts.name,
           whatsapp: offerLeads.whatsapp,
+          dealId: offerLeads.dealId,
           createdAt: offerLeads.createdAt,
         })
         .from(offerLeads)
@@ -678,11 +683,14 @@ async function contarLeads(
 
 /** Os leads recentes da Vitrine — o quadro do /hoje ("como o agente vai saber"). */
 export type LeadRecenteDaVitrine = {
+  leadId: string;
   offerId: string;
   ofertaTitulo: string;
   contactId: string;
   contactName: string;
   whatsapp: string | null;
+  /** Negócio já criado a partir do interesse (7c). */
+  dealId: string | null;
   createdAt: Date;
 };
 
@@ -704,11 +712,13 @@ export async function leadsRecentesDaVitrine(
 
       const recentes = await tx
         .select({
+          leadId: offerLeads.id,
           offerId: offerLeads.offerId,
           ofertaTitulo: offers.title,
           contactId: offerLeads.contactId,
           contactName: contacts.name,
           whatsapp: offerLeads.whatsapp,
+          dealId: offerLeads.dealId,
           createdAt: offerLeads.createdAt,
         })
         .from(offerLeads)
@@ -719,6 +729,82 @@ export async function leadsRecentesDaVitrine(
         .limit(5);
 
       return { total: total?.total ?? 0, recentes };
+    });
+  });
+}
+
+/**
+ * O interesse vira NEGÓCIO (Fit 7c): cria o deal no funil para o contato do
+ * lead e registra a passagem em `offer_leads.deal_id`. Idempotente por
+ * leitura: lead com negócio já existente DEVOLVE o negócio, não cria outro.
+ * O título do deal é o título da oferta — é o que o card do funil mostra
+ * (o contato já aparece ao lado).
+ */
+export async function criarNegocioDoLead(
+  input: { leadId: string },
+): Promise<
+  ServiceResult<{ dealId: string; jaExistia: boolean }>
+> {
+  return comoResultado(async () => {
+    const { tenantId, userId } = await requireAuthContext();
+    const parsed = z.object({ leadId: z.uuid('Lead inválido') }).safeParse(input);
+    if (!parsed.success) {
+      throw new ServiceError('DADOS_INVALIDOS', 'Lead inválido.', { correcao: 'Recarregar a tela' });
+    }
+    const { leadId } = parsed.data;
+
+    return withTenant(tenantId, async (tx) => {
+      await exigirContaAtiva(tx, tenantId);
+
+      const [lead] = await tx
+        .select({
+          id: offerLeads.id,
+          contactId: offerLeads.contactId,
+          dealId: offerLeads.dealId,
+          offerTitle: offers.title,
+        })
+        .from(offerLeads)
+        .innerJoin(offers, eq(offers.id, offerLeads.offerId))
+        .where(and(eq(offerLeads.id, leadId), eq(offerLeads.tenantId, tenantId)))
+        .limit(1);
+      if (!lead) throw new ServiceError('NAO_ENCONTRADO', 'Esse interesse não existe mais.');
+
+      // Já trabalhou o lead? Devolve o negócio — o toque duplo não duplica.
+      if (lead.dealId) {
+        return { dealId: lead.dealId, jaExistia: true };
+      }
+
+      const { criarNegocio } = await import('./deals');
+      const criado = await criarNegocio({
+        contactId: lead.contactId,
+        title: lead.offerTitle.slice(0, 200),
+        departureOn: undefined,
+        returnOn: undefined,
+        expectedCloseOn: undefined,
+      });
+      if (!criado.ok) {
+        throw new ServiceError(
+          criado.code === 'CONFLITO' ? 'CONFLITO' : 'DADOS_INVALIDOS',
+          criado.mensagem,
+          { correcao: criado.correcao ?? 'Criar o negócio pelo funil' },
+        );
+      }
+
+      await tx
+        .update(offerLeads)
+        .set({ dealId: criado.data.id })
+        .where(eq(offerLeads.id, leadId));
+
+      await registrarAuditoria(tx, {
+        tenantId,
+        actorUserId: userId,
+        action: 'offer.lead_converted',
+        entity: 'offer',
+        entityId: leadId,
+        metadata: { dealId: criado.data.id },
+      });
+
+      return { dealId: criado.data.id, jaExistia: false };
     });
   });
 }

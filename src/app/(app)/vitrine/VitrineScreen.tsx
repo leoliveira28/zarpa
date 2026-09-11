@@ -4,6 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import {
   atualizarOferta,
+  criarNegocioDoLead,
   criarOferta,
   listarInteressadosDaOferta,
   listarOfertas,
@@ -566,6 +567,32 @@ function EditarOfertaForm({
                 {interessados.map((pessoa) => (
                   <li key={pessoa.contactId} className="flex items-center justify-between gap-2 py-1.5">
                     <span className="min-w-0 flex-1 truncate text-15 text-ink">{pessoa.contactName}</span>
+                    {pessoa.dealId ? (
+                      <a
+                        href={`/funil/${pessoa.dealId}`}
+                        className="shrink-0 text-13 font-medium text-accent underline underline-offset-2"
+                      >
+                        No funil
+                      </a>
+                    ) : (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() =>
+                          void criarNegocioDoLead({ leadId: pessoa.leadId }).then((result) => {
+                            if (result.ok) {
+                              setInteressados((atual) =>
+                                atual.map((p) =>
+                                  p.leadId === pessoa.leadId ? { ...p, dealId: result.data.dealId } : p,
+                                ),
+                              );
+                            }
+                          })
+                        }
+                      >
+                        Criar negócio
+                      </Button>
+                    )}
                     {pessoa.whatsapp ? (
                       <a
                         href={`https://wa.me/${pessoa.whatsapp}`}
