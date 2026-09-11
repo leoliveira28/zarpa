@@ -1,5 +1,36 @@
 # Nina — status
 
+## 2026-09-11 (2ª manha) — Landing pública na raiz + PRODUCT/DESIGN.md + tour v2 corrigido
+
+**Landing na raiz (`/`)** — a superfície de marca que faltava, com os PRINTS
+REAIS da aplicação nos dois tons (`public/landings/*.png`, capturados via
+browser automation: 8 telas × light/dark + catálogo público). Estrutura de
+conversão: hero em tinta drenched com print em moldura de navegador →
+recursos alternados (proposta, funil, clientes, dinheiro) → seção "De dia e
+de noite" (os dois tons, pedido do PO) → Vitrine captando leads → Grupos →
+preços (Solo 49 / Pro 99 / Studio 199, Pro destacado) → FAQ em details →
+CTA final em tinta. Zero JS de cliente: server component + CSS escopado
+(`.zland` re-mapeia os tokens para forçar o tom papel, imune ao tema do
+sistema do visitante). Copy em pt-BR direto, sem emoji, sem superlativo.
+
+**Skill apple-design aplicada** (pedido do PO): resposta no pointer-down
+(`:active scale(0.97)`), curva cubic-bezier(0.22,1,0.36,1), header-material
+com `blur(20px) saturate(180%)` + aresta iluminada e fallback para
+`prefers-reduced-transparency`, scroll suave nas âncoras com override,
+`font-optical-sizing`, entrada do print em transform/opacity (nunca depende
+de scroll para existir).
+
+**Tour v2** (corrigido: o bundle quebrado do intermediário fazia os cliques
+não avançarem; provado E2E percorrendo as 8 etapas com navegação real entre
+rotas). Bug do print com o tour aberto resolvido com navegação real
+(query única) + fecho do tour no evaluate de captura.
+
+**PRODUCT.md + DESIGN.md** sintetizados de MARCA.md/tokens.css (a skill de
+design exigia; sem entrevista, tudo derivável da doc existente).
+
+**Números:** 712/712; build limpo; landing sem JS de cliente; 18 prints +
+4 fatias de verificação em `public/landings/`.
+
 ## 2026-09-11 (manhã) — Fit 7 FECHADO: origem da oferta nos Relatórios + revisões do PO
 
 A última peça do Fit 7 + as revisões da primeira hora:
