@@ -185,6 +185,11 @@ export function VitrineScreen() {
                     <Badge tone={oferta.publicada ? "ok" : "neutral"} dot size="sm">
                       {oferta.publicada ? "Publicada" : "Rascunho"}
                     </Badge>
+                    {oferta.totalLeads > 0 ? (
+                      <Badge tone="accent" size="sm">
+                        {oferta.totalLeads} {oferta.totalLeads === 1 ? "interessado" : "interessados"}
+                      </Badge>
+                    ) : null}
                   </span>
                   <span className="text-15 font-medium leading-snug text-ink">{oferta.title}</span>
                   {oferta.summary ? (

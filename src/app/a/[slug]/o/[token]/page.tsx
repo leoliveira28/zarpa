@@ -14,9 +14,11 @@ export const metadata: Metadata = { title: "Oferta" };
  * A página pública da OFERTA (Fit 7) — o desenho dos players (docs/FIT7_VITRINE.md
  * §3): hero com a promessa, o que está incluso (os blocos, lidos pela
  * `PublicBlockSection` — o MESMO componente de /p/ e /r/), preço com UMA régua,
- * e UM CTA. Rodada 7a: o CTA é o WhatsApp da agência (o interesse com Google é
- * a 7b) — se a agência não tem WhatsApp cadastrado, o botão nem nasce e a
- * assinatura leva o contato.
+ * e UM CTA. Rodada Decolar: capa mais alta (21/9) e o preço dentro de um
+ * cartão destacado no fluxo, com o botão-âncora que desce até o formulário de
+ * interesse (#interesse). Rodada 7a: o CTA é o WhatsApp da agência (o
+ * interesse com Google é a 7b) — se a agência não tem WhatsApp cadastrado, o
+ * botão nem nasce e a assinatura leva o contato.
  */
 export default async function OfertaPublicaPage({
   params,
@@ -47,7 +49,7 @@ export default async function OfertaPublicaPage({
   const mensagem = encodeURIComponent(`Olá! Tenho interesse na oferta "${oferta.title}".`);
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-3xl flex-col gap-8 px-5 pb-16 pt-10 sm:px-8">
+    <main className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-8 px-5 pb-16 pt-10 sm:px-8">
       <Link
         href={`/a/${slug}`}
         className="flex w-fit items-center gap-1 text-13 font-medium text-muted hover:text-ink"
@@ -57,9 +59,13 @@ export default async function OfertaPublicaPage({
       </Link>
 
       <header className="flex flex-col gap-2">
-        <p className="text-13 font-medium text-muted">
+        <p className="flex flex-wrap items-center gap-2 text-13 font-medium text-muted">
           {TIPO_LABEL[oferta.type as keyof typeof TIPO_LABEL] ?? oferta.type}
-          {oferta.temLugares ? ` · restam ${oferta.lugaresRestantes} lugares` : ""}
+          {oferta.temLugares ? (
+            <span className="inline-flex items-center rounded-full border border-warn bg-warn-soft px-2.5 py-0.5 text-13 font-semibold uppercase tracking-wider text-warn-soft-ink">
+              Restam {oferta.lugaresRestantes} lugares
+            </span>
+          ) : null}
         </p>
         <h1 className="display text-32 text-ink">{oferta.title}</h1>
         {oferta.summary ? (
@@ -67,24 +73,45 @@ export default async function OfertaPublicaPage({
         ) : null}
       </header>
 
+      {/* Capa — mais alta que a do catálogo (21/9): a oferta é a página, a
+          imagem é o destino vendido. */}
       {oferta.coverUrl ? (
         // eslint-disable-next-line @next/next/no-img-element -- capa da oferta pública (mesma via de /p/)
         <img
           src={oferta.coverUrl}
           alt=""
-          className="aspect-[16/9] w-full rounded-lg border border-line object-cover"
+          className="aspect-[21/9] w-full rounded-xl border border-line object-cover shadow-2"
         />
-      ) : null}
+      ) : (
+        <div className="aspect-[21/9] w-full rounded-xl border border-line bg-surface-2" />
+      )}
 
-      <section className="flex flex-col gap-1" aria-label="Preço">
-        <Money
-          cents={oferta.priceCents}
-          size="32"
-          tone="accent"
-          align="left"
-          reserveFor={50_000_000}
-        />
-        <p className="text-13 text-muted">valor por pessoa — fale com a agência para as formas de pagamento</p>
+      {/* Cartão de preço — destaque fixo no fluxo, com UMA régua de valor e o
+          botão-âncora que desce até o formulário de interesse (#interesse). */}
+      <section aria-label="Preço" className="rounded-xl border border-line bg-surface p-5 shadow-2">
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="text-13 font-medium uppercase tracking-wider text-subtle">
+              A partir de
+            </span>
+            <Money
+              cents={oferta.priceCents}
+              size="32"
+              tone="accent"
+              align="left"
+              reserveFor={50_000_000}
+            />
+            <p className="text-13 text-muted">
+              valor por pessoa — fale com a agência para as formas de pagamento
+            </p>
+          </div>
+          <a
+            href="#interesse"
+            className="flex min-h-11 items-center rounded-md bg-accent px-5 text-15 font-medium text-on-accent [transition:transform_120ms_var(--curve-out)] hover:bg-accent-hover active:scale-[0.98]"
+          >
+            Tenho interesse
+          </a>
+        </div>
       </section>
 
       {oferta.blocks.length > 0 ? (

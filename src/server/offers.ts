@@ -46,6 +46,8 @@ export type OfertaResumo = {
   publicToken: string;
   /** A oferta é um grupo com lugares — o catálogo mostra "restam N". */
   grupoId: string | null;
+  /** Interesses capturados na página pública (7b) — o badge da lista da Vitrine. */
+  totalLeads: number;
   createdAt: Date;
 };
 
@@ -124,6 +126,7 @@ const COLUNAS_OFERTA = {
   publicToken: offers.publicToken,
   publicada: sql<boolean>`${offers.publishedAt} is not null and ${offers.unpublishedAt} is null`,
   grupoId: offers.groupId,
+  totalLeads: sql<number>`(select count(*)::int from offer_leads where offer_leads.offer_id = ${offers.id})`,
   createdAt: offers.createdAt,
 } as const;
 
@@ -236,6 +239,7 @@ export async function obterOferta(
         publicToken: oferta.publicToken,
         publicada: oferta.publishedAt !== null && oferta.unpublishedAt === null,
         grupoId: oferta.groupId,
+        totalLeads: (await contarLeads(tx, tenantId, oferta.id)) ?? 0,
         createdAt: oferta.createdAt,
         blocks: (oferta.blocks ?? []) as unknown as BlocoDeOferta[],
       };
@@ -641,4 +645,17 @@ export async function listarInteressadosDaOferta(
       return linhas;
     });
   });
+}
+
+/** Contagem de interessados da oferta (o badge da Vitrine). */
+async function contarLeads(
+  tx: Parameters<Parameters<typeof withTenant>[1]>[0],
+  tenantId: string,
+  ofertaId: string,
+): Promise<number> {
+  const [linha] = await tx
+    .select({ total: sql<number>`count(*)::int` })
+    .from(offerLeads)
+    .where(and(eq(offerLeads.tenantId, tenantId), eq(offerLeads.offerId, ofertaId)));
+  return linha?.total ?? 0;
 }
